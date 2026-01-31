@@ -2,9 +2,9 @@ services:
   plast-mem:
     image: ghcr.io/moeru-ai/plast-mem:latest
     container_name: plast-mem
-    restart: always
+    restart: unless-stopped
     environment:
-      - DATABASE_URL= # TODO: from env
+      - DATABASE_URL=postgres://postgres:password@localhost/test # TODO: from env
     ports:
       - "3000:3000"
     depends_on:
