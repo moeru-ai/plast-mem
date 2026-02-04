@@ -23,6 +23,7 @@ words:
   - rustc
   - rustls
   - sqlx
+  - uuidv
   - vchord
   - waifu
 ignoreWords: []
