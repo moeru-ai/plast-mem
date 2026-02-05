@@ -7,7 +7,6 @@ use super::{MemoryState, Message, MessageRole};
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct EpisodicMemory {
   pub id: Uuid,
-  pub conversation_id: Uuid,
   pub messages: Vec<Message>,
   pub created_at: DateTime<Utc>,
   pub fsrs: MemoryState,
@@ -15,13 +14,12 @@ pub struct EpisodicMemory {
 }
 
 impl EpisodicMemory {
-  pub fn new(conversation_id: Uuid, messages: Vec<Message>) -> Self {
+  pub fn new(messages: Vec<Message>) -> Self {
     let now = Utc::now();
     let search_text = format_messages_without_date(&messages);
 
     Self {
       id: Uuid::now_v7(),
-      conversation_id,
       messages,
       created_at: now,
       fsrs: MemoryState::new_default(now),

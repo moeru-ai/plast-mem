@@ -61,7 +61,7 @@ pub async fn add_message(
   if should_split(message_queue, &message, llm_segmenter_fn) {
     if !message_queue.messages.is_empty() {
       let messages = std::mem::take(&mut message_queue.messages);
-      let memory = EpisodicMemory::new(conversation_id, messages);
+      let memory = EpisodicMemory::new(messages);
       let mut memories = state.memories.write().await;
       memories.push(memory);
     }
