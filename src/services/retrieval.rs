@@ -5,6 +5,8 @@ use crate::core::EpisodicMemory;
 const HYBRID_WEIGHT_TFIDF: f32 = 0.5;
 const HYBRID_WEIGHT_COSINE: f32 = 0.5;
 
+// Lilia: This is a purely vibed in-memory retrieval logic...
+// Database connection should be implemented ASAP to introduce ORM and pgvector etc...
 pub fn retrieve_memories(
   query: &str,
   memories: &[EpisodicMemory],
@@ -15,10 +17,7 @@ pub fn retrieve_memories(
   }
 
   let query_tokens = tokenize(query);
-  let doc_tokens: Vec<Vec<String>> = memories
-    .iter()
-    .map(|m| tokenize(&m.search_text))
-    .collect();
+  let doc_tokens: Vec<Vec<String>> = memories.iter().map(|m| tokenize(&m.search_text)).collect();
 
   let df_map = document_frequencies(&doc_tokens);
 
@@ -42,13 +41,12 @@ pub fn retrieve_memories(
     .map(|(rank, (idx, hybrid, retr))| (idx, hybrid, retr, rank))
     .collect();
 
-  top.sort_by(|a, b| {
-    b.2
-      .total_cmp(&a.2)
-      .then_with(|| a.3.cmp(&b.3))
-  });
+  top.sort_by(|a, b| b.2.total_cmp(&a.2).then_with(|| a.3.cmp(&b.3)));
 
-  top.into_iter().map(|(idx, _, _, _)| memories[idx].clone()).collect()
+  top
+    .into_iter()
+    .map(|(idx, _, _, _)| memories[idx].clone())
+    .collect()
 }
 
 fn tokenize(text: &str) -> Vec<String> {
@@ -97,11 +95,7 @@ fn tfidf_score(
   let mut score = 0.0f32;
 
   for token in query_tokens {
-    let tf = counts
-      .get(token)
-      .copied()
-      .unwrap_or(0) as f32
-      / doc_len;
+    let tf = counts.get(token).copied().unwrap_or(0) as f32 / doc_len;
     if tf == 0.0 {
       continue;
     }
