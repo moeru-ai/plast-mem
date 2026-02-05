@@ -5,9 +5,7 @@ mod message;
 pub use message::{Message, MessageRole};
 
 mod episodic_memory;
-pub use episodic_memory::{
-  EpisodicMemory, format_messages_with_date, format_messages_without_date,
-};
+pub use episodic_memory::{EpisodicMemory, format_messages_with_date};
 
 mod memory_state;
 pub use memory_state::{MemoryState, ReviewGrade, ReviewLog};
