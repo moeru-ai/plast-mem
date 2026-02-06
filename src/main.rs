@@ -3,6 +3,7 @@ use std::env;
 use apalis_postgres::PostgresStorage;
 use plast_mem_db_migration::{Migrator, MigratorTrait};
 use sea_orm::Database;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 mod api;
 mod core;
@@ -17,7 +18,14 @@ use crate::worker::worker;
 
 #[tokio::main]
 async fn main() -> Result<(), AppError> {
-  tracing_subscriber::fmt::init();
+  tracing_subscriber::registry()
+    .with(
+      tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| format!("{}=debug", env!("CARGO_CRATE_NAME")).into()),
+    )
+    .with(tracing_subscriber::fmt::layer())
+    .init();
+  dotenvy::dotenv().ok();
 
   let db = Database::connect(
     env::var("DATABASE_URL") // TODO: unwrap_or_else
