@@ -25,3 +25,6 @@ target
 
 # ParadeDB data
 postgresql
+
+# local env
+.env
