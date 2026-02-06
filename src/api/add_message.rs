@@ -39,8 +39,7 @@ pub async fn add_message(
     timestamp,
   };
 
-  let mut message_queue = MessageQueue::new(payload.conversation_id, &state.db).await?;
-  message_queue.push(message, &state.db).await?;
+  MessageQueue::push(payload.conversation_id, message, &state.db).await?;
 
   Ok(StatusCode::OK)
 }
