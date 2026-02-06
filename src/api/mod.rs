@@ -3,7 +3,7 @@ use axum::{
   routing::{get, post},
 };
 
-use crate::state::AppState;
+use crate::utils::AppState;
 
 mod add_message;
 mod retrieve_memory;

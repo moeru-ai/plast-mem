@@ -5,8 +5,7 @@ use uuid::Uuid;
 
 use crate::{
   core::{Message, MessageQueue, MessageRole},
-  state::AppState,
-  utils::AppError,
+  utils::{AppError, AppState},
 };
 
 #[derive(Deserialize)]

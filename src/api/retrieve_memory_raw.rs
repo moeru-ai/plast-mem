@@ -1,5 +1,5 @@
 use crate::api::retrieve_memory::RetrieveMemory;
-use crate::{state::AppState, utils::AppError};
+use crate::utils::{AppError, AppState};
 use axum::extract::State;
 use axum::{Json, http::StatusCode};
 

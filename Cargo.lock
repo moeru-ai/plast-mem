@@ -118,6 +118,83 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a23eb6b1614318a8071c9b2521f36b424b2c83db5eb3a0fead4a6c0809af6e61"
 
 [[package]]
+name = "apalis"
+version = "1.0.0-rc.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "654dba3a7f6dbdae20497565000566f965f5c9cd959a3307a4b19579b58893f7"
+dependencies = [
+ "apalis-core",
+ "futures-util",
+ "pin-project",
+ "thiserror 2.0.18",
+ "tower",
+ "tracing",
+]
+
+[[package]]
+name = "apalis-codec"
+version = "0.1.0-rc.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "01fe27c12f034ae66557b93070b29828957700bc1976f831965420bc7f98fb4b"
+dependencies = [
+ "apalis-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "apalis-core"
+version = "1.0.0-rc.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9686303ff620f9f8a7aff29f18802e9c85294ffd6347fb4fae435954e20e25fb"
+dependencies = [
+ "futures-channel",
+ "futures-core",
+ "futures-sink",
+ "futures-timer",
+ "futures-util",
+ "pin-project",
+ "serde",
+ "thiserror 2.0.18",
+ "tower-layer",
+ "tower-service",
+ "tracing",
+]
+
+[[package]]
+name = "apalis-postgres"
+version = "1.0.0-rc.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9bd905db2807f4ebbe79d83d15095ca32fca383dbb344b00c9ebcee721f6ccfb"
+dependencies = [
+ "apalis-codec",
+ "apalis-core",
+ "apalis-sql",
+ "futures",
+ "pin-project",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "thiserror 2.0.18",
+ "tokio",
+ "ulid",
+]
+
+[[package]]
+name = "apalis-sql"
+version = "1.0.0-rc.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "903ce2cbece579dc4ce90bcee4c0c677edf8fc02812681fa0501f0a0ad800f00"
+dependencies = [
+ "apalis-core",
+ "chrono",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "time",
+]
+
+[[package]]
 name = "arbitrary"
 version = "1.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1709,6 +1786,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e6d5a32815ae3f33302d95fdcb2ce17862f8c65363dcfd29360480ba1001fc9c"
 
 [[package]]
+name = "futures"
+version = "0.3.31"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "65bc07b1a8bc7c85c5f2e110c476c7389b4554ba72af57d8445ea63a576b0876"
+dependencies = [
+ "futures-channel",
+ "futures-core",
+ "futures-executor",
+ "futures-io",
+ "futures-sink",
+ "futures-task",
+ "futures-util",
+]
+
+[[package]]
 name = "futures-channel"
 version = "0.3.31"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1800,6 +1892,7 @@ version = "0.3.31"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9fa08315bb612088cc391249efdc3bc77536f16c91f6cf495e6fbe85b20a4a81"
 dependencies = [
+ "futures-channel",
  "futures-core",
  "futures-io",
  "futures-macro",
@@ -3184,6 +3277,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "pin-project"
+version = "1.1.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "677f1add503faace112b9f1373e43e9e054bfdd22ff1a63c1bc485eaec6a6a8a"
+dependencies = [
+ "pin-project-internal",
+]
+
+[[package]]
+name = "pin-project-internal"
+version = "1.1.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6e918e4ff8c4549eb882f14b3a4bc8c8bc93de829416eacf579f1207a8fbf861"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.114",
+]
+
+[[package]]
 name = "pin-project-lite"
 version = "0.2.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3227,10 +3340,13 @@ name = "plast-mem"
 version = "0.0.1"
 dependencies = [
  "anyhow",
+ "apalis",
+ "apalis-postgres",
  "axum",
  "chrono",
  "dotenvy",
  "fsrs",
+ "futures",
  "plast_mem_db_migration",
  "plast_mem_db_schema",
  "sea-orm",
@@ -4923,6 +5039,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "tokio-util"
+version = "0.7.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9ae9cec805b01e8fc3fd2fe289f89149a9b66dd16786abd8b19cfa7b48cb0098"
+dependencies = [
+ "bytes",
+ "futures-core",
+ "futures-sink",
+ "pin-project-lite",
+ "tokio",
+]
+
+[[package]]
 name = "toml_datetime"
 version = "0.7.5+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4963,6 +5092,7 @@ dependencies = [
  "pin-project-lite",
  "sync_wrapper",
  "tokio",
+ "tokio-util",
  "tower-layer",
  "tower-service",
  "tracing",
@@ -5079,6 +5209,17 @@ dependencies = [
  "thiserror 1.0.69",
  "tracing",
  "yoke 0.7.5",
+]
+
+[[package]]
+name = "ulid"
+version = "1.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "470dbf6591da1b39d43c14523b2b469c86879a53e8b758c8e090a470fe7b1fbe"
+dependencies = [
+ "rand 0.9.2",
+ "serde",
+ "web-time",
 ]
 
 [[package]]

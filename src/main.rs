@@ -1,22 +1,19 @@
 use std::env;
 
-use axum::{Router, response::Html, routing::get};
+use apalis_postgres::PostgresStorage;
 use plast_mem_db_migration::{Migrator, MigratorTrait};
 use sea_orm::Database;
-use tokio::net::TcpListener;
 
 mod api;
 mod core;
-mod state;
+mod server;
 mod utils;
+mod worker;
 
-use state::AppState;
-use utils::{AppError, shutdown_signal};
+use utils::AppError;
 
-#[axum::debug_handler]
-async fn handler() -> Html<&'static str> {
-  Html("<h1>Plast Mem</h1>")
-}
+use crate::server::server;
+use crate::worker::worker;
 
 #[tokio::main]
 async fn main() -> Result<(), AppError> {
@@ -32,21 +29,9 @@ async fn main() -> Result<(), AppError> {
   // Apply all pending migrations
   // https://www.sea-ql.org/SeaORM/docs/migration/running-migration/#migrating-programmatically
   Migrator::up(&db, None).await?;
+  PostgresStorage::setup(&db.get_postgres_connection_pool()).await?;
 
-  let app_state = AppState::new(db);
+  let _ = tokio::try_join!(worker(&db), server(db.clone()));
 
-  let app = Router::new()
-    .route("/", get(handler))
-    .merge(api::app())
-    .with_state(app_state);
-
-  let listener = TcpListener::bind("0.0.0.0:3000").await?;
-
-  tracing::info!("server started at http://0.0.0.0:3000");
-
-  Ok(
-    axum::serve(listener, app)
-      .with_graceful_shutdown(shutdown_signal())
-      .await?,
-  )
+  Ok(())
 }
