@@ -82,19 +82,13 @@ impl MessageQueue {
 
   /// Atomically removes the first `count` messages from the queue,
   /// preserving any messages appended after the read.
-  pub async fn drain(
-    id: Uuid,
-    count: usize,
-    db: &DatabaseConnection,
-  ) -> Result<(), AppError> {
+  pub async fn drain(id: Uuid, count: usize, db: &DatabaseConnection) -> Result<(), AppError> {
     let res = message_queue::Entity::update_many()
       .col_expr(
         message_queue::Column::Messages,
         Expr::cust_with_values(
-          r#"(SELECT COALESCE(jsonb_agg(value ORDER BY ordinality), '[]'::jsonb)
-            FROM jsonb_array_elements(messages) WITH ORDINALITY
-            WHERE ordinality > $1)"#,
-          [(count as i64).into()],
+          "jsonb_path_query_array(messages, ?::jsonpath)",
+          [&format!("$[{count} to last]")],
         ),
       )
       .filter(message_queue::Column::Id.eq(id))
