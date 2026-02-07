@@ -1,4 +1,4 @@
-use super::{Message, MessageRole};
+use crate::{Message, MessageRole};
 
 pub type SegmenterFn = dyn Fn(&[Message], &Message) -> bool + Send + Sync;
 
@@ -26,7 +26,7 @@ pub fn rule_segmenter(recent: &[Message], incoming: &Message) -> SegmentDecision
       if interval > chrono::Duration::minutes(30) {
         return SegmentDecision::Split;
       }
-      if incoming.content.len() > 99 {
+      if recent.len() > 50 {
         return SegmentDecision::Split;
       }
       if incoming.content.len() < 5 {
