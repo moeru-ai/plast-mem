@@ -38,7 +38,6 @@ pub struct MessageQueueSegmentJob {
 pub struct CreateEpisodicMemoryJob {
   pub conversation_id: Uuid,
   pub segment_messages: Vec<Message>,
-  pub remaining_messages: Vec<Message>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -88,13 +87,14 @@ async fn handle_segment_job(
 
   if should_split {
     let segment_messages = recent.to_vec();
-    let remaining_messages = vec![incoming];
+
+    // Atomically drain segment from queue front, preserving any newly pushed messages
+    MessageQueue::drain(job.conversation_id, segment_messages.len(), &db).await?;
 
     backend
       .push(WorkerJob::Create(CreateEpisodicMemoryJob {
         conversation_id: job.conversation_id,
         segment_messages,
-        remaining_messages,
       }))
       .await
       .map_err(AppError::from)?;
@@ -115,8 +115,6 @@ async fn handle_create_job(
     .exec(&db)
     .await
     .map_err(AppError::from)?;
-
-  MessageQueue::flush(job.conversation_id, job.remaining_messages, &db).await?;
 
   Ok(())
 }

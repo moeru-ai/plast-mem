@@ -80,15 +80,23 @@ impl MessageQueue {
     Ok(())
   }
 
-  pub async fn flush(
+  /// Atomically removes the first `count` messages from the queue,
+  /// preserving any messages appended after the read.
+  pub async fn drain(
     id: Uuid,
-    messages: Vec<Message>,
+    count: usize,
     db: &DatabaseConnection,
   ) -> Result<(), AppError> {
-    let messages_value = serde_json::to_value(messages)?;
-
     let res = message_queue::Entity::update_many()
-      .col_expr(message_queue::Column::Messages, Expr::val(messages_value))
+      .col_expr(
+        message_queue::Column::Messages,
+        Expr::cust_with_values(
+          r#"(SELECT COALESCE(jsonb_agg(value ORDER BY ordinality), '[]'::jsonb)
+            FROM jsonb_array_elements(messages) WITH ORDINALITY
+            WHERE ordinality > $1)"#,
+          [(count as i64).into()],
+        ),
+      )
       .filter(message_queue::Column::Id.eq(id))
       .exec(db)
       .await?;
