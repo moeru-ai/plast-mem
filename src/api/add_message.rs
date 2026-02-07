@@ -1,3 +1,4 @@
+use apalis::prelude::TaskSink;
 use axum::{Json, extract::State, http::StatusCode};
 use chrono::{DateTime, Utc};
 use plast_mem_shared::AppError;
@@ -8,6 +9,7 @@ use crate::{
   core::{Message, MessageQueue, MessageRole},
   utils::AppState,
 };
+use plast_mem_worker::{MessageQueueSegmentJob, WorkerJob};
 
 #[derive(Deserialize)]
 pub struct AddMessage {
@@ -40,6 +42,12 @@ pub async fn add_message(
   };
 
   MessageQueue::push(payload.conversation_id, message, &state.db).await?;
+  let mut job_storage = state.job_storage.clone();
+  job_storage
+    .push(WorkerJob::Segment(MessageQueueSegmentJob {
+      conversation_id: payload.conversation_id,
+    }))
+    .await?;
 
   Ok(StatusCode::OK)
 }

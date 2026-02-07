@@ -1,5 +1,6 @@
 use axum::{Router, response::Html, routing::get};
 use plast_mem_shared::AppError;
+use apalis_postgres::PostgresStorage;
 use sea_orm::DatabaseConnection;
 use tokio::net::TcpListener;
 
@@ -7,14 +8,18 @@ use crate::{
   api,
   utils::{AppState, shutdown_signal},
 };
+use plast_mem_worker::WorkerJob;
 
 #[axum::debug_handler]
 async fn handler() -> Html<&'static str> {
   Html("<h1>Plast Mem</h1>")
 }
 
-pub async fn server(db: DatabaseConnection) -> Result<(), AppError> {
-  let app_state = AppState::new(db);
+pub async fn server(
+  db: DatabaseConnection,
+  job_storage: PostgresStorage<WorkerJob>,
+) -> Result<(), AppError> {
+  let app_state = AppState::new(db, job_storage);
 
   let app = Router::new()
     .route("/", get(handler))

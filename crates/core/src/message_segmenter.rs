@@ -1,4 +1,4 @@
-use super::{Message, MessageRole};
+use crate::{Message, MessageRole};
 
 pub type SegmenterFn = dyn Fn(&[Message], &Message) -> bool + Send + Sync;
 

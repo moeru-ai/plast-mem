@@ -1,4 +1,4 @@
-use super::Message;
+use crate::Message;
 use anyhow::anyhow;
 use plast_mem_db_schema::message_queue;
 use plast_mem_shared::AppError;
@@ -58,13 +58,6 @@ impl MessageQueue {
     })
   }
 
-  // pub fn to_model(&self) -> Result<message_queue::Model, AppError> {
-  //   Ok(message_queue::Model {
-  //     id: self.id,
-  //     messages: serde_json::to_value(&self.messages)?,
-  //   })
-  // }
-
   pub async fn push(id: Uuid, message: Message, db: &DatabaseConnection) -> Result<(), AppError> {
     let message_value = serde_json::to_value(vec![message])?;
 
@@ -80,7 +73,25 @@ impl MessageQueue {
       .exec(db)
       .await?;
 
-    // TODO: check segment
+    if res.rows_affected == 0 {
+      return Err(anyhow!("Queue not found").into());
+    }
+
+    Ok(())
+  }
+
+  pub async fn flush(
+    id: Uuid,
+    messages: Vec<Message>,
+    db: &DatabaseConnection,
+  ) -> Result<(), AppError> {
+    let messages_value = serde_json::to_value(messages)?;
+
+    let res = message_queue::Entity::update_many()
+      .col_expr(message_queue::Column::Messages, Expr::val(messages_value))
+      .filter(message_queue::Column::Id.eq(id))
+      .exec(db)
+      .await?;
 
     if res.rows_affected == 0 {
       return Err(anyhow!("Queue not found").into());

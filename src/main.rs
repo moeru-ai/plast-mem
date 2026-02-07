@@ -13,7 +13,7 @@ mod utils;
 use plast_mem_shared::AppError;
 
 use crate::server::server;
-use plast_mem_worker::worker;
+use plast_mem_worker::{WorkerJob, worker};
 
 #[tokio::main]
 async fn main() -> Result<(), AppError> {
@@ -37,8 +37,13 @@ async fn main() -> Result<(), AppError> {
   // https://www.sea-ql.org/SeaORM/docs/migration/running-migration/#migrating-programmatically
   Migrator::up(&db, None).await?;
   PostgresStorage::setup(&db.get_postgres_connection_pool()).await?;
+  let job_storage =
+    PostgresStorage::<WorkerJob>::new(db.get_postgres_connection_pool());
 
-  let _ = tokio::try_join!(worker(&db), server(db.clone()));
+  let _ = tokio::try_join!(
+    worker(&db, job_storage.clone()),
+    server(db.clone(), job_storage)
+  );
 
   Ok(())
 }

@@ -1,12 +1,16 @@
+use apalis_postgres::PostgresStorage;
 use sea_orm::DatabaseConnection;
 
-#[derive(Clone, Debug, Default)]
+use plast_mem_worker::WorkerJob;
+
+#[derive(Clone)]
 pub struct AppState {
   pub db: DatabaseConnection,
+  pub job_storage: PostgresStorage<WorkerJob>,
 }
 
 impl AppState {
-  pub fn new(db: DatabaseConnection) -> Self {
-    Self { db }
+  pub fn new(db: DatabaseConnection, job_storage: PostgresStorage<WorkerJob>) -> Self {
+    Self { db, job_storage }
   }
 }
