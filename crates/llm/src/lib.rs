@@ -1,15 +1,16 @@
-use async_openai::{
-  Client,
-  config::OpenAIConfig,
-  types::{
-    ChatCompletionRequestSystemMessageArgs, ChatCompletionRequestUserMessageArgs,
-    CreateChatCompletionRequestArgs, CreateEmbeddingRequestArgs,
-  },
+use async_openai::types::{
+  ChatCompletionRequestMessage, ChatCompletionRequestSystemMessageArgs,
+  ChatCompletionRequestUserMessageArgs,
 };
-use sea_orm::prelude::PgVector;
 use serde::{Deserialize, Serialize};
 
-use plast_mem_shared::{APP_ENV, AppError};
+use plast_mem_shared::AppError;
+
+mod embed;
+pub use embed::embed;
+
+mod generate_text;
+pub use generate_text::generate_text;
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy)]
 pub enum Role {
@@ -21,23 +22,6 @@ pub enum Role {
 pub struct InputMessage {
   pub role: Role,
   pub content: String,
-}
-
-// Lilia: Config LLM provider
-fn openai_client() -> Client<OpenAIConfig> {
-  let config = OpenAIConfig::new()
-    .with_api_key(&APP_ENV.openai_api_key)
-    .with_api_base(&APP_ENV.openai_base_url);
-
-  Client::with_config(config)
-}
-
-fn chat_model() -> &'static str {
-  &APP_ENV.openai_chat_model
-}
-
-fn embedding_model() -> &'static str {
-  &APP_ENV.openai_embedding_model
 }
 
 fn format_input_messages(messages: &[InputMessage]) -> String {
@@ -55,9 +39,6 @@ fn format_input_messages(messages: &[InputMessage]) -> String {
 }
 
 pub async fn summarize_messages(messages: &[InputMessage]) -> Result<String, AppError> {
-  let client = openai_client();
-  let model = chat_model();
-
   let system = ChatCompletionRequestSystemMessageArgs::default()
     .content("Provide a clear and concise summary")
     .build()?;
@@ -66,48 +47,17 @@ pub async fn summarize_messages(messages: &[InputMessage]) -> Result<String, App
     .content(format_input_messages(messages))
     .build()?;
 
-  let request = CreateChatCompletionRequestArgs::default()
-    .model(model)
-    .messages([system.into(), user.into()])
-    .build()?;
-
-  let response = client.chat().create(request).await?;
-  let summary = response
-    .choices
-    .first()
-    .and_then(|c| c.message.content.clone())
-    .unwrap_or_default();
-
-  Ok(summary)
-}
-
-pub async fn embed_text(text: &str) -> Result<PgVector, AppError> {
-  let client = openai_client();
-  let model = embedding_model();
-
-  let request = CreateEmbeddingRequestArgs::default()
-    .model(model)
-    .input(text)
-    .dimensions(1024u32)
-    .build()?;
-
-  let response = client.embeddings().create(request).await?;
-  let embedding = response
-    .data
-    .first()
-    .map(|item| item.embedding.clone())
-    .unwrap_or_default();
-
-  Ok(PgVector::from(embedding))
+  generate_text(vec![
+    ChatCompletionRequestMessage::System(system),
+    ChatCompletionRequestMessage::User(user),
+  ])
+  .await
 }
 
 pub async fn decide_split(
   recent: &[InputMessage],
   incoming: &InputMessage,
 ) -> Result<bool, AppError> {
-  let client = openai_client();
-  let model = chat_model();
-
   let system = ChatCompletionRequestSystemMessageArgs::default()
     .content(
       "Decide whether the incoming message starts a new topic. Reply with 'split' or 'nosplit'.",
@@ -122,18 +72,11 @@ pub async fn decide_split(
     ))
     .build()?;
 
-  let request = CreateChatCompletionRequestArgs::default()
-    .model(model)
-    .messages([system.into(), user.into()])
-    .build()?;
+  let text = generate_text(vec![
+    ChatCompletionRequestMessage::System(system),
+    ChatCompletionRequestMessage::User(user),
+  ])
+  .await?;
 
-  let response = client.chat().create(request).await?;
-  let content = response
-    .choices
-    .first()
-    .and_then(|c| c.message.content.clone())
-    .unwrap_or_default()
-    .to_lowercase();
-
-  Ok(content.contains("split"))
+  Ok(text.contains("split"))
 }

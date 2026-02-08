@@ -1,7 +1,7 @@
 use crate::{Message, MessageRole};
 use chrono::{DateTime, Utc};
 use plast_mem_db_schema::episodic_memory;
-use plast_mem_llm::{InputMessage, Role, embed_text, summarize_messages};
+use plast_mem_llm::{InputMessage, Role, embed, summarize_messages};
 use plast_mem_shared::AppError;
 use sea_orm::prelude::PgVector;
 use serde::{Deserialize, Serialize};
@@ -39,7 +39,7 @@ impl EpisodicMemory {
       .collect::<Vec<_>>();
 
     let content = summarize_messages(&input_messages).await?;
-    let embedding = embed_text(&content).await?;
+    let embedding = embed(&content).await?;
 
     Ok(Self {
       id,
