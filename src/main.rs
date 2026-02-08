@@ -1,5 +1,3 @@
-use std::env;
-
 use apalis_postgres::PostgresStorage;
 use plast_mem_db_migration::{Migrator, MigratorTrait};
 use sea_orm::Database;
@@ -10,7 +8,7 @@ mod core;
 mod server;
 mod utils;
 
-use plast_mem_shared::AppError;
+use plast_mem_shared::{APP_ENV, AppError};
 
 use crate::server::server;
 use plast_mem_worker::{WorkerJob, worker};
@@ -26,19 +24,13 @@ async fn main() -> Result<(), AppError> {
     .init();
   dotenvy::dotenv().ok();
 
-  let db = Database::connect(
-    env::var("DATABASE_URL") // TODO: unwrap_or_else
-      .expect("plast-mem: invalid database url")
-      .as_str(),
-  )
-  .await?;
+  let db = Database::connect(APP_ENV.database_url.as_str()).await?;
 
   // Apply all pending migrations
   // https://www.sea-ql.org/SeaORM/docs/migration/running-migration/#migrating-programmatically
   Migrator::up(&db, None).await?;
   PostgresStorage::setup(&db.get_postgres_connection_pool()).await?;
-  let job_storage =
-    PostgresStorage::<WorkerJob>::new(db.get_postgres_connection_pool());
+  let job_storage = PostgresStorage::<WorkerJob>::new(db.get_postgres_connection_pool());
 
   let _ = tokio::try_join!(
     worker(&db, job_storage.clone()),

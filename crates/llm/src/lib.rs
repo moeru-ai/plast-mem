@@ -1,5 +1,3 @@
-use std::env;
-
 use async_openai::{
   Client,
   config::OpenAIConfig,
@@ -11,7 +9,7 @@ use async_openai::{
 use sea_orm::prelude::PgVector;
 use serde::{Deserialize, Serialize};
 
-use plast_mem_shared::AppError;
+use plast_mem_shared::{APP_ENV, AppError};
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy)]
 pub enum Role {
@@ -26,23 +24,20 @@ pub struct InputMessage {
 }
 
 // Lilia: Config LLM provider
-fn openai_client() -> Result<Client<OpenAIConfig>, AppError> {
-  let base_url = env::var("OPENAI_BASE_URL")?;
-  let api_key = env::var("OPENAI_API_KEY")?;
-
+fn openai_client() -> Client<OpenAIConfig> {
   let config = OpenAIConfig::new()
-    .with_api_key(api_key)
-    .with_api_base(base_url);
+    .with_api_key(&APP_ENV.openai_api_key)
+    .with_api_base(&APP_ENV.openai_base_url);
 
-  Ok(Client::with_config(config))
+  Client::with_config(config)
 }
 
-fn chat_model() -> Result<String, AppError> {
-  Ok(env::var("OPENAI_CHAT_MODEL")?)
+fn chat_model() -> &'static str {
+  &APP_ENV.openai_chat_model
 }
 
-fn embedding_model() -> Result<String, AppError> {
-  Ok(env::var("OPENAI_EMBEDDING_MODEL")?)
+fn embedding_model() -> &'static str {
+  &APP_ENV.openai_embedding_model
 }
 
 fn format_input_messages(messages: &[InputMessage]) -> String {
@@ -60,8 +55,8 @@ fn format_input_messages(messages: &[InputMessage]) -> String {
 }
 
 pub async fn summarize_messages(messages: &[InputMessage]) -> Result<String, AppError> {
-  let client = openai_client()?;
-  let model = chat_model()?;
+  let client = openai_client();
+  let model = chat_model();
 
   let system = ChatCompletionRequestSystemMessageArgs::default()
     .content("Provide a clear and concise summary")
@@ -87,8 +82,8 @@ pub async fn summarize_messages(messages: &[InputMessage]) -> Result<String, App
 }
 
 pub async fn embed_text(text: &str) -> Result<PgVector, AppError> {
-  let client = openai_client()?;
-  let model = embedding_model()?;
+  let client = openai_client();
+  let model = embedding_model();
 
   let request = CreateEmbeddingRequestArgs::default()
     .model(model)
@@ -110,8 +105,8 @@ pub async fn decide_split(
   recent: &[InputMessage],
   incoming: &InputMessage,
 ) -> Result<bool, AppError> {
-  let client = openai_client()?;
-  let model = chat_model()?;
+  let client = openai_client();
+  let model = chat_model();
 
   let system = ChatCompletionRequestSystemMessageArgs::default()
     .content(
