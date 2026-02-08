@@ -39,7 +39,13 @@ fn format_input_messages(messages: &[InputMessage]) -> String {
 }
 
 pub async fn summarize_messages(messages: &[InputMessage]) -> Result<String, AppError> {
-  let system = ChatCompletionRequestSystemMessage::from("Provide a clear and concise summary");
+  let system = ChatCompletionRequestSystemMessage::from(
+    "You are a professional summarizer. Provide a clear and concise summary",
+    // TODO: MAYBE:
+    // Provide a summary in bullet point format. (bullet-point)
+    // Provide a summary in paragraph format. (paragraph)
+    // Provide a very concise summary in 1-2 sentences. (concise)
+  );
 
   let user = ChatCompletionRequestUserMessage::from(format_input_messages(messages));
 
