@@ -23,6 +23,16 @@ After the memory has been retrieved, a separate reviewer scores the dialogue and
 
 ## FAQ
 
+### What is the current status of this project?
+
+We have not yet released version 0.0.1 because the core functionality is incomplete. However, you are welcome to join us in developing it!
+
+#### Roadmap
+
+- v0.0.1 - Episodic Memory, FSRS
+- v0.1.0 - Semantic Memory
+<!-- - v1.0.0 - ...Graph? Fact Version Control? maybe we can do more... -->
+
 ### Is it related to Project AIRI's Alaya?
 
 No, but I might draw inspiration from some of it - or I might not.
