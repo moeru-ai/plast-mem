@@ -18,3 +18,4 @@ path = "src/lib.rs"
 [dependencies]
 anyhow.workspace = true
 axum.workspace = true
+dotenvy.workspace = true

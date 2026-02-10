@@ -49,6 +49,7 @@ apalis = "1.0.0-rc.3"
 apalis-postgres = { version = "1.0.0-rc.3", features = ["time"] }
 axum = { version = "0.8.8", features = ["macros"] }
 async-openai = "0.28.0"
+dotenvy = "0.15.7"
 sea-orm-migration = { version = "2.0.0-rc.30", features = [
   "runtime-tokio-rustls",
   "sqlx-postgres",
@@ -81,7 +82,7 @@ apalis.workspace = true
 apalis-postgres.workspace = true
 axum.workspace = true
 chrono = { version = "0.4.43", features = ["serde"] }
-dotenvy = "0.15.7"
+dotenvy.workspace = true
 fsrs = "5.2.0"
 sea-orm.workspace = true
 serde.workspace = true

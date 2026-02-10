@@ -20,7 +20,6 @@ async fn main() -> Result<(), AppError> {
     )
     .with(tracing_subscriber::fmt::layer())
     .init();
-  dotenvy::dotenv().ok();
 
   let db = Database::connect(APP_ENV.database_url.as_str()).await?;
 
