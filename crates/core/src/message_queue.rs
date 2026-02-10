@@ -1,5 +1,5 @@
-use crate::Message;
 use anyhow::anyhow;
+use chrono::TimeDelta;
 use plast_mem_db_schema::message_queue;
 use plast_mem_shared::AppError;
 use sea_orm::{
@@ -9,6 +9,8 @@ use sea_orm::{
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+
+use crate::Message;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct MessageQueue {
@@ -59,6 +61,8 @@ impl MessageQueue {
   }
 
   pub async fn push(id: Uuid, message: Message, db: &DatabaseConnection) -> Result<(), AppError> {
+    Self::check(id, &message, db).await?;
+
     let message_value = serde_json::to_value(vec![message])?;
 
     let res = message_queue::Entity::update_many()
@@ -77,6 +81,42 @@ impl MessageQueue {
       return Err(anyhow!("Queue not found").into());
     }
 
+    Ok(())
+  }
+
+  pub async fn check(id: Uuid, message: &Message, db: &DatabaseConnection) -> Result<(), AppError> {
+    let messages = Self::get(id, db).await?.messages;
+
+    // Check messages length
+    match messages.len() {
+      // If fewer than 5 messages are present, skip.
+      n if n < 5 => {
+        return Ok(());
+      }
+      // If more than 30 messages, force a split.
+      n if n >= 30 => {
+        // TODO: storage.push(job, check=false);
+        return Ok(());
+      }
+      _ => {}
+    };
+
+    // Check timestamp gap
+    // If it exceeds 15 minutes, force a split.
+    if messages.last().map_or(false, |last_message| {
+      message.timestamp - last_message.timestamp > TimeDelta::minutes(15)
+    }) {
+      // TODO: storage.push(job, check=false);
+      return Ok(());
+    }
+
+    // Check message content length
+    // If the latest message is five characters or fewer, skip.
+    if message.content.chars().count() < 5 {
+      return Ok(());
+    }
+
+    // TODO: storage.push(job, check=true);
     Ok(())
   }
 
