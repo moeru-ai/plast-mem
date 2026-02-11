@@ -10,12 +10,7 @@ impl MigrationTrait for Migration {
       .get_connection()
       .execute_raw(Statement::from_string(
         manager.get_database_backend(),
-        r#"CALL paradedb.create_bm25(
-          index_name => 'bm25_index',
-          table_name => 'episodic_memory',
-          key_field => 'id',
-          text_fields => paradedb.field('content')
-        );"#,
+        "CREATE INDEX bm25_index ON episodic_memory USING bm25 (id, (content::pdb.icu), created_at) WITH (key_field='id');",
       ))
       .await?;
 
@@ -27,7 +22,7 @@ impl MigrationTrait for Migration {
       .get_connection()
       .execute_raw(Statement::from_string(
         manager.get_database_backend(),
-        "CALL paradedb.drop_bm25(index_name => 'bm25_index');",
+        "DROP INDEX IF EXISTS bm25_index;",
       ))
       .await?;
 
