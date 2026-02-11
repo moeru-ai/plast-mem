@@ -1,14 +1,10 @@
 use std::ops::Deref;
 
 use apalis::prelude::Data;
-use async_openai::types::{
-  ChatCompletionRequestMessage, ChatCompletionRequestSystemMessage,
-  ChatCompletionRequestUserMessage,
-};
 use chrono::Utc;
 use plast_mem_core::{EpisodicMemory, Message, MessageQueue, MessageRole};
 use plast_mem_db_schema::episodic_memory;
-use plast_mem_llm::{embed, generate_text};
+use plast_mem_llm::{embed, summarize_messages_with_check, InputMessage, Role};
 use plast_mem_shared::AppError;
 use sea_orm::{DatabaseConnection, EntityTrait};
 use serde::{Deserialize, Serialize};
@@ -26,6 +22,20 @@ pub struct EventSegmentationJob {
   pub check: bool,
 }
 
+/// Converts core Message to llm InputMessage
+fn to_input_messages(messages: &[Message]) -> Vec<InputMessage> {
+  messages
+    .iter()
+    .map(|m| InputMessage {
+      role: match m.role {
+        MessageRole::User => Role::User,
+        MessageRole::Assistant => Role::Assistant,
+      },
+      content: m.content.clone(),
+    })
+    .collect()
+}
+
 /// Calls LLM to either:
 /// - If check=true: Decide whether to create memory, return Some(summary) if yes, None if no
 /// - If check=false: Directly generate and return summary
@@ -33,53 +43,8 @@ async fn generate_summary_with_check(
   messages: &[Message],
   check: bool,
 ) -> Result<Option<String>, AppError> {
-  let formatted_messages = messages
-    .iter()
-    .map(|m| {
-      let role = match m.role {
-        MessageRole::User => "user",
-        MessageRole::Assistant => "assistant",
-      };
-      format!("{}: {}", role, m.content)
-    })
-    .collect::<Vec<_>>()
-    .join("\n");
-
-  let system_prompt = if check {
-    "You are an event segmentation analyzer. Analyze the conversation and decide if it contains significant content worth remembering as an episodic memory.\n\
-     If the conversation is meaningful (contains important information, events, or context), reply with 'CREATE: ' followed by a concise summary.\n\
-     If the conversation is trivial (greetings, small talk, or unimportant exchanges), reply with 'SKIP'.\n\
-     Be selective - only mark as CREATE if there's substantive content."
-  } else {
-    "You are a professional summarizer. Provide a clear and concise summary of the following conversation."
-  };
-
-  let system = ChatCompletionRequestSystemMessage::from(system_prompt);
-  let user = ChatCompletionRequestUserMessage::from(formatted_messages);
-
-  let response = generate_text(vec![
-    ChatCompletionRequestMessage::System(system),
-    ChatCompletionRequestMessage::User(user),
-  ])
-  .await?;
-
-  if check {
-    let trimmed = response.trim();
-    if trimmed.starts_with("CREATE:") {
-      let summary = trimmed.strip_prefix("CREATE:").unwrap_or(trimmed).trim();
-      if !summary.is_empty() {
-        Ok(Some(summary.to_string()))
-      } else {
-        // If summary is empty after CREATE:, still create but use full response
-        Ok(Some(trimmed.to_string()))
-      }
-    } else {
-      // SKIP or any other response means don't create
-      Ok(None)
-    }
-  } else {
-    Ok(Some(response))
-  }
+  let input_messages = to_input_messages(messages);
+  summarize_messages_with_check(&input_messages, check).await
 }
 
 pub async fn process_event_segmentation(

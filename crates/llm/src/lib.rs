@@ -2,9 +2,8 @@ use async_openai::types::{
   ChatCompletionRequestMessage, ChatCompletionRequestSystemMessage,
   ChatCompletionRequestUserMessage,
 };
-use serde::{Deserialize, Serialize};
-
 use plast_mem_shared::AppError;
+use serde::{Deserialize, Serialize};
 
 mod embed;
 pub use embed::embed;
@@ -38,43 +37,72 @@ fn format_input_messages(messages: &[InputMessage]) -> String {
     .join("\n")
 }
 
-pub async fn summarize_messages(messages: &[InputMessage]) -> Result<String, AppError> {
-  let system = ChatCompletionRequestSystemMessage::from(
-    "You are a professional summarizer. Provide a clear and concise summary",
-    // TODO: MAYBE:
-    // Provide a summary in bullet point format. (bullet-point)
-    // Provide a summary in paragraph format. (paragraph)
-    // Provide a very concise summary in 1-2 sentences. (concise)
-  );
+// pub async fn summarize_messages(messages: &[InputMessage]) -> Result<String, AppError> {
+//   let system = ChatCompletionRequestSystemMessage::from(
+//     "You are a professional summarizer. Provide a clear and concise summary",
+//     // TODO: MAYBE:
+//     // Provide a summary in bullet point format. (bullet-point)
+//     // Provide a summary in paragraph format. (paragraph)
+//     // Provide a very concise summary in 1-2 sentences. (concise)
+//   );
 
-  let user = ChatCompletionRequestUserMessage::from(format_input_messages(messages));
+//   let user = ChatCompletionRequestUserMessage::from(format_input_messages(messages));
 
-  generate_text(vec![
-    ChatCompletionRequestMessage::System(system),
-    ChatCompletionRequestMessage::User(user),
-  ])
-  .await
-}
+//   generate_text(vec![
+//     ChatCompletionRequestMessage::System(system),
+//     ChatCompletionRequestMessage::User(user),
+//   ])
+//   .await
+// }
 
-pub async fn decide_split(
-  recent: &[InputMessage],
-  incoming: &InputMessage,
-) -> Result<bool, AppError> {
-  let system = ChatCompletionRequestSystemMessage::from(
-    "Decide whether the incoming message starts a new topic. Reply with 'split' or 'nosplit'.",
-  );
+/// Summarizes messages with optional significance check.
+///
+/// When `check` is true:
+/// - Uses a specialized prompt to determine if the conversation contains significant content
+/// - Returns `Ok(None)` if the LLM decides the content is trivial (replies with 'SKIP')
+/// - Returns `Ok(Some(summary))` if the LLM decides to create a memory (replies with 'CREATE: <summary>')
+///
+/// When `check` is false:
+/// - Directly generates and returns a summary
+pub async fn summarize_messages_with_check(
+  messages: &[InputMessage],
+  check: bool,
+) -> Result<Option<String>, AppError> {
+  let formatted_messages = format_input_messages(messages);
 
-  let user = ChatCompletionRequestUserMessage::from(format!(
-    "Recent:\n{}\n\nIncoming:\n{}",
-    format_input_messages(recent),
-    format_input_messages(std::slice::from_ref(incoming))
-  ));
+  let system_prompt = if check {
+    "You are an event segmentation analyzer. Analyze the conversation and decide if it contains significant content worth remembering as an episodic memory.\n\
+     If the conversation is meaningful (contains important information, events, or context), reply with 'CREATE: ' followed by a concise summary.\n\
+     If the conversation is trivial (greetings, small talk, or unimportant exchanges), reply with 'SKIP'.\n\
+     Be selective - only mark as CREATE if there's substantive content."
+  } else {
+    "You are a professional summarizer. Provide a clear and concise summary of the following conversation."
+  };
 
-  let text = generate_text(vec![
+  let system = ChatCompletionRequestSystemMessage::from(system_prompt);
+  let user = ChatCompletionRequestUserMessage::from(formatted_messages);
+
+  let response = generate_text(vec![
     ChatCompletionRequestMessage::System(system),
     ChatCompletionRequestMessage::User(user),
   ])
   .await?;
 
-  Ok(text.contains("split"))
+  if check {
+    let trimmed = response.trim();
+    if trimmed.starts_with("CREATE:") {
+      let summary = trimmed.strip_prefix("CREATE:").unwrap_or(trimmed).trim();
+      if !summary.is_empty() {
+        Ok(Some(summary.to_string()))
+      } else {
+        // If summary is empty after CREATE:, still create but use full response
+        Ok(Some(trimmed.to_string()))
+      }
+    } else {
+      // SKIP or any other response means don't create
+      Ok(None)
+    }
+  } else {
+    Ok(Some(response))
+  }
 }
