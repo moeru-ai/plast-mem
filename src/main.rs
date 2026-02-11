@@ -1,7 +1,7 @@
 use apalis_postgres::PostgresStorage;
 use plast_mem_db_migration::{Migrator, MigratorTrait};
 use plast_mem_shared::{APP_ENV, AppError};
-use plast_mem_worker::{WorkerJob, worker};
+use plast_mem_worker::{EventSegmentationJob, worker};
 use sea_orm::Database;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -27,7 +27,7 @@ async fn main() -> Result<(), AppError> {
   // https://www.sea-ql.org/SeaORM/docs/migration/running-migration/#migrating-programmatically
   Migrator::up(&db, None).await?;
   PostgresStorage::setup(&db.get_postgres_connection_pool()).await?;
-  let job_storage = PostgresStorage::<WorkerJob>::new(db.get_postgres_connection_pool());
+  let job_storage = PostgresStorage::<EventSegmentationJob>::new(db.get_postgres_connection_pool());
 
   let _ = tokio::try_join!(
     worker(&db, job_storage.clone()),

@@ -3,7 +3,7 @@ use axum::{Json, extract::State, http::StatusCode};
 use chrono::{DateTime, Utc};
 use plast_mem_core::{Message, MessageQueue, MessageRole};
 use plast_mem_shared::AppError;
-use plast_mem_worker::{MessageQueueSegmentJob, WorkerJob};
+use plast_mem_worker::EventSegmentationJob;
 use serde::Deserialize;
 use uuid::Uuid;
 
@@ -40,11 +40,16 @@ pub async fn add_message(
   };
 
   MessageQueue::push(payload.conversation_id, message, &state.db).await?;
+
+  // Get messages from queue to pass to the job
+  let queue = MessageQueue::get(payload.conversation_id, &state.db).await?;
   let mut job_storage = state.job_storage.clone();
   job_storage
-    .push(WorkerJob::Segment(MessageQueueSegmentJob {
+    .push(EventSegmentationJob {
       conversation_id: payload.conversation_id,
-    }))
+      messages: queue.messages,
+      check: true, // Let LLM decide whether to create memory
+    })
     .await?;
 
   Ok(StatusCode::OK)

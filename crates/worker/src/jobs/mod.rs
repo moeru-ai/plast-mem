@@ -1,10 +1,6 @@
+mod event_segmentation;
+pub use event_segmentation::*;
 use plast_mem_shared::AppError;
-use serde::{Deserialize, Serialize};
-
-mod create;
-pub use create::*;
-mod segment;
-pub use segment::*;
 
 #[derive(Debug)]
 pub struct WorkerError(pub AppError);
@@ -21,10 +17,4 @@ impl From<AppError> for WorkerError {
   fn from(err: AppError) -> Self {
     Self(err)
   }
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub enum WorkerJob {
-  Segment(MessageQueueSegmentJob),
-  Create(CreateEpisodicMemoryJob),
 }

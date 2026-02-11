@@ -1,7 +1,7 @@
 use apalis_postgres::PostgresStorage;
 use axum::{Router, response::Html, routing::get};
 use plast_mem_shared::AppError;
-use plast_mem_worker::WorkerJob;
+use plast_mem_worker::EventSegmentationJob;
 use sea_orm::DatabaseConnection;
 use tokio::net::TcpListener;
 
@@ -17,7 +17,7 @@ async fn handler() -> Html<&'static str> {
 
 pub async fn server(
   db: DatabaseConnection,
-  job_storage: PostgresStorage<WorkerJob>,
+  job_storage: PostgresStorage<EventSegmentationJob>,
 ) -> Result<(), AppError> {
   let app_state = AppState::new(db, job_storage);
 
