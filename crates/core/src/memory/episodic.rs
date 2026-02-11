@@ -6,7 +6,8 @@ use plast_mem_db_schema::episodic_memory;
 use plast_mem_llm::{InputMessage, Role, embed, summarize_messages};
 use plast_mem_shared::AppError;
 use sea_orm::{
-  ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, QuerySelect,
+  ColumnTrait, ConnectionTrait, DatabaseConnection, DbBackend, EntityTrait, FromQueryResult,
+  QueryFilter, QueryOrder, QuerySelect, Statement,
   prelude::{Expr, PgVector},
 };
 use serde::{Deserialize, Serialize};
@@ -94,58 +95,66 @@ impl EpisodicMemory {
   ) -> Result<Vec<(Self, f64)>, AppError> {
     let query_embedding = embed(query).await?;
 
-    // Semantic search: top-K by vector cosine distance
-    let semantic_ids: Vec<Uuid> = episodic_memory::Entity::find()
-      .select_only()
-      .column(episodic_memory::Column::Id)
-      .order_by_asc(Expr::cust_with_values("embedding <=> ?", [query_embedding]))
-      .limit(limit)
-      .into_tuple()
-      .all(db)
-      .await?;
+    let retrieve_sql = r#"
+    WITH
+    fulltext AS (
+      SELECT id, ROW_NUMBER() OVER (ORDER BY pdb.score(id) DESC) AS rank
+      FROM episodic_memory
+      WHERE content ||| $1
+      LIMIT $2
+    ),
+    semantic AS (
+      SELECT id, ROW_NUMBER() OVER (ORDER BY embedding <=> $3) AS rank
+      FROM episodic_memory
+      LIMIT $2
+    ),
+    rrf AS (
+      SELECT id, 1.0 / (60 + r) AS s FROM fulltext
+      UNION ALL
+      SELECT id, 1.0 / (60 + r) AS s FROM semantic
+    ),
+    rrf_score AS (
+      SELECT id, SUM(s) AS score
+      FROM rrf
+      GROUP BY id
+    )
+    SELECT
+      m.id,
+      m.conversation_id,
+      m.messages,
+      m.content,
+      m.embedding,
+      m.start_at,
+      m.end_at,
+      m.created_at,
+      m.last_reviewed_at,
+      r.score AS score
+    FROM rrf_score r
+    JOIN episodic_memory m USING (id)
+    ORDER BY r.score DESC
+    LIMIT $4;
+    "#;
 
-    // Fulltext search: top-K by BM25 score
-    let fulltext_ids: Vec<Uuid> = episodic_memory::Entity::find()
-      .select_only()
-      .column(episodic_memory::Column::Id)
-      .filter(Expr::cust_with_values("content @@@ ?", [query.to_string()]))
-      .order_by_desc(Expr::cust("paradedb.score(id)"))
-      .limit(limit)
-      .into_tuple()
-      .all(db)
-      .await?;
+    let retrieve_stmt = Statement::from_sql_and_values(
+      DbBackend::Postgres,
+      retrieve_sql,
+      vec![
+        query.to_string().into(),
+        limit.into(),
+        query_embedding.clone().into(),
+        limit.into(),
+      ],
+    );
 
-    // RRF (Reciprocal Rank Fusion)
-    let mut scores: HashMap<Uuid, f64> = HashMap::new();
-    for (rank, id) in semantic_ids.iter().enumerate() {
-      *scores.entry(*id).or_default() += 1.0 / (60.0 + rank as f64 + 1.0);
+    let rows = db.query_all_raw(retrieve_stmt).await?;
+    let mut results = Vec::with_capacity(rows.len());
+
+    for row in rows {
+      let model = episodic_memory::Model::from_query_result(&row, "")?;
+      let score = row.try_get("", "score")?;
+      let mem = EpisodicMemory::from_model(model)?;
+      results.push((mem, score));
     }
-    for (rank, id) in fulltext_ids.iter().enumerate() {
-      *scores.entry(*id).or_default() += 1.0 / (60.0 + rank as f64 + 1.0);
-    }
-
-    if scores.is_empty() {
-      return Ok(vec![]);
-    }
-
-    // Fetch full entities
-    let ids: Vec<Uuid> = scores.keys().copied().collect();
-    let models = episodic_memory::Entity::find()
-      .filter(episodic_memory::Column::Id.is_in(ids))
-      .all(db)
-      .await?;
-
-    let mut results: Vec<(Self, f64)> = models
-      .into_iter()
-      .filter_map(|m| {
-        let score = scores.get(&m.id).copied().unwrap_or(0.0);
-        let em = Self::from_model(m).ok()?;
-        Some((em, score))
-      })
-      .collect();
-
-    results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-    results.truncate(limit as usize);
 
     Ok(results)
   }
