@@ -27,6 +27,7 @@ words:
   - pname
   - prefs
   - qwen
+  - retrievability
   - rustc
   - rustls
   - seaql
