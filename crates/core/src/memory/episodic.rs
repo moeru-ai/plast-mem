@@ -1,9 +1,14 @@
+use std::collections::HashMap;
+
 use crate::{Message, MessageRole};
 use chrono::{DateTime, Utc};
 use plast_mem_db_schema::episodic_memory;
 use plast_mem_llm::{InputMessage, Role, embed, summarize_messages};
 use plast_mem_shared::AppError;
-use sea_orm::prelude::PgVector;
+use sea_orm::{
+  ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, QuerySelect,
+  prelude::{Expr, PgVector},
+};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -54,6 +59,20 @@ impl EpisodicMemory {
     })
   }
 
+  pub fn from_model(model: episodic_memory::Model) -> Result<Self, AppError> {
+    Ok(Self {
+      id: model.id,
+      conversation_id: model.conversation_id,
+      messages: serde_json::from_value(model.messages)?,
+      content: model.content,
+      embedding: model.embedding,
+      start_at: model.start_at.with_timezone(&Utc),
+      end_at: model.end_at.with_timezone(&Utc),
+      created_at: model.created_at.with_timezone(&Utc),
+      last_reviewed_at: model.last_reviewed_at.with_timezone(&Utc),
+    })
+  }
+
   pub fn to_model(&self) -> Result<episodic_memory::Model, AppError> {
     Ok(episodic_memory::Model {
       id: self.id,
@@ -66,5 +85,68 @@ impl EpisodicMemory {
       created_at: self.created_at.into(),
       last_reviewed_at: self.last_reviewed_at.into(),
     })
+  }
+
+  pub async fn retrieve(
+    query: &str,
+    limit: u64,
+    db: &DatabaseConnection,
+  ) -> Result<Vec<(Self, f64)>, AppError> {
+    let query_embedding = embed(query).await?;
+
+    // Semantic search: top-K by vector cosine distance
+    let semantic_ids: Vec<Uuid> = episodic_memory::Entity::find()
+      .select_only()
+      .column(episodic_memory::Column::Id)
+      .order_by_asc(Expr::cust_with_values("embedding <=> ?", [query_embedding]))
+      .limit(limit)
+      .into_tuple()
+      .all(db)
+      .await?;
+
+    // Fulltext search: top-K by BM25 score
+    let fulltext_ids: Vec<Uuid> = episodic_memory::Entity::find()
+      .select_only()
+      .column(episodic_memory::Column::Id)
+      .filter(Expr::cust_with_values("content @@@ ?", [query.to_string()]))
+      .order_by_desc(Expr::cust("paradedb.score(id)"))
+      .limit(limit)
+      .into_tuple()
+      .all(db)
+      .await?;
+
+    // RRF (Reciprocal Rank Fusion)
+    let mut scores: HashMap<Uuid, f64> = HashMap::new();
+    for (rank, id) in semantic_ids.iter().enumerate() {
+      *scores.entry(*id).or_default() += 1.0 / (60.0 + rank as f64 + 1.0);
+    }
+    for (rank, id) in fulltext_ids.iter().enumerate() {
+      *scores.entry(*id).or_default() += 1.0 / (60.0 + rank as f64 + 1.0);
+    }
+
+    if scores.is_empty() {
+      return Ok(vec![]);
+    }
+
+    // Fetch full entities
+    let ids: Vec<Uuid> = scores.keys().copied().collect();
+    let models = episodic_memory::Entity::find()
+      .filter(episodic_memory::Column::Id.is_in(ids))
+      .all(db)
+      .await?;
+
+    let mut results: Vec<(Self, f64)> = models
+      .into_iter()
+      .filter_map(|m| {
+        let score = scores.get(&m.id).copied().unwrap_or(0.0);
+        let em = Self::from_model(m).ok()?;
+        Some((em, score))
+      })
+      .collect();
+
+    results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    results.truncate(limit as usize);
+
+    Ok(results)
   }
 }

@@ -1,19 +1,33 @@
-use crate::utils::AppState;
-use axum::extract::State;
-use axum::{Json, http::StatusCode};
+use axum::{Json, extract::State};
+use plast_mem_core::EpisodicMemory;
 use plast_mem_shared::AppError;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+
+use crate::utils::AppState;
 
 #[derive(Deserialize)]
 pub struct RetrieveMemory {
   pub query: String,
-  pub limit: Option<usize>,
+}
+
+#[derive(Serialize)]
+pub struct RetrieveMemoryResult {
+  #[serde(flatten)]
+  pub memory: EpisodicMemory,
+  pub score: f64,
 }
 
 #[axum::debug_handler]
 pub async fn retrieve_memory(
-  State(_state): State<AppState>,
-  Json(_payload): Json<RetrieveMemory>,
-) -> Result<StatusCode, AppError> {
-  Ok(StatusCode::NOT_IMPLEMENTED)
+  State(state): State<AppState>,
+  Json(payload): Json<RetrieveMemory>,
+) -> Result<Json<Vec<RetrieveMemoryResult>>, AppError> {
+  let results = EpisodicMemory::retrieve(&payload.query, 5, &state.db).await?;
+
+  let response = results
+    .into_iter()
+    .map(|(memory, score)| RetrieveMemoryResult { memory, score })
+    .collect();
+
+  Ok(Json(response))
 }
