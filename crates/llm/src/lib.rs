@@ -91,13 +91,13 @@ pub async fn summarize_messages_with_check(
 
   if check {
     let trimmed = response.trim();
-    if trimmed.starts_with("CREATE:") {
-      let summary = trimmed.strip_prefix("CREATE:").unwrap_or(trimmed).trim();
+    if let Some(summary) = trimmed.strip_prefix("CREATE:") {
+      let summary = summary.trim();
       if !summary.is_empty() {
         Ok(Some(summary.to_string()))
       } else {
-        // If summary is empty after CREATE:, still create but use full response
-        Ok(Some(trimmed.to_string()))
+        // If the summary is empty, it's better to treat it as a skip
+        Ok(None)
       }
     } else {
       // SKIP or any other response means don't create

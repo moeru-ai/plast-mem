@@ -60,15 +60,13 @@ pub async fn process_event_segmentation(
 
   // Verify the queue hasn't been modified since job creation
   let message_queue = MessageQueue::get(job.conversation_id, db).await?;
-  if let (Some(job_first), Some(queue_first)) =
-    (job.messages.first(), message_queue.messages.first())
+  if job.messages.first().map(|m| (&m.content, m.timestamp))
+    != message_queue
+      .messages
+      .first()
+      .map(|m| (&m.content, m.timestamp))
   {
-    if job_first.content != queue_first.content || job_first.timestamp != queue_first.timestamp {
-      // Queue has been modified, skip this stale job
-      return Ok(());
-    }
-  } else {
-    // Queue is empty but job has messages, skip
+    // Queue has been modified, skip this stale job
     return Ok(());
   }
 
@@ -87,12 +85,13 @@ pub async fn process_event_segmentation(
   let now = Utc::now();
   let start_at = job.messages.first().map(|m| m.timestamp).unwrap_or(now);
   let end_at = job.messages.last().map(|m| m.timestamp).unwrap_or(now);
+  let messages_len = job.messages.len();
 
   // Create EpisodicMemory directly without calling LLM again
   let episodic_memory = EpisodicMemory {
     id,
     conversation_id: job.conversation_id,
-    messages: job.messages.clone(),
+    messages: job.messages,
     content: summary,
     embedding,
     start_at,
@@ -111,7 +110,7 @@ pub async fn process_event_segmentation(
     .map_err(AppError::from)?;
 
   // Clear the processed messages from MessageQueue
-  MessageQueue::drain(job.conversation_id, job.messages.len(), &db).await?;
+  MessageQueue::drain(job.conversation_id, messages_len, &db).await?;
 
   Ok(())
 }
