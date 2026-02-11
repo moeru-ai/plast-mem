@@ -82,6 +82,7 @@ pub async fn summarize_messages_with_check(
   let system = ChatCompletionRequestSystemMessage::from(system_prompt);
   let user = ChatCompletionRequestUserMessage::from(formatted_messages);
 
+  // TODO: structured output
   let response = generate_text(vec![
     ChatCompletionRequestMessage::System(system),
     ChatCompletionRequestMessage::User(user),
