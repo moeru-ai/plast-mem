@@ -1,14 +1,10 @@
-use std::collections::HashMap;
-
-use crate::{Message, MessageRole};
+use crate::Message;
 use chrono::{DateTime, Utc};
 use plast_mem_db_schema::episodic_memory;
-use plast_mem_llm::{InputMessage, Role, embed, summarize_messages};
+use plast_mem_llm::embed;
 use plast_mem_shared::AppError;
 use sea_orm::{
-  ColumnTrait, ConnectionTrait, DatabaseConnection, DbBackend, EntityTrait, FromQueryResult,
-  QueryFilter, QueryOrder, QuerySelect, Statement,
-  prelude::{Expr, PgVector},
+  ConnectionTrait, DatabaseConnection, DbBackend, FromQueryResult, Statement, prelude::PgVector,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -27,38 +23,38 @@ pub struct EpisodicMemory {
 }
 
 impl EpisodicMemory {
-  pub async fn new(conversation_id: Uuid, messages: Vec<Message>) -> Result<Self, AppError> {
-    let now = Utc::now();
-    let id = Uuid::now_v7();
-    let start_at = messages.first().map(|m| m.timestamp).unwrap_or(now);
-    let end_at = messages.last().map(|m| m.timestamp).unwrap_or(now);
+  // pub async fn new(conversation_id: Uuid, messages: Vec<Message>) -> Result<Self, AppError> {
+  //   let now = Utc::now();
+  //   let id = Uuid::now_v7();
+  //   let start_at = messages.first().map(|m| m.timestamp).unwrap_or(now);
+  //   let end_at = messages.last().map(|m| m.timestamp).unwrap_or(now);
 
-    let input_messages = messages
-      .iter()
-      .map(|m| InputMessage {
-        role: match m.role {
-          MessageRole::User => Role::User,
-          MessageRole::Assistant => Role::Assistant,
-        },
-        content: m.content.clone(),
-      })
-      .collect::<Vec<_>>();
+  //   let input_messages = messages
+  //     .iter()
+  //     .map(|m| InputMessage {
+  //       role: match m.role {
+  //         MessageRole::User => Role::User,
+  //         MessageRole::Assistant => Role::Assistant,
+  //       },
+  //       content: m.content.clone(),
+  //     })
+  //     .collect::<Vec<_>>();
 
-    let content = summarize_messages(&input_messages).await?;
-    let embedding = embed(&content).await?;
+  //   let content = summarize_messages(&input_messages).await?;
+  //   let embedding = embed(&content).await?;
 
-    Ok(Self {
-      id,
-      conversation_id,
-      messages,
-      content,
-      embedding,
-      start_at,
-      end_at,
-      created_at: now,
-      last_reviewed_at: now,
-    })
-  }
+  //   Ok(Self {
+  //     id,
+  //     conversation_id,
+  //     messages,
+  //     content,
+  //     embedding,
+  //     start_at,
+  //     end_at,
+  //     created_at: now,
+  //     last_reviewed_at: now,
+  //   })
+  // }
 
   pub fn from_model(model: episodic_memory::Model) -> Result<Self, AppError> {
     Ok(Self {
