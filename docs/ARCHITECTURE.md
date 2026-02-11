@@ -54,4 +54,5 @@ Background tasks worker
 
 ## Further Reading
 
+- [Segmentation](architecture/segmentation.md] - Segmenter Based on Rule and Event Segmentation Theory
 - [FSRS](architecture/fsrs.md) - Integration with FSRS (Free Spaced Repetition Scheduler)
