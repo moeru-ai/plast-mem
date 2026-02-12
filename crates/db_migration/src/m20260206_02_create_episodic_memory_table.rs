@@ -72,8 +72,9 @@ pub enum EpisodicMemory {
   // formatted messages embedding (for cosine similarity)
   Embedding,
 
-  // TODO: Stability (FSRS MemoryState)
-  // TODO: Difficulty (FSRS MemoryState)
+  // FSRS Memory State
+  Stability,
+  Difficulty,
 
   // earliest message timestamp
   StartAt,

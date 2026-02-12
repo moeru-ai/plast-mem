@@ -1,5 +1,7 @@
 use sea_orm_migration::prelude::*;
 
+use crate::m20260206_02_create_episodic_memory_table::EpisodicMemory;
+
 #[derive(DeriveMigrationName)]
 pub struct Migration;
 
@@ -38,11 +40,4 @@ impl MigrationTrait for Migration {
       )
       .await
   }
-}
-
-#[derive(Iden)]
-pub enum EpisodicMemory {
-  Table,
-  Stability,
-  Difficulty,
 }
