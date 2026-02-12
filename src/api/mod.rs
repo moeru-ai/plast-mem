@@ -1,6 +1,6 @@
 use axum::{
   Router,
-  routing::post,
+  routing::{get, post},
 };
 
 use crate::utils::AppState;
@@ -13,10 +13,10 @@ pub fn app() -> Router<AppState> {
     .route("/api/v0/add_message", post(add_message::add_message))
     .route(
       "/api/v0/retrieve_memory",
-      post(retrieve_memory::retrieve_memory),
+      get(retrieve_memory::retrieve_memory),
     )
     .route(
       "/api/v0/retrieve_memory/raw",
-      post(retrieve_memory::retrieve_memory_raw),
+      get(retrieve_memory::retrieve_memory_raw),
     )
 }

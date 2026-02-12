@@ -32,10 +32,7 @@ pub struct EpisodicMemory {
 
 impl EpisodicMemory {
   pub fn from_model(model: episodic_memory::Model) -> Result<Self, AppError> {
-    let boundary_type = model
-      .boundary_type
-      .parse::<BoundaryType>()
-      .unwrap_or(BoundaryType::ContentShift);
+    let boundary_type = model.boundary_type.parse::<BoundaryType>()?;
 
     Ok(Self {
       id: model.id,

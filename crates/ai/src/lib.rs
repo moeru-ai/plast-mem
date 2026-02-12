@@ -2,7 +2,7 @@ use async_openai::types::{
   ChatCompletionRequestMessage, ChatCompletionRequestSystemMessage,
   ChatCompletionRequestUserMessage,
 };
-use plastmem_shared::{AppError, Message, MessageRole};
+use plastmem_shared::{AppError, Message};
 use schemars::JsonSchema;
 use serde::Deserialize;
 
@@ -18,13 +18,7 @@ pub use generate_text::generate_text;
 fn format_messages(messages: &[Message]) -> String {
   messages
     .iter()
-    .map(|m| {
-      let role = match m.role {
-        MessageRole::User => "user",
-        MessageRole::Assistant => "assistant",
-      };
-      format!("{}: {}", role, m.content)
-    })
+    .map(|m| format!("{}: {}", m.role, m.content))
     .collect::<Vec<_>>()
     .join("\n")
 }

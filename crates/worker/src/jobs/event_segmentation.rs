@@ -3,9 +3,9 @@ use std::ops::Deref;
 use apalis::prelude::Data;
 use chrono::Utc;
 use fsrs::{DEFAULT_PARAMETERS, FSRS};
+use plastmem_ai::{embed, segment_events};
 use plastmem_core::{BoundaryType, EpisodicMemory, Message, MessageQueue};
 use plastmem_entities::episodic_memory;
-use plastmem_ai::{embed, segment_events};
 use plastmem_shared::{AppError, fsrs::DESIRED_RETENTION};
 use sea_orm::{DatabaseConnection, EntityTrait};
 use serde::{Deserialize, Serialize};
@@ -73,10 +73,7 @@ pub async fn process_event_segmentation(
   } else if surprise > 0.7 {
     BoundaryType::PredictionError
   } else {
-    output
-      .boundary_type
-      .parse::<BoundaryType>()
-      .unwrap_or(BoundaryType::ContentShift)
+    output.boundary_type.parse::<BoundaryType>()?
   };
 
   let boundary_strength = surprise;
