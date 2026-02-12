@@ -1,3 +1,5 @@
+use std::fmt;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -6,6 +8,15 @@ use serde::{Deserialize, Serialize};
 pub enum MessageRole {
   User,
   Assistant,
+}
+
+impl fmt::Display for MessageRole {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    match self {
+      MessageRole::User => write!(f, "user"),
+      MessageRole::Assistant => write!(f, "assistant"),
+    }
+  }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

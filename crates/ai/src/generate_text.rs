@@ -4,7 +4,7 @@ use async_openai::{
   config::OpenAIConfig,
   types::{ChatCompletionRequestMessage, CreateChatCompletionRequestArgs},
 };
-use plast_mem_shared::{APP_ENV, AppError};
+use plastmem_shared::{APP_ENV, AppError};
 
 pub async fn generate_text(
   messages: Vec<ChatCompletionRequestMessage>,

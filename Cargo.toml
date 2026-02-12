@@ -12,7 +12,7 @@ license = "MIT"
 publish = false
 
 [package]
-name = "plast_mem"
+name = "plastmem"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
@@ -29,27 +29,28 @@ repository.workspace = true
 [workspace]
 members = [
   "./crates/core",
-  "./crates/db_migration",
-  "./crates/db_schema",
-  "./crates/llm",
+  "./crates/migration",
+  "./crates/entities",
+  "./crates/ai",
   "./crates/shared",
   "./crates/worker",
   ".",
 ]
 
 [workspace.dependencies]
-plast_mem_core.path = "./crates/core"
-plast_mem_db_migration.path = "./crates/db_migration"
-plast_mem_db_schema.path = "./crates/db_schema"
-plast_mem_llm.path = "./crates/llm"
-plast_mem_shared.path = "./crates/shared"
-plast_mem_worker.path = "./crates/worker"
+plastmem_core.path = "./crates/core"
+plastmem_migration.path = "./crates/migration"
+plastmem_entities.path = "./crates/entities"
+plastmem_ai.path = "./crates/ai"
+plastmem_shared.path = "./crates/shared"
+plastmem_worker.path = "./crates/worker"
 anyhow = "1.0.100"
 apalis = "1.0.0-rc.3"
 apalis-postgres = { version = "1.0.0-rc.3", features = ["time"] }
 axum = { version = "0.8.8", features = ["macros"] }
 async-openai = "0.28.0"
 chrono = { version = "0.4.43", features = ["serde"] }
+chrono-humanize = "0.2"
 dotenvy = "0.15.7"
 sea-orm-migration = { version = "2.0.0-rc.30", features = [
   "runtime-tokio-rustls",
@@ -75,12 +76,12 @@ uuid = { version = "1.20.0", features = ["serde", "v4", "v7"] }
 fsrs = "5.2.0"
 
 [dependencies]
-plast_mem_core.workspace = true
-plast_mem_db_migration.workspace = true
-plast_mem_db_schema.workspace = true
-plast_mem_llm.workspace = true
-plast_mem_shared.workspace = true
-plast_mem_worker.workspace = true
+plastmem_core.workspace = true
+plastmem_migration.workspace = true
+plastmem_entities.workspace = true
+plastmem_ai.workspace = true
+plastmem_shared.workspace = true
+plastmem_worker.workspace = true
 anyhow.workspace = true
 apalis.workspace = true
 apalis-postgres.workspace = true

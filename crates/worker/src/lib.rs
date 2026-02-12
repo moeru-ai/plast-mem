@@ -5,7 +5,7 @@ use apalis::{
   prelude::{Monitor, WorkerBuilder},
 };
 use apalis_postgres::PostgresStorage;
-use plast_mem_shared::AppError;
+use plastmem_shared::AppError;
 use sea_orm::DatabaseConnection;
 
 pub mod jobs;

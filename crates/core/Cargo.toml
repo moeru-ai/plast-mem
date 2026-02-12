@@ -1,5 +1,5 @@
 [package]
-name = "plast_mem_core"
+name = "plastmem_core"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
@@ -12,15 +12,16 @@ homepage.workspace = true
 repository.workspace = true
 
 [lib]
-name = "plast_mem_core"
+name = "plastmem_core"
 path = "src/lib.rs"
 
 [dependencies]
-plast_mem_db_schema.workspace = true
-plast_mem_llm.workspace = true
-plast_mem_shared.workspace = true
+plastmem_entities.workspace = true
+plastmem_ai.workspace = true
+plastmem_shared.workspace = true
 anyhow.workspace = true
 chrono.workspace = true
+chrono-humanize.workspace = true
 fsrs.workspace = true
 sea-orm.workspace = true
 serde.workspace = true

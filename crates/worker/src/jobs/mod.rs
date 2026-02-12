@@ -4,7 +4,7 @@ pub use event_segmentation::*;
 mod memory_review;
 pub use memory_review::*;
 
-use plast_mem_shared::AppError;
+use plastmem_shared::AppError;
 
 /// Error type for apalis job boundary.
 /// Jobs internally use `AppError`; this wrapper converts at the worker boundary.

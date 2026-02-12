@@ -919,6 +919,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "chrono-humanize"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "799627e6b4d27827a814e837b9d8a504832086081806d45b1afa34dc982b023b"
+dependencies = [
+ "chrono",
+]
+
+[[package]]
 name = "clap"
 version = "4.5.57"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3522,7 +3531,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7edddbd0b52d732b21ad9a5fab5c704c14cd949e5e9a1ec5929a24fded1b904c"
 
 [[package]]
-name = "plast_mem"
+name = "plastmem"
 version = "0.0.1"
 dependencies = [
  "anyhow",
@@ -3533,12 +3542,12 @@ dependencies = [
  "dotenvy",
  "fsrs",
  "futures",
- "plast_mem_core",
- "plast_mem_db_migration",
- "plast_mem_db_schema",
- "plast_mem_llm",
- "plast_mem_shared",
- "plast_mem_worker",
+ "plastmem_ai",
+ "plastmem_core",
+ "plastmem_entities",
+ "plastmem_migration",
+ "plastmem_shared",
+ "plastmem_worker",
  "sea-orm",
  "serde",
  "serde_json",
@@ -3549,45 +3558,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "plast_mem_core"
-version = "0.0.1"
-dependencies = [
- "anyhow",
- "chrono",
- "fsrs",
- "plast_mem_db_schema",
- "plast_mem_llm",
- "plast_mem_shared",
- "sea-orm",
- "serde",
- "serde_json",
- "uuid",
-]
-
-[[package]]
-name = "plast_mem_db_migration"
-version = "0.0.1"
-dependencies = [
- "sea-orm-migration",
- "tokio",
-]
-
-[[package]]
-name = "plast_mem_db_schema"
-version = "0.0.1"
-dependencies = [
- "sea-orm",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "plast_mem_llm"
+name = "plastmem_ai"
 version = "0.0.1"
 dependencies = [
  "anyhow",
  "async-openai",
- "plast_mem_shared",
+ "plastmem_shared",
  "schemars",
  "sea-orm",
  "serde",
@@ -3595,7 +3571,41 @@ dependencies = [
 ]
 
 [[package]]
-name = "plast_mem_shared"
+name = "plastmem_core"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "chrono-humanize",
+ "fsrs",
+ "plastmem_ai",
+ "plastmem_entities",
+ "plastmem_shared",
+ "sea-orm",
+ "serde",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
+name = "plastmem_entities"
+version = "0.0.1"
+dependencies = [
+ "sea-orm",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "plastmem_migration"
+version = "0.0.1"
+dependencies = [
+ "sea-orm-migration",
+ "tokio",
+]
+
+[[package]]
+name = "plastmem_shared"
 version = "0.0.1"
 dependencies = [
  "anyhow",
@@ -3606,7 +3616,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "plast_mem_worker"
+name = "plastmem_worker"
 version = "0.0.1"
 dependencies = [
  "anyhow",
@@ -3615,10 +3625,10 @@ dependencies = [
  "async-openai",
  "chrono",
  "fsrs",
- "plast_mem_core",
- "plast_mem_db_schema",
- "plast_mem_llm",
- "plast_mem_shared",
+ "plastmem_ai",
+ "plastmem_core",
+ "plastmem_entities",
+ "plastmem_shared",
  "sea-orm",
  "serde",
  "serde_json",

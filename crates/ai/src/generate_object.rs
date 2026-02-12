@@ -7,7 +7,7 @@ use async_openai::{
     ResponseFormatJsonSchema,
   },
 };
-use plast_mem_shared::{APP_ENV, AppError};
+use plastmem_shared::{APP_ENV, AppError};
 use schemars::JsonSchema;
 use serde::de::DeserializeOwned;
 

@@ -1,5 +1,5 @@
 [package]
-name = "plast_mem_db_migration"
+name = "plastmem_migration"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
@@ -12,7 +12,7 @@ homepage.workspace = true
 repository.workspace = true
 
 [lib]
-name = "plast_mem_db_migration"
+name = "plastmem_migration"
 path = "src/lib.rs"
 
 [dependencies]

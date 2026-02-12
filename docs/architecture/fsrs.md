@@ -4,15 +4,26 @@
 
 Each memory is associated with the following state parameters:
 
-- `stability` (S)
+- `stability` (S) — boosted by surprise on creation: `S * (1.0 + surprise * 0.5)`
 - `difficulty` (D)
 - `last_reviewed_at`
 
-New memories are initialized with **high retrievability but low stability**, meaning they are fresh in memory but haven't been reinforced yet.
+New memories are initialized with **high retrievability but low stability**, meaning they are fresh in memory but haven't been reinforced yet. Surprising events receive a stability boost, making them decay slower.
 
 ## Reranking
 
-Each memory retrieval first searches 100 candidates via BM25 + vector (RRF), then calculates the FSRS retrievability score and re-ranks them. The final response returns the top `limit` items.
+Each memory retrieval first searches 100 candidates via BM25 + vector (RRF), then applies two multipliers:
+
+1. **FSRS retrievability** — how likely the memory is to be recalled
+2. **Boundary boost** — weight based on boundary type:
+   - PredictionError: 1.3 + 0.2 × surprise (highest)
+   - GoalCompletion: 1.2
+   - ContentShift: 1.0 (neutral)
+   - TemporalGap: 0.9 (reduced)
+
+Final score: `rrf_score × retrievability × boundary_boost`
+
+The top `limit` items are returned.
 
 ## Review
 
