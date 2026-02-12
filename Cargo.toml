@@ -71,6 +71,7 @@ serde = "1.0.228"
 serde_json = "1.0.149"
 tokio = { version = "1.49.0", features = ["full"] }
 uuid = { version = "1.20.0", features = ["serde", "v4", "v7"] }
+fsrs = "5.2.0"
 
 [dependencies]
 plast_mem_core.workspace = true
@@ -85,7 +86,7 @@ apalis-postgres.workspace = true
 axum.workspace = true
 chrono.workspace = true
 dotenvy.workspace = true
-fsrs = "5.2.0"
+fsrs.workspace = true
 sea-orm.workspace = true
 serde.workspace = true
 serde_json.workspace = true

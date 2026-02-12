@@ -13,6 +13,8 @@ pub struct Model {
   pub messages: Json,
   pub content: String,
   pub embedding: PgVector,
+  pub stability: f32,
+  pub difficulty: f32,
   pub start_at: DateTimeWithTimeZone,
   pub end_at: DateTimeWithTimeZone,
   pub created_at: DateTimeWithTimeZone,

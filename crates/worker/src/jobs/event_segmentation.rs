@@ -2,6 +2,7 @@ use std::ops::Deref;
 
 use apalis::prelude::Data;
 use chrono::Utc;
+use fsrs::FSRS;
 use plast_mem_core::{EpisodicMemory, Message, MessageQueue, MessageRole};
 use plast_mem_db_schema::episodic_memory;
 use plast_mem_llm::{InputMessage, Role, embed, summarize_messages_with_check};
@@ -11,6 +12,9 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::jobs::WorkerError;
+
+/// Target retention probability (90%).
+const DESIRED_RETENTION: f32 = 0.9;
 
 /// Job for event segmentation with LLM check
 /// - If `check` is true: LLM decides whether to create memory and returns summary if yes
@@ -87,13 +91,23 @@ pub async fn process_event_segmentation(
   let end_at = job.messages.last().map(|m| m.timestamp).unwrap_or(now);
   let messages_len = job.messages.len();
 
-  // Create EpisodicMemory directly without calling LLM again
+  // Initialize FSRS state for new memory
+  let fsrs =
+    FSRS::new(None).map_err(|e| WorkerError::from(AppError::new(anyhow::anyhow!("{e}"))))?;
+  let initial_states = fsrs
+    .next_states(None, DESIRED_RETENTION, 0)
+    .map_err(|e| WorkerError::from(AppError::new(anyhow::anyhow!("{e}"))))?;
+  let initial_memory = initial_states.good.memory;
+
+  // Create EpisodicMemory with FSRS initial state
   let episodic_memory = EpisodicMemory {
     id,
     conversation_id: job.conversation_id,
     messages: job.messages,
     content: summary,
     embedding,
+    stability: initial_memory.stability,
+    difficulty: initial_memory.difficulty,
     start_at,
     end_at,
     created_at: now,

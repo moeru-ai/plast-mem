@@ -10,21 +10,36 @@ use sea_orm::DatabaseConnection;
 
 pub mod jobs;
 pub use jobs::EventSegmentationJob;
-use jobs::process_event_segmentation;
+pub use jobs::MemoryReviewJob;
+use jobs::{process_event_segmentation, process_memory_review};
 
 pub async fn worker(
   db: &DatabaseConnection,
-  backend: PostgresStorage<EventSegmentationJob>,
+  segmentation_backend: PostgresStorage<EventSegmentationJob>,
+  review_backend: PostgresStorage<MemoryReviewJob>,
 ) -> Result<(), AppError> {
   let db = db.clone();
 
   Monitor::new()
-    .register(move |_run_id| {
-      WorkerBuilder::new("event-segmentation")
-        .backend(backend.clone())
-        .enable_tracing()
-        .data(db.clone())
-        .build(process_event_segmentation)
+    .register({
+      let db = db.clone();
+      move |_run_id| {
+        WorkerBuilder::new("event-segmentation")
+          .backend(segmentation_backend.clone())
+          .enable_tracing()
+          .data(db.clone())
+          .build(process_event_segmentation)
+      }
+    })
+    .register({
+      let db = db.clone();
+      move |_run_id| {
+        WorkerBuilder::new("memory-review")
+          .backend(review_backend.clone())
+          .enable_tracing()
+          .data(db.clone())
+          .build(process_memory_review)
+      }
     })
     .shutdown_timeout(Duration::from_secs(5))
     .run_with_signal(tokio::signal::ctrl_c())

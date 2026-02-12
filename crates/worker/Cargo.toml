@@ -21,6 +21,7 @@ apalis.workspace = true
 apalis-postgres.workspace = true
 async-openai.workspace = true
 chrono.workspace = true
+fsrs.workspace = true
 plast_mem_core.workspace = true
 plast_mem_db_schema.workspace = true
 plast_mem_llm.workspace = true

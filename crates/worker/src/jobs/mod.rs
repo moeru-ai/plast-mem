@@ -1,5 +1,8 @@
 mod event_segmentation;
 pub use event_segmentation::*;
+
+mod memory_review;
+pub use memory_review::*;
 use plast_mem_shared::AppError;
 
 #[derive(Debug)]

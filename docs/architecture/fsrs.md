@@ -12,15 +12,18 @@ New memories are initialized with **high retrievability but low stability**, mea
 
 ## Reranking
 
-Each memory retrieval first searches through a large number of similar memories, then calculates the FSRS retrievability score and re-rank them based on it.
+Each memory retrieval first searches 100 candidates via BM25 + vector (RRF), then calculates the FSRS retrievability score and re-ranks them. The final response returns the top `limit` items.
 
 ## Review
 
-After each memory retrieval, a `needs_review` status is pushed to the corresponding message queue.
+After each memory retrieval, a `MemoryReviewJob` is enqueued with the retrieved memory IDs and the retrieval time (`reviewed_at`).
 
-This triggers a review task whenever a new user message is received.
+The worker processes the job asynchronously and updates FSRS parameters.
+If the job's `reviewed_at` is not newer than the stored `last_reviewed_at`, the job is skipped to avoid stale writes.
 
-The LLM-based reviewer evaluates retrieved memories and assigns a rating:
+Current behavior is an automatic **GOOD** review for each retrieved memory (being retrieved = reinforcement).
+
+Planned behavior (not implemented yet) is an LLM-based reviewer that evaluates retrieved memories and assigns a rating:
 
 | Rating | Description |
 |--------|-------------|
