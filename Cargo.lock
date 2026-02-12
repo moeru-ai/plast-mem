@@ -3548,6 +3548,7 @@ version = "0.0.1"
 dependencies = [
  "anyhow",
  "chrono",
+ "fsrs",
  "plast_mem_db_schema",
  "plast_mem_llm",
  "plast_mem_shared",
@@ -3603,6 +3604,7 @@ dependencies = [
  "apalis-postgres",
  "async-openai",
  "chrono",
+ "fsrs",
  "plast_mem_core",
  "plast_mem_db_schema",
  "plast_mem_llm",
