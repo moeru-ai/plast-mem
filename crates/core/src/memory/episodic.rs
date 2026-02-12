@@ -13,6 +13,8 @@ use uuid::Uuid;
 /// Default FSRS decay for retrievability calculation.
 /// Uses FSRS-5 default: 0.0 means the crate applies its internal default.
 const FSRS_DECAY: f32 = 0.0;
+/// Candidate pool size for FSRS re-ranking.
+const FSRS_CANDIDATE_LIMIT: u64 = 100;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct EpisodicMemory {
@@ -70,8 +72,8 @@ impl EpisodicMemory {
     let query_embedding = embed(query).await?;
     let fsrs = FSRS::new(None)?;
 
-    // Over-fetch 3x candidates for FSRS re-ranking headroom
-    let candidate_limit = limit * 3;
+    // Fetch a fixed candidate pool for FSRS re-ranking
+    let candidate_limit = FSRS_CANDIDATE_LIMIT;
 
     let retrieve_sql = r#"
     WITH

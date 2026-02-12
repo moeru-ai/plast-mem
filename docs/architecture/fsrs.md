@@ -12,7 +12,7 @@ New memories are initialized with **high retrievability but low stability**, mea
 
 ## Reranking
 
-Each memory retrieval first searches through a large number of similar memories, then calculates the FSRS retrievability score and re-rank them based on it.
+Each memory retrieval first searches 100 candidates via BM25 + vector (RRF), then calculates the FSRS retrievability score and re-ranks them. The final response returns the top `limit` items.
 
 ## Review
 
