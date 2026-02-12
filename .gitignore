@@ -28,3 +28,6 @@ postgresql
 
 # local env
 .env
+
+# Claude Code
+.claude
