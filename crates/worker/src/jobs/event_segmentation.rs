@@ -3,9 +3,9 @@ use std::ops::Deref;
 use apalis::prelude::Data;
 use chrono::Utc;
 use fsrs::{DEFAULT_PARAMETERS, FSRS};
-use plast_mem_core::{EpisodicMemory, Message, MessageQueue, MessageRole};
+use plast_mem_core::{EpisodicMemory, Message, MessageQueue};
 use plast_mem_db_schema::episodic_memory;
-use plast_mem_llm::{InputMessage, Role, embed, summarize_messages_with_check};
+use plast_mem_llm::{embed, summarize_messages_with_check};
 use plast_mem_shared::AppError;
 use sea_orm::{DatabaseConnection, EntityTrait};
 use serde::{Deserialize, Serialize};
@@ -26,20 +26,6 @@ pub struct EventSegmentationJob {
   pub check: bool,
 }
 
-/// Converts core Message to llm InputMessage
-fn to_input_messages(messages: &[Message]) -> Vec<InputMessage> {
-  messages
-    .iter()
-    .map(|m| InputMessage {
-      role: match m.role {
-        MessageRole::User => Role::User,
-        MessageRole::Assistant => Role::Assistant,
-      },
-      content: m.content.clone(),
-    })
-    .collect()
-}
-
 /// Calls LLM to either:
 /// - If check=true: Decide whether to create memory, return Some(summary) if yes, None if no
 /// - If check=false: Directly generate and return summary
@@ -47,8 +33,7 @@ async fn generate_summary_with_check(
   messages: &[Message],
   check: bool,
 ) -> Result<Option<String>, AppError> {
-  let input_messages = to_input_messages(messages);
-  summarize_messages_with_check(&input_messages, check).await
+  summarize_messages_with_check(messages, check).await
 }
 
 pub async fn process_event_segmentation(

@@ -2,8 +2,7 @@ use async_openai::types::{
   ChatCompletionRequestMessage, ChatCompletionRequestSystemMessage,
   ChatCompletionRequestUserMessage,
 };
-use plast_mem_shared::AppError;
-use serde::{Deserialize, Serialize};
+use plast_mem_shared::{AppError, Message, MessageRole};
 
 mod embed;
 pub use embed::embed;
@@ -11,25 +10,13 @@ pub use embed::embed;
 mod generate_text;
 pub use generate_text::generate_text;
 
-#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
-pub enum Role {
-  User,
-  Assistant,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct InputMessage {
-  pub role: Role,
-  pub content: String,
-}
-
-fn format_input_messages(messages: &[InputMessage]) -> String {
+fn format_messages(messages: &[Message]) -> String {
   messages
     .iter()
     .map(|m| {
       let role = match m.role {
-        Role::User => "user",
-        Role::Assistant => "assistant",
+        MessageRole::User => "user",
+        MessageRole::Assistant => "assistant",
       };
       format!("{}: {}", role, m.content)
     })
@@ -37,7 +24,7 @@ fn format_input_messages(messages: &[InputMessage]) -> String {
     .join("\n")
 }
 
-// pub async fn summarize_messages(messages: &[InputMessage]) -> Result<String, AppError> {
+// pub async fn summarize_messages(messages: &[Message]) -> Result<String, AppError> {
 //   let system = ChatCompletionRequestSystemMessage::from(
 //     "You are a professional summarizer. Provide a clear and concise summary",
 //     // TODO: MAYBE:
@@ -46,7 +33,7 @@ fn format_input_messages(messages: &[InputMessage]) -> String {
 //     // Provide a very concise summary in 1-2 sentences. (concise)
 //   );
 
-//   let user = ChatCompletionRequestUserMessage::from(format_input_messages(messages));
+//   let user = ChatCompletionRequestUserMessage::from(format_messages(messages));
 
 //   generate_text(vec![
 //     ChatCompletionRequestMessage::System(system),
@@ -65,11 +52,9 @@ fn format_input_messages(messages: &[InputMessage]) -> String {
 /// When `check` is false:
 /// - Directly generates and returns a summary
 pub async fn summarize_messages_with_check(
-  messages: &[InputMessage],
+  messages: &[Message],
   check: bool,
 ) -> Result<Option<String>, AppError> {
-  let formatted_messages = format_input_messages(messages);
-
   let system_prompt = if check {
     "You are an event segmentation analyzer. Analyze the conversation and decide if it contains significant content worth remembering as an episodic memory.\n\
      If the conversation is meaningful (contains important information, events, or context), reply with 'CREATE: ' followed by a concise summary.\n\
@@ -78,8 +63,9 @@ pub async fn summarize_messages_with_check(
   } else {
     "You are a professional summarizer. Provide a clear and concise summary of the following conversation."
   };
-
   let system = ChatCompletionRequestSystemMessage::from(system_prompt);
+
+  let formatted_messages = format_messages(messages);
   let user = ChatCompletionRequestUserMessage::from(formatted_messages);
 
   // TODO: structured output

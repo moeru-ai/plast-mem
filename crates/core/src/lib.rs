@@ -4,5 +4,4 @@ pub use memory::EpisodicMemory;
 mod message_queue;
 pub use message_queue::{MessageQueue, SegmentationCheck};
 
-mod message;
-pub use message::{Message, MessageRole};
+pub use plast_mem_shared::{Message, MessageRole};
