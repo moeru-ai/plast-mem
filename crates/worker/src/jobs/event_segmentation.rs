@@ -1,5 +1,3 @@
-use std::ops::Deref;
-
 use apalis::prelude::Data;
 use chrono::Utc;
 use fsrs::{DEFAULT_PARAMETERS, FSRS};
@@ -74,7 +72,7 @@ pub async fn segment_events(
 
   let messages = messages
     .iter()
-    .map(|m| m.to_string())
+    .map(std::string::ToString::to_string)
     .collect::<Vec<_>>()
     .join("\n");
 
@@ -106,7 +104,7 @@ pub async fn process_event_segmentation(
   job: EventSegmentationJob,
   db: Data<DatabaseConnection>,
 ) -> Result<(), AppError> {
-  let db = db.deref();
+  let db = &*db;
 
   // If no messages, nothing to do
   if job.messages.is_empty() {
@@ -130,13 +128,13 @@ pub async fn process_event_segmentation(
 
   // If LLM decided to skip, drain queue and return
   if output.action != "create" {
-    MessageQueue::drain(job.conversation_id, job.messages.len(), &db).await?;
+    MessageQueue::drain(job.conversation_id, job.messages.len(), db).await?;
     return Ok(());
   }
 
   let summary = output.summary.unwrap_or_default();
   if summary.is_empty() {
-    MessageQueue::drain(job.conversation_id, job.messages.len(), &db).await?;
+    MessageQueue::drain(job.conversation_id, job.messages.len(), db).await?;
     return Ok(());
   }
 
@@ -147,8 +145,8 @@ pub async fn process_event_segmentation(
 
   let id = Uuid::now_v7();
   let now = Utc::now();
-  let start_at = job.messages.first().map(|m| m.timestamp).unwrap_or(now);
-  let end_at = job.messages.last().map(|m| m.timestamp).unwrap_or(now);
+  let start_at = job.messages.first().map_or(now, |m| m.timestamp);
+  let end_at = job.messages.last().map_or(now, |m| m.timestamp);
   let messages_len = job.messages.len();
 
   // Initialize FSRS state for new memory with surprise-based stability boost
@@ -183,7 +181,7 @@ pub async fn process_event_segmentation(
     .await?;
 
   // Clear the processed messages from MessageQueue
-  MessageQueue::drain(job.conversation_id, messages_len, &db).await?;
+  MessageQueue::drain(job.conversation_id, messages_len, db).await?;
 
   Ok(())
 }

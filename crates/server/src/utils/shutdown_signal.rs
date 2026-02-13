@@ -1,5 +1,8 @@
 use tokio::signal;
 
+/// # Panics
+///
+/// Panics if the Ctrl+C signal handler fails to install.
 pub async fn shutdown_signal() {
   let ctrl_c = async {
     signal::ctrl_c()

@@ -2,7 +2,7 @@ use std::env;
 use std::sync::LazyLock;
 
 fn required_env(key: &str) -> String {
-  env::var(key).expect(&format!("env {key} must be set"))
+  env::var(key).unwrap_or_else(|_| panic!("env {key} must be set"))
 }
 
 pub struct AppEnv {

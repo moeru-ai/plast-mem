@@ -30,7 +30,7 @@ impl MessageQueue {
   pub async fn get(id: Uuid, db: &DatabaseConnection) -> Result<Self, AppError> {
     let model = Self::get_or_create_model(id, db).await?;
 
-    Ok(Self::from_model(model)?)
+    Self::from_model(model)
   }
 
   pub async fn get_or_create_model(
@@ -116,20 +116,20 @@ impl MessageQueue {
       // If more than 30 messages, force a split.
       n if n >= 30 => {
         return Ok(Some(SegmentationCheck {
-          messages: messages.clone(),
+          messages,
           check: false,
         }));
       }
       _ => {}
-    };
+    }
 
     // Check timestamp gap
     // If it exceeds 15 minutes, force a split.
-    if messages.last().map_or(false, |last_message| {
+    if messages.last().is_some_and(|last_message| {
       message.timestamp - last_message.timestamp > TimeDelta::minutes(15)
     }) {
       return Ok(Some(SegmentationCheck {
-        messages: messages.clone(),
+        messages,
         check: false,
       }));
     }
@@ -141,7 +141,7 @@ impl MessageQueue {
     }
 
     Ok(Some(SegmentationCheck {
-      messages: messages.clone(),
+      messages,
       check: true,
     }))
   }

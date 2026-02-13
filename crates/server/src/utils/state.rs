@@ -11,7 +11,8 @@ pub struct AppState {
 }
 
 impl AppState {
-  pub fn new(
+  #[must_use]
+  pub const fn new(
     db: DatabaseConnection,
     job_storage: PostgresStorage<EventSegmentationJob>,
     review_job_storage: PostgresStorage<MemoryReviewJob>,

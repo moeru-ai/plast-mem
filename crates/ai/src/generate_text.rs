@@ -26,6 +26,6 @@ pub async fn generate_text(
     .await
     .map(|r| r.choices.into_iter())?
     .filter_map(|c| c.message.content)
-    .last()
-    .ok_or(anyhow!("empty message content").into())
+    .next_back()
+    .ok_or_else(|| anyhow!("empty message content").into())
 }

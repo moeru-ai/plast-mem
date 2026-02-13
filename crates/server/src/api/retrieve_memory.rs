@@ -11,7 +11,7 @@ use crate::utils::AppState;
 
 // --- Shared ---
 
-fn default_limit() -> usize {
+const fn default_limit() -> usize {
   5
 }
 
@@ -111,5 +111,5 @@ pub async fn retrieve_memory(
 
   enqueue_review_job(&state, &results).await?;
 
-  Ok(format_tool_result(&results, payload.detail))
+  Ok(format_tool_result(&results, &payload.detail))
 }

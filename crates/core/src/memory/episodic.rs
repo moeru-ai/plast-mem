@@ -73,7 +73,7 @@ impl EpisodicMemory {
     let query_embedding = embed(query).await?;
     let fsrs = FSRS::new(Some(&DEFAULT_PARAMETERS))?;
 
-    let retrieve_sql = r#"
+    let retrieve_sql = r"
     WITH
     fulltext AS (
       SELECT id, ROW_NUMBER() OVER (ORDER BY pdb.score(id) DESC) AS r
@@ -114,7 +114,7 @@ impl EpisodicMemory {
     JOIN episodic_memory m USING (id)
     ORDER BY r.score DESC
     LIMIT $4;
-    "#;
+    ";
 
     let retrieve_stmt = Statement::from_sql_and_values(
       DbBackend::Postgres,
@@ -134,10 +134,12 @@ impl EpisodicMemory {
     for row in rows {
       let model = episodic_memory::Model::from_query_result(&row, "")?;
       let rrf_score: f64 = row.try_get("", "score")?;
-      let mem = EpisodicMemory::from_model(model)?;
+      let mem = Self::from_model(model)?;
 
       // FSRS re-ranking: multiply RRF score by retrievability
-      let days_elapsed = (now - mem.last_reviewed_at).num_days() as u32;
+      // Use 0 if negative (clock skew) or unreasonably large
+      let days_elapsed = u32::try_from((now - mem.last_reviewed_at).num_days().clamp(0, 365 * 100))
+        .unwrap_or(0);
       let memory_state = MemoryState {
         stability: mem.stability,
         difficulty: mem.difficulty,
@@ -145,14 +147,15 @@ impl EpisodicMemory {
       let retrievability =
         fsrs.current_retrievability(memory_state, days_elapsed, FSRS6_DEFAULT_DECAY);
 
-      let final_score = rrf_score * retrievability as f64;
+      let final_score = rrf_score * f64::from(retrievability);
 
       results.push((mem, final_score));
     }
 
     // Re-sort by final score descending and truncate to requested limit
     results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-    results.truncate(limit as usize);
+    let limit = usize::try_from(limit).unwrap_or(usize::MAX);
+    results.truncate(limit);
 
     Ok(results)
   }

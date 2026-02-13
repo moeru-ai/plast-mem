@@ -1,5 +1,3 @@
-use std::ops::Deref;
-
 use apalis::prelude::Data;
 use chrono::{DateTime, Utc};
 use fsrs::{DEFAULT_PARAMETERS, FSRS, MemoryState};
@@ -23,7 +21,7 @@ pub async fn process_memory_review(
   job: MemoryReviewJob,
   db: Data<DatabaseConnection>,
 ) -> Result<(), AppError> {
-  let db = db.deref();
+  let db = &*db;
   let fsrs = FSRS::new(Some(&DEFAULT_PARAMETERS))?;
 
   for memory_id in &job.memory_ids {
@@ -39,7 +37,11 @@ pub async fn process_memory_review(
       continue; // skip stale job to avoid overwriting newer review
     }
 
-    let days_elapsed = (job.reviewed_at - last_reviewed_at).num_days() as u32;
+    // Use 0 if negative (clock skew) or unreasonably large (>100 years)
+    let days_elapsed = u32::try_from(
+      (job.reviewed_at - last_reviewed_at).num_days().clamp(0, 365 * 100),
+    )
+    .unwrap_or(0);
 
     let current_state = MemoryState {
       stability: model.stability,

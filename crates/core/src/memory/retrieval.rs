@@ -24,15 +24,16 @@ pub enum DetailLevel {
 impl DetailLevel {
   fn include_details(&self, rank: usize, surprise: f32) -> bool {
     match self {
-      DetailLevel::Auto => rank <= 2 && surprise >= 0.7,
-      DetailLevel::None => false,
-      DetailLevel::Low => rank == 1 && surprise >= 0.7,
-      DetailLevel::High => true,
+      Self::Auto => rank <= 2 && surprise >= 0.7,
+      Self::None => false,
+      Self::Low => rank == 1 && surprise >= 0.7,
+      Self::High => true,
     }
   }
 }
 
-pub fn format_tool_result(results: &[(EpisodicMemory, f64)], detail: DetailLevel) -> String {
+#[must_use]
+pub fn format_tool_result(results: &[(EpisodicMemory, f64)], detail: &DetailLevel) -> String {
   let mut out = String::new();
   let now = Utc::now();
 

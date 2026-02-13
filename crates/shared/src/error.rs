@@ -31,11 +31,12 @@ impl AppError {
     }
   }
 
-  pub fn status_code(&self) -> StatusCode {
+  #[must_use]
+  pub const fn status_code(&self) -> StatusCode {
     self.status_code
   }
 
-  /// Get backtrace from anyhow (requires RUST_BACKTRACE=1 to capture)
+  /// Get backtrace from anyhow (requires `RUST_BACKTRACE=1` to capture)
   pub fn backtrace(&self) -> &Backtrace {
     self.err.backtrace()
   }

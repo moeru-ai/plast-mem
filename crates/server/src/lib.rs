@@ -1,3 +1,4 @@
+#[allow(clippy::needless_for_each)]
 pub mod api;
 pub mod utils;
 

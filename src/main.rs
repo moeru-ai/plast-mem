@@ -22,9 +22,9 @@ async fn main() -> Result<(), AppError> {
   // https://www.sea-ql.org/SeaORM/docs/migration/running-migration/#migrating-programmatically
   Migrator::up(&db, None).await?;
   let pool = db.get_postgres_connection_pool();
-  PostgresStorage::setup(&pool).await?;
-  let segment_job_storage = PostgresStorage::<EventSegmentationJob>::new(&pool);
-  let review_job_storage = PostgresStorage::<MemoryReviewJob>::new(&pool);
+  PostgresStorage::setup(pool).await?;
+  let segment_job_storage = PostgresStorage::<EventSegmentationJob>::new(pool);
+  let review_job_storage = PostgresStorage::<MemoryReviewJob>::new(pool);
 
   let _ = tokio::try_join!(
     worker(&db, segment_job_storage.clone(), review_job_storage.clone()),

@@ -22,6 +22,6 @@ pub async fn embed(input: &str) -> Result<PgVector, AppError> {
     .await
     .map(|r| r.data.into_iter())?
     .map(|e| PgVector::from(e.embedding))
-    .last()
-    .ok_or(anyhow!("empty embedding").into())
+    .next_back()
+    .ok_or_else(|| anyhow!("empty embedding").into())
 }
