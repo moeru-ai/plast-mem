@@ -13,6 +13,7 @@ When working on Plast Mem, follow this decision tree to navigate the codebase an
 **First, understand what type of change you're making:**
 - Is it a refactor/new feature? → Check docs/ARCHITECTURE.md for design principles
 - Is it a bug fix? → Read relevant crate README.md files
+- Is it about FSRS/retrieval/review? → Start with docs/architecture/fsrs.md and the current flow in `crates/core/src/memory/episodic.rs` and `crates/worker/src/jobs/memory_review.rs`
 
 ### 2. Understanding Change Impact
 
@@ -35,8 +36,8 @@ When working on Plast Mem, follow this decision tree to navigate the codebase an
 ## Key Runtime Flows
 
 - **Memory creation**: `crates/server/src/api/add_message.rs` → `MessageQueue::push` → `EventSegmentationJob` → LLM `segment_events` (structured output: summary + surprise) → `EpisodicMemory` with surprise-based FSRS stability boost
-- **Memory retrieval**: `crates/server/src/api/retrieve_memory.rs` → `EpisodicMemory::retrieve` (BM25 + vector RRF × FSRS retrievability)
-- **FSRS review update**: retrieval enqueues `MemoryReviewJob`, processed in `crates/worker/src/jobs/memory_review.rs` (currently auto-GOOD review)
+- **Memory retrieval**: `crates/server/src/api/retrieve_memory.rs` → `EpisodicMemory::retrieve` (BM25 + vector RRF × FSRS retrievability) → records pending review in `MessageQueue`
+- **FSRS review update**: segmentation triggers `MemoryReviewJob` when pending reviews exist → LLM evaluates relevance (Again/Hard/Good/Easy) → FSRS parameter update in `crates/worker/src/jobs/memory_review.rs`
 
 ## Build and Test Commands
 

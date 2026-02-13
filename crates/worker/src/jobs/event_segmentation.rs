@@ -1,4 +1,5 @@
-use apalis::prelude::Data;
+use apalis::prelude::{Data, TaskSink};
+use apalis_postgres::PostgresStorage;
 use chrono::Utc;
 use fsrs::{DEFAULT_PARAMETERS, FSRS};
 use plastmem_ai::{
@@ -12,6 +13,8 @@ use schemars::JsonSchema;
 use sea_orm::{DatabaseConnection, EntityTrait};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+
+use super::MemoryReviewJob;
 
 /// Structured output from event segmentation LLM call.
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -103,6 +106,7 @@ pub struct EventSegmentationJob {
 pub async fn process_event_segmentation(
   job: EventSegmentationJob,
   db: Data<DatabaseConnection>,
+  review_storage: Data<PostgresStorage<MemoryReviewJob>>,
 ) -> Result<(), AppError> {
   let db = &*db;
 
@@ -126,14 +130,16 @@ pub async fn process_event_segmentation(
   // Call LLM for structured event segmentation analysis
   let output = segment_events(&job.messages, job.check).await?;
 
-  // If LLM decided to skip, drain queue and return
+  // If LLM decided to skip, still process pending reviews before draining
   if output.action != "create" {
+    enqueue_pending_reviews(job.conversation_id, &job.messages, db, &review_storage).await?;
     MessageQueue::drain(job.conversation_id, job.messages.len(), db).await?;
     return Ok(());
   }
 
   let summary = output.summary.unwrap_or_default();
   if summary.is_empty() {
+    enqueue_pending_reviews(job.conversation_id, &job.messages, db, &review_storage).await?;
     MessageQueue::drain(job.conversation_id, job.messages.len(), db).await?;
     return Ok(());
   }
@@ -154,6 +160,9 @@ pub async fn process_event_segmentation(
   let initial_states = fsrs.next_states(None, DESIRED_RETENTION, 0)?;
   let initial_memory = initial_states.good.memory;
   let boosted_stability = initial_memory.stability * (1.0 + surprise * 0.5);
+
+  // Check for pending reviews and enqueue MemoryReviewJob if any
+  enqueue_pending_reviews(job.conversation_id, &job.messages, db, &review_storage).await?;
 
   // Create EpisodicMemory with FSRS initial state
   // Surprise affects initial stability (higher surprise = longer retention)
@@ -183,5 +192,24 @@ pub async fn process_event_segmentation(
   // Clear the processed messages from MessageQueue
   MessageQueue::drain(job.conversation_id, messages_len, db).await?;
 
+  Ok(())
+}
+
+/// Take pending reviews from the queue and enqueue a MemoryReviewJob if any exist.
+async fn enqueue_pending_reviews(
+  conversation_id: Uuid,
+  context_messages: &[Message],
+  db: &DatabaseConnection,
+  review_storage: &PostgresStorage<MemoryReviewJob>,
+) -> Result<(), AppError> {
+  if let Some(pending_reviews) = MessageQueue::take_pending_reviews(conversation_id, db).await? {
+    let review_job = MemoryReviewJob {
+      pending_reviews,
+      context_messages: context_messages.to_vec(),
+      reviewed_at: Utc::now(),
+    };
+    let mut storage = review_storage.clone();
+    storage.push(review_job).await?;
+  }
   Ok(())
 }

@@ -1,114 +1,273 @@
-# Memory Review 重构 Plan
+# Memory Review Refactor Plan (Implemented)
 
 ## Context
 
-当前 retrieval 后自动执行 auto-GOOD review，无差别强化所有被检索的 memory。这会导致自我强化随机偏见——被错误检索的 memory 也会被强化，下次更容易被检索到。
+Previously, every retrieval automatically triggered an auto-GOOD review, indiscriminately reinforcing all retrieved memories. This caused self-reinforcing random bias — incorrectly retrieved memories would also be reinforced, making them even easier to retrieve next time.
 
-重构目标：去掉 auto-GOOD，改为 segmentation 时由 LLM reviewer 评估 retrieved memory 的实际效果，用 Again/Hard/Good/Easy 更新 FSRS 参数。
+Refactor goal: remove auto-GOOD, replace with an LLM reviewer at segmentation time that evaluates the actual effectiveness of retrieved memories, updating FSRS parameters with Again/Hard/Good/Easy ratings.
 
-核心原则：**review ≠ retrieval**。retrieval 是检索，review 是事后评估。只有 review 才更新 FSRS 参数（包括 last_reviewed_at）。
+Core principle: **review ≠ retrieval**. Retrieval is search; review is post-hoc evaluation. Only review updates FSRS parameters (including last_reviewed_at).
 
-## 流程
+## Flow
 
 ```text
 retrieve_memory(query, conversation_id)
-  → 正常检索返回结果（不更新任何 FSRS 参数）
-  → 在 message_queue 追加 pending review 信息：{ memory_ids, query }
+  → Normal retrieval returns results (no FSRS parameters updated)
+  → Appends to message_queue's pending_reviews column: { memory_ids, query }
 
-对话继续（assistant msg, user msg, ...）
+Conversation continues (assistant msg, user msg, ...)
 
-segmentation 触发时（rule 或 LLM 判断要 segment）：
-  → 检查 message_queue 是否有 pending review
-  → 如果有，enqueue MemoryReviewJob：
-      context = 整段对话 messages
-      retrieved_memory_ids
-      queries
-  → 清除 pending review 信息
-  → 正常执行 segmentation（创建 episodic memory）
+When segmentation triggers (rule-based or LLM-decided):
+  → Check if message_queue has pending_reviews
+  → If yes, enqueue MemoryReviewJob:
+      context = full conversation messages
+      pending_reviews (passed as-is)
+  → Clear pending_reviews (set back to NULL)
+  → Execute segmentation normally (create episodic memory)
 
-MemoryReviewJob（异步 worker）：
-  → LLM 评估每个 retrieved memory 在对话 context 中的效果
-  → 输出 Again/Hard/Good/Easy rating
-  → 用 rating 更新 stability, difficulty, last_reviewed_at
+MemoryReviewJob (async worker):
+  → Aggregate pending_reviews: deduplicate by memory_id, record which queries matched each memory
+  → Fetch each memory's summary from database
+  → LLM evaluates each memory's relevance strength in the conversation context
+  → Output Again/Hard/Good/Easy rating
+  → Update stability, difficulty, last_reviewed_at using the rating
 ```
 
-## 改动清单
+## pending_reviews Data Structure
 
-### 1. DB Migration：message_queue 表加列
+### Database
+
+New column on message_queue table:
+
+```sql
+ALTER TABLE message_queue
+ADD COLUMN pending_reviews JSONB DEFAULT NULL;
+```
+
+- `NULL` = no pending reviews
+- Non-NULL = JSONB array, each retrieval appends one entry
+
+### Structure
+
+```json
+[
+  {
+    "query": "user's Rust learning progress",
+    "memory_ids": ["aaa-111", "bbb-222", "ccc-333", "ddd-444", "eee-555"]
+  },
+  {
+    "query": "user's programming preferences",
+    "memory_ids": ["bbb-222", "fff-666", "ggg-777", "hhh-888", "iii-999"]
+  }
+]
+```
+
+### Append Operation (at retrieve_memory time)
+
+```sql
+UPDATE message_queue
+SET pending_reviews = COALESCE(pending_reviews, '[]'::jsonb) || $1::jsonb
+WHERE id = $conversation_id;
+```
+
+### Aggregation (at review job processing time)
+
+Deduplicate by memory_id, record which queries matched each memory:
+
+```text
+memory bbb-222: matched queries ["user's Rust learning progress", "user's programming preferences"]
+memory aaa-111: matched queries ["user's Rust learning progress"]
+memory fff-666: matched queries ["user's programming preferences"]
+...
+```
+
+Match count serves as a reference signal for the LLM, not a hard rule.
+
+## Change List
+
+### 1. DB Migration: Add column to message_queue
 
 - `pending_reviews`: `JSONB` (nullable, default null)
-- 结构：`[{ memory_ids: UUID[], query: String }]`（数组，支持一段对话中多次检索）
 
-### 2. retrieve_memory API 改动
+### 2. Entity Update
 
-文件：`crates/server/src/api/retrieve_memory.rs`
+File: `crates/entities/src/message_queue.rs`
 
-- 请求加 `conversation_id: Uuid` 参数
-- 去掉 `enqueue_review_job()` 调用
-- 改为：检索完成后，更新 message_queue 的 `pending_reviews` 列（追加当前检索的 memory_ids + query）
+- Add `pending_reviews` field
 
-### 3. 去掉 retrieval 时的 auto-GOOD
+### 3. retrieve_memory API Changes
 
-文件：`crates/server/src/api/retrieve_memory.rs`
+File: `crates/server/src/api/retrieve_memory.rs`
 
-- 删除 `enqueue_review_job` 函数
-- 删除两个 endpoint 中对它的调用
+- Add `conversation_id: Uuid` to request
+- Remove `enqueue_review_job` function and its calls
+- Replace with: after retrieval, call `MessageQueue::add_pending_review` to append memory_ids + query
 
-### 4. MessageQueue 扩展
+### 4. MessageQueue Extension
 
-文件：`crates/core/src/message_queue.rs`
+File: `crates/core/src/message_queue.rs`
 
-- 添加 pending review 相关方法：
-  - `add_pending_review(id, memory_ids, query, db)` — 追加一条 pending review
-  - `take_pending_reviews(id, db)` — 取出并清除所有 pending reviews
-  - `has_pending_reviews(id, db)` — 检查是否有 pending
+- `add_pending_review(id, memory_ids, query, db)` — JSONB concatenate append
+- `take_pending_reviews(id, db)` — read and set back to NULL (atomic)
 
-### 5. Segmentation 流程改动
+### 5. Segmentation Flow Changes
 
-文件：`crates/worker/src/jobs/event_segmentation.rs`
+File: `crates/worker/src/jobs/event_segmentation.rs`
 
-- `process_event_segmentation` 中，在创建 episodic memory 之后（drain 之前）：
-  - 调用 `MessageQueue::take_pending_reviews`
-  - 如果有 pending reviews，enqueue `MemoryReviewJob`（带上整段对话 messages + pending review 信息）
+- In `process_event_segmentation`, before creating episodic memory (and on skip paths):
+  - Call `MessageQueue::take_pending_reviews`
+  - If pending reviews exist, enqueue `MemoryReviewJob`
 
-### 6. MemoryReviewJob 重写
+### 6. MemoryReviewJob Rewrite
 
-文件：`crates/worker/src/jobs/memory_review.rs`
-
-- Job 结构改为：
+File: `crates/worker/src/jobs/memory_review.rs`
 
 ```rust
 pub struct MemoryReviewJob {
-    pub reviews: Vec<PendingReview>,  // memory_ids + query per retrieval
-    pub context_messages: Vec<Message>,  // 整段对话
+    pub pending_reviews: Vec<PendingReview>,
+    pub context_messages: Vec<Message>,
     pub reviewed_at: DateTime<Utc>,
+}
+
+pub struct PendingReview {
+    pub query: String,
+    pub memory_ids: Vec<Uuid>,
 }
 ```
 
-- `process_memory_review` 改为：
-  1. 对每个 retrieved memory，调用 LLM 评估 relevance（输出 Again/Hard/Good/Easy）
-  2. 用对应 rating 的 `next_states` 更新 stability/difficulty/last_reviewed_at
-  3. 保留 stale skip 逻辑（reviewed_at <= last_reviewed_at → skip）
+Processing flow:
 
-### 7. LLM Review 函数
+1. Aggregate pending_reviews → unique memory set (each memory with its matched queries)
+2. Fetch each memory's summary from database
+3. Build markdown-formatted user message, call LLM review function
+4. For each memory, update FSRS parameters based on the LLM's rating:
 
-文件：`crates/ai/src/lib.rs`（新增 `review_memories` 或类似模块）
+```rust
+let fsrs = FSRS::new(Some(&DEFAULT_PARAMETERS))?;
 
-- 输入：context messages + retrieved memory summaries + query
-- 输出：每个 memory 的 rating (Again/Hard/Good/Easy)
-- structured output，类似 segment_events 的模式
+for (memory_id, rating) in review_results {
+    let model = episodic_memory::Entity::find_by_id(memory_id).one(db).await?;
 
-### 8. 文档更新
+    // Stale skip: if job timestamp is not newer than last review, skip
+    if job.reviewed_at <= model.last_reviewed_at { continue; }
 
-- `docs/architecture/fsrs.md`：更新 Review 章节，去掉 "Planned behavior" 标记
-- `docs/architecture/retrieve_memory.md`：更新 Side Effects 章节，说明 retrieval 不再直接触发 review
-- `AGENTS.md`：更新 Key Runtime Flows
+    let days_elapsed = (job.reviewed_at - model.last_reviewed_at).num_days();
+    let current_state = MemoryState {
+        stability: model.stability,
+        difficulty: model.difficulty,
+    };
 
-## Review Rating 定义
+    let next_states = fsrs.next_states(
+        Some(current_state), DESIRED_RETENTION, days_elapsed
+    )?;
 
-| Rating | 含义 | FSRS 效果 |
-| ------ | ---- | --------- |
-| Again | memory 在对话中完全没被用上，是噪音 | stability 大幅下降 |
-| Hard | memory 相关但需要推理才能关联 | stability 基本不变 |
-| Good | memory 直接相关且有用 | stability 适度增长 |
-| Easy | memory 是核心知识，频繁被检索且每次都直接相关 | stability 大幅增长 |
+    // Select FSRS state based on LLM rating
+    let new_state = match rating {
+        Rating::Again => next_states.again.memory,
+        Rating::Hard  => next_states.hard.memory,
+        Rating::Good  => next_states.good.memory,
+        Rating::Easy  => next_states.easy.memory,
+    };
+
+    // Update database
+    active_model.stability = Set(new_state.stability);
+    active_model.difficulty = Set(new_state.difficulty);
+    active_model.last_reviewed_at = Set(job.reviewed_at.into());
+}
+```
+
+### 7. LLM Review Function
+
+File: `crates/worker/src/jobs/memory_review.rs`
+
+Structured output, similar pattern to segment_events.
+
+#### System Prompt
+
+```text
+You are a memory relevance reviewer. Evaluate how relevant each retrieved memory was to the conversation context.
+
+For each memory, assign a rating:
+- "again": Memory was not used in the conversation at all. It is noise.
+- "hard": Memory is tangentially related but required significant inference to connect.
+- "good": Memory is directly relevant and visibly influenced the conversation.
+- "easy": Memory is a core pillar of the conversation. The conversation could not have proceeded meaningfully without it.
+
+Consider:
+- Whether the assistant's responses reflect knowledge from the memory
+- Whether the memory's content aligns with the conversation topic
+- How central the memory is to the conversation flow
+- A memory matched by multiple queries may indicate higher relevance, but judge by actual usage in context
+```
+
+#### User Message (markdown format)
+
+```markdown
+## Conversation Context
+
+- user: "I've been learning Rust lately, the borrow checker is so hard"
+- assistant: "You mentioned before that you need to learn Rust within 3 months at your new company. How's it going?"
+- user: "Not bad, I've gone through the basic syntax, but lifetimes still confuse me"
+- assistant: "Lifetimes are indeed one of the hardest parts of Rust. You said before you prefer learning through projects — want to try building a small CLI tool?"
+- user: "Good idea, any recommendations?"
+
+## Retrieved Memories
+
+### Memory aaa-111
+**Summary:** User is switching careers from Python to Rust due to performance requirements at new job. Needs to learn within 3 months.
+**Matched queries:** "user's Rust learning progress"
+
+### Memory bbb-222
+**Summary:** User prefers learning through hands-on projects rather than reading documentation.
+**Matched queries:** "user's Rust learning progress", "user's programming preferences"
+
+### Memory ccc-333
+**Summary:** User had a casual conversation about weather yesterday.
+**Matched queries:** "user's Rust learning progress"
+```
+
+#### Structured Output
+
+```rust
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct MemoryReviewOutput {
+    pub ratings: Vec<MemoryRating>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct MemoryRating {
+    /// Memory ID being reviewed
+    pub memory_id: String,
+    /// Rating: "again", "hard", "good", or "easy"
+    pub rating: String,
+}
+```
+
+Example output:
+
+```json
+{
+  "ratings": [
+    { "memory_id": "aaa-111", "rating": "easy" },
+    { "memory_id": "bbb-222", "rating": "good" },
+    { "memory_id": "ccc-333", "rating": "again" }
+  ]
+}
+```
+
+### 8. Documentation Updates
+
+- `docs/architecture/fsrs.md`: Update Review section
+- `docs/architecture/retrieve_memory.md`: Update Side Effects section
+- `AGENTS.md`: Update Key Runtime Flows
+
+## Review Rating Definitions
+
+The LLM judges a single dimension: **relevance strength between the memory and the current conversation**. FSRS automatically translates the rating into memory strength changes.
+
+| Rating | LLM Judgment Criteria | FSRS Effect |
+| ------ | --------------------- | ----------- |
+| Again | Unrelated to conversation, not used at all | Stability drops significantly |
+| Hard | Somewhat related, but requires inference to connect | Stability roughly unchanged |
+| Good | Directly relevant, assistant visibly used it | Stability increases moderately |
+| Easy | Highly matched, core pillar of the conversation | Stability increases substantially, difficulty decreases |

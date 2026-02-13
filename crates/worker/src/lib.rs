@@ -23,13 +23,15 @@ pub async fn worker(
   Monitor::new()
     .register({
       let db = db.clone();
+      let review_backend = review_backend.clone();
       move |_run_id| {
         WorkerBuilder::new("event-segmentation")
           .backend(segmentation_backend.clone())
           .enable_tracing()
           .data(db.clone())
-          .build(move |job, data| async move {
-            process_event_segmentation(job, data)
+          .data(review_backend.clone())
+          .build(move |job, data, review_storage| async move {
+            process_event_segmentation(job, data, review_storage)
               .await
               .map_err(WorkerError::from)
           })

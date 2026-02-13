@@ -19,6 +19,13 @@ pub struct MessageQueue {
   pub messages: Vec<Message>,
 }
 
+/// A pending review record from a single retrieval.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct PendingReview {
+  pub query: String,
+  pub memory_ids: Vec<Uuid>,
+}
+
 /// Result of checking if event segmentation is needed
 #[derive(Debug, Clone)]
 pub struct SegmentationCheck {
@@ -44,6 +51,7 @@ impl MessageQueue {
     let active_model = message_queue::ActiveModel {
       id: Set(id),
       messages: Set(serde_json::to_value(Vec::<Message>::new())?),
+      pending_reviews: Set(None),
     };
 
     message_queue::Entity::insert(active_model)
@@ -166,5 +174,65 @@ impl MessageQueue {
     }
 
     Ok(())
+  }
+
+  /// Append a pending review record to the queue.
+  /// Called after retrieve_memory to track which memories were retrieved.
+  pub async fn add_pending_review(
+    id: Uuid,
+    memory_ids: Vec<Uuid>,
+    query: String,
+    db: &DatabaseConnection,
+  ) -> Result<(), AppError> {
+    // Ensure the queue row exists
+    Self::get_or_create_model(id, db).await?;
+
+    let review = PendingReview { query, memory_ids };
+    let review_value = serde_json::to_value(vec![review])?;
+
+    let res = message_queue::Entity::update_many()
+      .col_expr(
+        message_queue::Column::PendingReviews,
+        Expr::cust_with_values(
+          "COALESCE(pending_reviews, '[]'::jsonb) || ?::jsonb",
+          [review_value],
+        ),
+      )
+      .filter(message_queue::Column::Id.eq(id))
+      .exec(db)
+      .await?;
+
+    if res.rows_affected == 0 {
+      return Err(anyhow!("Queue not found").into());
+    }
+
+    Ok(())
+  }
+
+  /// Atomically take all pending reviews and clear them.
+  /// Returns the pending reviews if any, or None.
+  pub async fn take_pending_reviews(
+    id: Uuid,
+    db: &DatabaseConnection,
+  ) -> Result<Option<Vec<PendingReview>>, AppError> {
+    let model = Self::get_or_create_model(id, db).await?;
+
+    let reviews: Option<Vec<PendingReview>> = model
+      .pending_reviews
+      .and_then(|v| serde_json::from_value(v).ok())
+      .filter(|v: &Vec<PendingReview>| !v.is_empty());
+
+    if reviews.is_some() {
+      message_queue::Entity::update_many()
+        .col_expr(
+          message_queue::Column::PendingReviews,
+          Expr::value(Option::<serde_json::Value>::None),
+        )
+        .filter(message_queue::Column::Id.eq(id))
+        .exec(db)
+        .await?;
+    }
+
+    Ok(reviews)
   }
 }

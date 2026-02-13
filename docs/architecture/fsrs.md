@@ -22,21 +22,22 @@ The top `limit` items are returned.
 
 ## Review
 
-After each memory retrieval, a `MemoryReviewJob` is enqueued with the retrieved memory IDs and the retrieval time (`reviewed_at`).
+Review is decoupled from retrieval. Retrieval only records pending reviews in `MessageQueue`; FSRS parameters are never updated at retrieval time.
 
-The worker processes the job asynchronously and updates FSRS parameters.
-If the job's `reviewed_at` is not newer than the stored `last_reviewed_at`, the job is skipped to avoid stale writes.
+When event segmentation triggers, the segmentation worker checks for pending reviews and enqueues a `MemoryReviewJob`. The review worker then:
 
-Current behavior is an automatic **GOOD** review for each retrieved memory (being retrieved = reinforcement).
+1. Aggregates pending reviews (deduplicates memory IDs, collects matched queries)
+2. Calls an LLM reviewer with the conversation context + retrieved memory summaries
+3. Updates FSRS parameters (stability, difficulty, last_reviewed_at) based on the rating
 
-Planned behavior (not implemented yet) is an LLM-based reviewer that evaluates retrieved memories and assigns a rating:
+If the job's `reviewed_at` is not newer than the stored `last_reviewed_at`, the update is skipped to avoid stale writes.
 
-| Rating | Description |
-|--------|-------------|
-| **Again** | False positive - memory was retrieved but irrelevant or should be ignored |
-| **Hard** | Memory provided useful context but required significant inference to apply |
-| **Good** | Memory provided core information directly relevant to the query |
-| ~~Easy~~ | ~~Exact match - not used~~ |
+| Rating    | Description                                                      | FSRS Effect                        |
+|-----------|------------------------------------------------------------------|------------------------------------|
+| **Again** | Memory was noise — not used in the conversation at all           | Stability drops significantly      |
+| **Hard**  | Tangentially related, required significant inference to connect  | Stability roughly unchanged        |
+| **Good**  | Directly relevant, visibly influenced the conversation           | Stability increases moderately     |
+| **Easy**  | Core pillar of the conversation, essential to its flow           | Stability increases substantially  |
 
 ## Cleanup
 
