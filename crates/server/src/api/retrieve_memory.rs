@@ -5,6 +5,7 @@ use plastmem_core::{DetailLevel, EpisodicMemory, format_tool_result};
 use plastmem_shared::AppError;
 use plastmem_worker::MemoryReviewJob;
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
 use crate::utils::AppState;
 
@@ -14,11 +15,14 @@ fn default_limit() -> usize {
   5
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct RetrieveMemory {
+  /// Search query text
   pub query: String,
+  /// Maximum memories to return (1-100)
   #[serde(default = "default_limit")]
   pub limit: usize,
+  /// Detail level: "auto", "none", "low", "high"
   #[serde(default)]
   pub detail: DetailLevel,
 }
@@ -43,13 +47,24 @@ async fn enqueue_review_job(
 
 // --- Raw JSON endpoint ---
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct RetrieveMemoryRawResult {
   #[serde(flatten)]
   pub memory: EpisodicMemory,
+  /// Final score (RRF score × retrievability)
   pub score: f64,
 }
 
+/// Retrieve memories in raw JSON format
+#[utoipa::path(
+  get,
+  path = "/api/v0/retrieve_memory/raw",
+  request_body = RetrieveMemory,
+  responses(
+    (status = 200, description = "List of memories with scores", body = Vec<RetrieveMemoryRawResult>),
+    (status = 400, description = "Query cannot be empty")
+  )
+)]
 #[axum::debug_handler]
 pub async fn retrieve_memory_raw(
   State(state): State<AppState>,
@@ -73,6 +88,16 @@ pub async fn retrieve_memory_raw(
 
 // --- Tool result (markdown) endpoint ---
 
+/// Retrieve memories formatted as markdown for LLM consumption
+#[utoipa::path(
+  get,
+  path = "/api/v0/retrieve_memory",
+  request_body = RetrieveMemory,
+  responses(
+    (status = 200, description = "Markdown formatted memory results", body = String),
+    (status = 400, description = "Query cannot be empty")
+  )
+)]
 #[axum::debug_handler]
 pub async fn retrieve_memory(
   State(state): State<AppState>,

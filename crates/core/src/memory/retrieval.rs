@@ -3,10 +3,11 @@ use std::fmt::Write;
 use chrono::Utc;
 use chrono_humanize::HumanTime;
 use serde::Deserialize;
+use utoipa::ToSchema;
 
 use super::EpisodicMemory;
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum DetailLevel {
   /// Ranks 1-2 with surprise >= 0.7 get details

@@ -29,3 +29,5 @@ serde.workspace = true
 tokio.workspace = true
 tracing = "0.1"
 uuid.workspace = true
+utoipa.workspace = true
+utoipa-scalar.workspace = true

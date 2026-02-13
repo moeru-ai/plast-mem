@@ -8,15 +8,18 @@ use plastmem_shared::AppError;
 use sea_orm::{
   ConnectionTrait, DatabaseConnection, DbBackend, FromQueryResult, Statement, prelude::PgVector,
 };
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Clone, ToSchema)]
 pub struct EpisodicMemory {
   pub id: Uuid,
   pub conversation_id: Uuid,
   pub messages: Vec<Message>,
   pub content: String,
+  /// Vector embedding (internal use, not exposed in API)
+  #[serde(skip)]
   pub embedding: PgVector,
   pub stability: f32,
   pub difficulty: f32,

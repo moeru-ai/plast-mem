@@ -79,6 +79,8 @@ serde_json = "1.0.149"
 tokio = { version = "1.49.0", features = ["full"] }
 uuid = { version = "1.20.0", features = ["serde", "v4", "v7"] }
 fsrs = "5.2.0"
+utoipa = { version = "5.4.0", features = ["axum_extras", "chrono", "uuid"] }
+utoipa-scalar = { version = "0.3.0", features = ["axum"] }
 
 [dependencies]
 plastmem_migration.workspace = true

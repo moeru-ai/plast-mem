@@ -34,6 +34,7 @@ words:
   - seaql
   - serde
   - sqlx
+  - utoipa
   - uuidv
   - vchord
   - waifu

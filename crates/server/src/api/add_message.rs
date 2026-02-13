@@ -5,17 +5,18 @@ use plastmem_core::{Message, MessageQueue, MessageRole};
 use plastmem_shared::AppError;
 use plastmem_worker::EventSegmentationJob;
 use serde::Deserialize;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::utils::AppState;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct AddMessage {
   pub conversation_id: Uuid,
   pub message: AddMessageMessage,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct AddMessageMessage {
   pub role: MessageRole,
   pub content: String,
@@ -26,6 +27,16 @@ pub struct AddMessageMessage {
   pub timestamp: Option<DateTime<Utc>>,
 }
 
+/// Add a message to a conversation
+#[utoipa::path(
+  post,
+  path = "/api/v0/add_message",
+  request_body = AddMessage,
+  responses(
+    (status = 200, description = "Message added successfully"),
+    (status = 400, description = "Invalid request - message content cannot be empty")
+  )
+)]
 #[axum::debug_handler]
 pub async fn add_message(
   State(state): State<AppState>,
