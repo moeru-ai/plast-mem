@@ -1,9 +1,9 @@
 use apalis::prelude::TaskSink;
 use axum::{Json, extract::State, http::StatusCode};
 use chrono::{DateTime, Utc};
-use plast_mem_core::{Message, MessageQueue, MessageRole};
-use plast_mem_shared::AppError;
-use plast_mem_worker::EventSegmentationJob;
+use plastmem_core::{Message, MessageQueue, MessageRole};
+use plastmem_shared::AppError;
+use plastmem_worker::EventSegmentationJob;
 use serde::Deserialize;
 use uuid::Uuid;
 
@@ -50,6 +50,7 @@ pub async fn add_message(
         conversation_id: payload.conversation_id,
         messages: check.messages,
         check: check.check,
+        boundary_hint: check.boundary_hint,
       })
       .await?;
   }

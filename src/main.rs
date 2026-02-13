@@ -1,7 +1,7 @@
 use apalis_postgres::PostgresStorage;
-use plast_mem_db_migration::{Migrator, MigratorTrait};
-use plast_mem_shared::{APP_ENV, AppError};
-use plast_mem_worker::{EventSegmentationJob, MemoryReviewJob, worker};
+use plastmem_migration::{Migrator, MigratorTrait};
+use plastmem_shared::{APP_ENV, AppError};
+use plastmem_worker::{EventSegmentationJob, MemoryReviewJob, worker};
 use sea_orm::Database;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 

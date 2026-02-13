@@ -1,9 +1,11 @@
 use crate::Message;
 use chrono::{DateTime, Utc};
 use fsrs::{DEFAULT_PARAMETERS, FSRS, FSRS6_DEFAULT_DECAY, MemoryState};
-use plast_mem_db_schema::episodic_memory;
-use plast_mem_llm::embed;
-use plast_mem_shared::AppError;
+use plastmem_ai::embed;
+use plastmem_entities::episodic_memory;
+use plastmem_shared::AppError;
+
+use super::BoundaryType;
 use sea_orm::{
   ConnectionTrait, DatabaseConnection, DbBackend, FromQueryResult, Statement, prelude::PgVector,
 };
@@ -19,6 +21,9 @@ pub struct EpisodicMemory {
   pub embedding: PgVector,
   pub stability: f32,
   pub difficulty: f32,
+  pub surprise: f32,
+  pub boundary_type: BoundaryType,
+  pub boundary_strength: f32,
   pub start_at: DateTime<Utc>,
   pub end_at: DateTime<Utc>,
   pub created_at: DateTime<Utc>,
@@ -27,6 +32,8 @@ pub struct EpisodicMemory {
 
 impl EpisodicMemory {
   pub fn from_model(model: episodic_memory::Model) -> Result<Self, AppError> {
+    let boundary_type = model.boundary_type.parse::<BoundaryType>()?;
+
     Ok(Self {
       id: model.id,
       conversation_id: model.conversation_id,
@@ -35,6 +42,9 @@ impl EpisodicMemory {
       embedding: model.embedding,
       stability: model.stability,
       difficulty: model.difficulty,
+      surprise: model.surprise,
+      boundary_type,
+      boundary_strength: model.boundary_strength,
       start_at: model.start_at.with_timezone(&Utc),
       end_at: model.end_at.with_timezone(&Utc),
       created_at: model.created_at.with_timezone(&Utc),
@@ -51,6 +61,9 @@ impl EpisodicMemory {
       embedding: self.embedding.clone(),
       stability: self.stability,
       difficulty: self.difficulty,
+      surprise: self.surprise,
+      boundary_type: self.boundary_type.to_string(),
+      boundary_strength: self.boundary_strength,
       start_at: self.start_at.into(),
       end_at: self.end_at.into(),
       created_at: self.created_at.into(),
@@ -69,13 +82,13 @@ impl EpisodicMemory {
     let retrieve_sql = r#"
     WITH
     fulltext AS (
-      SELECT id, ROW_NUMBER() OVER (ORDER BY pdb.score(id) DESC) AS rank
+      SELECT id, ROW_NUMBER() OVER (ORDER BY pdb.score(id) DESC) AS r
       FROM episodic_memory
       WHERE content ||| $1
       LIMIT $2
     ),
     semantic AS (
-      SELECT id, ROW_NUMBER() OVER (ORDER BY embedding <=> $3) AS rank
+      SELECT id, ROW_NUMBER() OVER (ORDER BY embedding <=> $3) AS r
       FROM episodic_memory
       LIMIT $2
     ),
@@ -97,6 +110,9 @@ impl EpisodicMemory {
       m.embedding,
       m.stability,
       m.difficulty,
+      m.surprise,
+      m.boundary_type,
+      m.boundary_strength,
       m.start_at,
       m.end_at,
       m.created_at,
@@ -136,7 +152,11 @@ impl EpisodicMemory {
       };
       let retrievability =
         fsrs.current_retrievability(memory_state, days_elapsed, FSRS6_DEFAULT_DECAY);
-      let final_score = rrf_score * retrievability as f64;
+
+      // Boundary type boost
+      let boundary_boost = mem.boundary_type.retrieval_boost(mem.surprise);
+
+      let final_score = rrf_score * retrievability as f64 * boundary_boost;
 
       results.push((mem, final_score));
     }

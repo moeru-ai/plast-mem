@@ -3,32 +3,25 @@ use std::ops::Deref;
 use apalis::prelude::Data;
 use chrono::Utc;
 use fsrs::{DEFAULT_PARAMETERS, FSRS};
-use plast_mem_core::{EpisodicMemory, Message, MessageQueue};
-use plast_mem_db_schema::episodic_memory;
-use plast_mem_llm::{embed, summarize_messages_with_check};
-use plast_mem_shared::{AppError, fsrs::DESIRED_RETENTION};
+use plastmem_ai::{embed, segment_events};
+use plastmem_core::{BoundaryType, EpisodicMemory, Message, MessageQueue};
+use plastmem_entities::episodic_memory;
+use plastmem_shared::{AppError, fsrs::DESIRED_RETENTION};
 use sea_orm::{DatabaseConnection, EntityTrait};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-/// Job for event segmentation with LLM check
-/// - If `check` is true: LLM decides whether to create memory and returns summary if yes
-/// - If `check` is false: LLM directly generates summary
+/// Job for event segmentation with LLM analysis.
+/// - If `check` is true: LLM decides whether to create memory
+/// - If `check` is false: LLM always creates memory (forced split)
+/// - `boundary_hint`: pre-determined boundary type from rule-based detection
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct EventSegmentationJob {
   pub conversation_id: Uuid,
   pub messages: Vec<Message>,
   pub check: bool,
-}
-
-/// Calls LLM to either:
-/// - If check=true: Decide whether to create memory, return Some(summary) if yes, None if no
-/// - If check=false: Directly generate and return summary
-async fn generate_summary_with_check(
-  messages: &[Message],
-  check: bool,
-) -> Result<Option<String>, AppError> {
-  summarize_messages_with_check(messages, check).await
+  /// Pre-determined boundary type from rule-based detection.
+  pub boundary_hint: Option<BoundaryType>,
 }
 
 pub async fn process_event_segmentation(
@@ -54,13 +47,36 @@ pub async fn process_event_segmentation(
     return Ok(());
   }
 
-  // Call LLM to get summary (with check logic)
-  let Some(summary) = generate_summary_with_check(&job.messages, job.check).await? else {
-    // LLM decided not to create memory (check=true case)
-    // Still need to clear the messages from queue
+  // Call LLM for structured event segmentation analysis
+  let output = segment_events(&job.messages, job.check).await?;
+
+  // If LLM decided to skip, drain queue and return
+  if output.action != "create" {
     MessageQueue::drain(job.conversation_id, job.messages.len(), &db).await?;
     return Ok(());
+  }
+
+  let summary = output.summary.unwrap_or_default();
+  if summary.is_empty() {
+    MessageQueue::drain(job.conversation_id, job.messages.len(), &db).await?;
+    return Ok(());
+  }
+
+  let surprise = output.surprise.clamp(0.0, 1.0);
+
+  // Determine final boundary type:
+  // 1. If boundary_hint is set (e.g. TemporalGap from rule-based), use it
+  // 2. If surprise > 0.7, override to PredictionError
+  // 3. Otherwise, use LLM's boundary_type
+  let boundary_type = if let Some(hint) = job.boundary_hint {
+    hint
+  } else if surprise > 0.7 {
+    BoundaryType::PredictionError
+  } else {
+    output.boundary_type.parse::<BoundaryType>()?
   };
+
+  let boundary_strength = surprise;
 
   // Generate embedding for the summary
   let embedding = embed(&summary).await?;
@@ -71,20 +87,24 @@ pub async fn process_event_segmentation(
   let end_at = job.messages.last().map(|m| m.timestamp).unwrap_or(now);
   let messages_len = job.messages.len();
 
-  // Initialize FSRS state for new memory
+  // Initialize FSRS state for new memory with surprise-based stability boost
   let fsrs = FSRS::new(Some(&DEFAULT_PARAMETERS))?;
   let initial_states = fsrs.next_states(None, DESIRED_RETENTION, 0)?;
   let initial_memory = initial_states.good.memory;
+  let boosted_stability = initial_memory.stability * (1.0 + surprise * 0.5);
 
-  // Create EpisodicMemory with FSRS initial state
+  // Create EpisodicMemory with FSRS initial state + boundary context
   let episodic_memory = EpisodicMemory {
     id,
     conversation_id: job.conversation_id,
     messages: job.messages,
     content: summary,
     embedding,
-    stability: initial_memory.stability,
+    stability: boosted_stability,
     difficulty: initial_memory.difficulty,
+    surprise,
+    boundary_type,
+    boundary_strength,
     start_at,
     end_at,
     created_at: now,

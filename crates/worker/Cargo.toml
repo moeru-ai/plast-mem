@@ -1,5 +1,5 @@
 [package]
-name = "plast_mem_worker"
+name = "plastmem_worker"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
@@ -12,7 +12,7 @@ homepage.workspace = true
 repository.workspace = true
 
 [lib]
-name = "plast_mem_worker"
+name = "plastmem_worker"
 path = "src/lib.rs"
 
 [dependencies]
@@ -22,10 +22,10 @@ apalis-postgres.workspace = true
 async-openai.workspace = true
 chrono.workspace = true
 fsrs.workspace = true
-plast_mem_core.workspace = true
-plast_mem_db_schema.workspace = true
-plast_mem_llm.workspace = true
-plast_mem_shared.workspace = true
+plastmem_core.workspace = true
+plastmem_entities.workspace = true
+plastmem_ai.workspace = true
+plastmem_shared.workspace = true
 sea-orm.workspace = true
 serde.workspace = true
 serde_json.workspace = true

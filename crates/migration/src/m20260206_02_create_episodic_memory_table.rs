@@ -1,6 +1,6 @@
 use sea_orm_migration::{
   prelude::*,
-  schema::{custom, json_binary, string, timestamp_with_time_zone, uuid},
+  schema::{custom, float, json_binary, string, timestamp_with_time_zone, uuid},
   sea_orm::Statement,
 };
 
@@ -20,6 +20,14 @@ impl MigrationTrait for Migration {
           .col(json_binary(EpisodicMemory::Messages))
           .col(string(EpisodicMemory::Content))
           .col(custom(EpisodicMemory::Embedding, "vector(1024)").not_null())
+          // FSRS Memory State
+          .col(float(EpisodicMemory::Stability))
+          .col(float(EpisodicMemory::Difficulty))
+          // Event Segmentation
+          .col(float(EpisodicMemory::Surprise))
+          .col(string(EpisodicMemory::BoundaryType))
+          .col(float(EpisodicMemory::BoundaryStrength))
+          // Timestamps
           .col(timestamp_with_time_zone(EpisodicMemory::StartAt))
           .col(timestamp_with_time_zone(EpisodicMemory::EndAt))
           .col(timestamp_with_time_zone(EpisodicMemory::CreatedAt))
@@ -36,18 +44,21 @@ impl MigrationTrait for Migration {
       ))
       .await?;
 
+    manager
+      .create_index(
+        Index::create()
+          .name("idx_episodic_boundary")
+          .table(EpisodicMemory::Table)
+          .col(EpisodicMemory::BoundaryType)
+          .col(EpisodicMemory::BoundaryStrength)
+          .to_owned(),
+      )
+      .await?;
+
     Ok(())
   }
 
   async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-    // manager
-    //   .get_connection()
-    //   .execute_raw(Statement::from_string(
-    //     manager.get_database_backend(),
-    //     "DROP INDEX IF EXISTS cosine_index;",
-    //   ))
-    //   .await?;
-
     manager
       .drop_table(Table::drop().table(EpisodicMemory::Table).to_owned())
       .await?;
@@ -62,8 +73,6 @@ pub enum EpisodicMemory {
 
   Id,             // uuid v7
   ConversationId, // uuid v7
-  // TODO: PreviousId
-  // TODO: RelatedIds
 
   // json messages
   Messages,
@@ -75,6 +84,11 @@ pub enum EpisodicMemory {
   // FSRS Memory State
   Stability,
   Difficulty,
+
+  // Event Segmentation
+  Surprise,
+  BoundaryType,
+  BoundaryStrength,
 
   // earliest message timestamp
   StartAt,

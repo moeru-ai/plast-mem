@@ -1,7 +1,7 @@
 use apalis_postgres::PostgresStorage;
 use sea_orm::DatabaseConnection;
 
-use plast_mem_worker::{EventSegmentationJob, MemoryReviewJob};
+use plastmem_worker::{EventSegmentationJob, MemoryReviewJob};
 
 #[derive(Clone)]
 pub struct AppState {

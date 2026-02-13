@@ -1,7 +1,7 @@
 use apalis_postgres::PostgresStorage;
 use axum::{Router, response::Html, routing::get};
-use plast_mem_shared::AppError;
-use plast_mem_worker::{EventSegmentationJob, MemoryReviewJob};
+use plastmem_shared::AppError;
+use plastmem_worker::{EventSegmentationJob, MemoryReviewJob};
 use sea_orm::DatabaseConnection;
 use tokio::net::TcpListener;
 

@@ -15,4 +15,8 @@ pub fn app() -> Router<AppState> {
       "/api/v0/retrieve_memory",
       get(retrieve_memory::retrieve_memory),
     )
+    .route(
+      "/api/v0/retrieve_memory/raw",
+      get(retrieve_memory::retrieve_memory_raw),
+    )
 }
