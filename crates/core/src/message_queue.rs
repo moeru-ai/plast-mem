@@ -4,8 +4,8 @@ use plastmem_entities::message_queue;
 use plastmem_shared::AppError;
 
 use sea_orm::{
-  ColumnTrait, DatabaseConnection, EntityTrait, ExprTrait, QueryFilter, Set,
-  prelude::Expr,
+  ColumnTrait, DatabaseConnection, EntityTrait, ExprTrait, QueryFilter, QuerySelect, Set,
+  TransactionTrait, prelude::Expr,
   sea_query::{BinOper, OnConflict, extension::postgres::PgBinOper},
 };
 use serde::{Deserialize, Serialize};
@@ -210,12 +210,21 @@ impl MessageQueue {
   }
 
   /// Atomically take all pending reviews and clear them.
+  /// Uses SELECT FOR UPDATE within a transaction to prevent race conditions.
   /// Returns the pending reviews if any, or None.
   pub async fn take_pending_reviews(
     id: Uuid,
     db: &DatabaseConnection,
   ) -> Result<Option<Vec<PendingReview>>, AppError> {
-    let model = Self::get_or_create_model(id, db).await?;
+    let txn = db.begin().await?;
+
+    let Some(model) = message_queue::Entity::find_by_id(id)
+      .lock_exclusive()
+      .one(&txn)
+      .await?
+    else {
+      return Ok(None);
+    };
 
     let reviews: Option<Vec<PendingReview>> = model
       .pending_reviews
@@ -229,9 +238,11 @@ impl MessageQueue {
           Expr::value(Option::<serde_json::Value>::None),
         )
         .filter(message_queue::Column::Id.eq(id))
-        .exec(db)
+        .exec(&txn)
         .await?;
     }
+
+    txn.commit().await?;
 
     Ok(reviews)
   }
