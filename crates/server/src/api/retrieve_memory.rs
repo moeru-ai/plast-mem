@@ -57,7 +57,7 @@ pub struct RetrieveMemoryRawResult {
 
 /// Retrieve memories in raw JSON format
 #[utoipa::path(
-  get,
+  post,
   path = "/api/v0/retrieve_memory/raw",
   request_body = RetrieveMemory,
   responses(
@@ -90,7 +90,7 @@ pub async fn retrieve_memory_raw(
 
 /// Retrieve memories formatted as markdown for LLM consumption
 #[utoipa::path(
-  get,
+  post,
   path = "/api/v0/retrieve_memory",
   request_body = RetrieveMemory,
   responses(
