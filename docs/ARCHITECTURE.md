@@ -8,11 +8,10 @@ Plast Mem is an experimental llm memory layer for cyber waifu. The codebase is a
 
 ### 1. plastmem
 
-Entry program
+Entry program. Initializes tracing, database connection, migrations, job storage, and spawns the worker and server tasks.
 
 **Key Components**:
-- `api/`: Public HTTP API
-- `utils/`: Non-reusable utilities
+- `main.rs`: Application bootstrap
 
 ### 2. plastmem_core
 
@@ -63,6 +62,19 @@ Background tasks worker
 **Key Components**:
 - `event_segmentation.rs`: Creates episodic memories with surprise-based FSRS initialization
 - `memory_review.rs`: Updates FSRS parameters on retrieval
+
+### 8. plastmem_server
+
+HTTP server and API handlers
+
+**Key Components**:
+- `api/`: Public HTTP API
+  - `add_message.rs`: Message ingestion endpoint
+  - `retrieve_memory.rs`: Memory retrieval endpoints (raw JSON and formatted)
+- `utils/`: Server-specific utilities
+  - `state.rs`: AppState (database + job storage)
+  - `shutdown_signal.rs`: Graceful shutdown handling
+- `server.rs`: Axum HTTP server setup
 
 ## Further Reading
 

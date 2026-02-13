@@ -32,12 +32,13 @@ When working on Plast Mem, follow this decision tree to navigate the codebase an
 - **plastmem_ai**: Wrapped AI SDK (embeddings, text generation, structured output, event segmentation)
 - **plastmem_shared**: Reusable utilities
 - **plastmem_worker**: Background tasks worker (event segmentation + memory review job)
+- **plastmem_server**: HTTP server and API handlers
 - **plastmem**: Entry Program
 
 ## Key Runtime Flows
 
-- **Memory creation**: `src/api/add_message.rs` → `MessageQueue::push` → `EventSegmentationJob` → LLM `segment_events` (structured output: summary + surprise) → `EpisodicMemory` with surprise-based FSRS stability boost
-- **Memory retrieval**: `src/api/retrieve_memory.rs` → `EpisodicMemory::retrieve` (BM25 + vector RRF × FSRS retrievability)
+- **Memory creation**: `crates/server/src/api/add_message.rs` → `MessageQueue::push` → `EventSegmentationJob` → LLM `segment_events` (structured output: summary + surprise) → `EpisodicMemory` with surprise-based FSRS stability boost
+- **Memory retrieval**: `crates/server/src/api/retrieve_memory.rs` → `EpisodicMemory::retrieve` (BM25 + vector RRF × FSRS retrievability)
 - **FSRS review update**: retrieval enqueues `MemoryReviewJob`, processed in `crates/worker/src/jobs/memory_review.rs` (currently auto-GOOD review)
 
 ## Build and Test Commands
