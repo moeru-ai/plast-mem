@@ -18,7 +18,7 @@ and requires only a connection to an LLM service (such as [llama.cpp](https://gi
 Conversations flow continuously, but human memory segments them into discrete episodes.
 Plast Mem uses [Event Segmentation Theory](https://en.wikipedia.org/wiki/Psychology_of_film#Segmentation) to detect natural boundaries—topic shifts, time gaps, or message accumulation—and creates episodic memories at these boundaries.
 
-### FSRS with LLM Review
+### FSRS
 
 By introducing [FSRS (Free Spaced Repetition Scheduler)](https://github.com/open-spaced-repetition/fsrs4anki/wiki/The-Algorithm), we can determine when a memory should be forgotten.
 
