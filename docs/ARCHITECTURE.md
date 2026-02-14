@@ -61,7 +61,7 @@ Background tasks worker
 
 **Key Components**:
 - `event_segmentation.rs`: Creates episodic memories with surprise-based FSRS initialization
-- `memory_review.rs`: Updates FSRS parameters on retrieval
+- `memory_review.rs`: LLM-based review of retrieved memories, updates FSRS parameters
 
 ### 8. plastmem_server
 

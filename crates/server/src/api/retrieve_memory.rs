@@ -1,11 +1,9 @@
-use apalis::prelude::TaskSink;
 use axum::{Json, extract::State};
-use chrono::Utc;
-use plastmem_core::{DetailLevel, EpisodicMemory, format_tool_result};
+use plastmem_core::{DetailLevel, EpisodicMemory, MessageQueue, format_tool_result};
 use plastmem_shared::AppError;
-use plastmem_worker::MemoryReviewJob;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
+use uuid::Uuid;
 
 use crate::utils::AppState;
 
@@ -17,6 +15,8 @@ const fn default_limit() -> usize {
 
 #[derive(Deserialize, ToSchema)]
 pub struct RetrieveMemory {
+  /// Conversation ID to associate pending review with
+  pub conversation_id: Uuid,
   /// Search query text
   pub query: String,
   /// Maximum memories to return (1-100)
@@ -27,19 +27,16 @@ pub struct RetrieveMemory {
   pub detail: DetailLevel,
 }
 
-async fn enqueue_review_job(
+/// Record retrieved memory IDs as pending review in the message queue.
+async fn record_pending_review(
   state: &AppState,
+  conversation_id: Uuid,
+  query: &str,
   results: &[(EpisodicMemory, f64)],
 ) -> Result<(), AppError> {
   if !results.is_empty() {
     let memory_ids = results.iter().map(|(m, _)| m.id).collect();
-    let reviewed_at = Utc::now();
-    let mut review_storage = state.review_job_storage.clone();
-    review_storage
-      .push(MemoryReviewJob {
-        memory_ids,
-        reviewed_at,
-      })
+    MessageQueue::add_pending_review(conversation_id, memory_ids, query.to_owned(), &state.db)
       .await?;
   }
   Ok(())
@@ -76,7 +73,7 @@ pub async fn retrieve_memory_raw(
 
   let results = EpisodicMemory::retrieve(&payload.query, payload.limit as u64, &state.db).await?;
 
-  enqueue_review_job(&state, &results).await?;
+  record_pending_review(&state, payload.conversation_id, &payload.query, &results).await?;
 
   let response = results
     .into_iter()
@@ -109,7 +106,7 @@ pub async fn retrieve_memory(
 
   let results = EpisodicMemory::retrieve(&payload.query, payload.limit as u64, &state.db).await?;
 
-  enqueue_review_job(&state, &results).await?;
+  record_pending_review(&state, payload.conversation_id, &payload.query, &results).await?;
 
   Ok(format_tool_result(&results, &payload.detail))
 }

@@ -28,7 +28,7 @@ async fn main() -> Result<(), AppError> {
 
   let _ = tokio::try_join!(
     worker(&db, segment_job_storage.clone(), review_job_storage.clone()),
-    server(db.clone(), segment_job_storage, review_job_storage)
+    server(db.clone(), segment_job_storage)
   );
 
   Ok(())

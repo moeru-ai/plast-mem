@@ -14,6 +14,7 @@ The `retrieve_memory` API provides LLM-optimized access to episodic memories wit
 ```json
 {
   "query": "what did the user say about Rust",
+  "conversation_id": "550e8400-e29b-41d4-a716-446655440001",
   "limit": 5,
   "detail": "auto"
 }
@@ -24,6 +25,7 @@ The `retrieve_memory` API provides LLM-optimized access to episodic memories wit
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `query` | string | required | Search query text |
+| `conversation_id` | uuid | required | Conversation ID for pending review tracking |
 | `limit` | number | 5 | Maximum memories to return (1-100) |
 | `detail` | string | "auto" | Detail level: `"auto"`, `"none"`, `"low"`, `"high"` |
 
@@ -39,7 +41,7 @@ Query → Embedding → BM25 Search (100 candidates)
                            ↓
               Sort by final_score, truncate to limit
                            ↓
-              Enqueue MemoryReviewJob (async)
+              Record pending review in MessageQueue
 ```
 
 ### Hybrid Search (RRF)
@@ -155,7 +157,9 @@ Memories decay over time. A highly relevant but ancient memory may be less usefu
 
 ## Side Effects
 
-Each retrieval enqueues a `MemoryReviewJob` that asynchronously updates FSRS parameters for retrieved memories (current behavior: auto-GOOD review).
+Each retrieval records a pending review in `MessageQueue` (memory IDs + query). No FSRS parameters are updated at retrieval time.
+
+When event segmentation later triggers, the segmentation worker takes the pending reviews and enqueues a `MemoryReviewJob`. The review worker then uses an LLM to evaluate each memory's relevance in the conversation context and updates FSRS parameters accordingly. See [FSRS](fsrs.md) for rating details.
 
 ## Example Scenarios
 

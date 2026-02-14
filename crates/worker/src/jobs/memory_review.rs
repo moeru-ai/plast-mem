@@ -1,19 +1,122 @@
+use std::collections::HashMap;
+use std::fmt::Write;
+
 use apalis::prelude::Data;
 use chrono::{DateTime, Utc};
 use fsrs::{DEFAULT_PARAMETERS, FSRS, MemoryState};
+use plastmem_ai::{
+  ChatCompletionRequestMessage, ChatCompletionRequestSystemMessage,
+  ChatCompletionRequestUserMessage, generate_object,
+};
+use plastmem_core::{Message, PendingReview};
 use plastmem_entities::episodic_memory;
 use plastmem_shared::{AppError, fsrs::DESIRED_RETENTION};
+use schemars::JsonSchema;
 use sea_orm::{ActiveModelTrait, DatabaseConnection, EntityTrait, Set};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-/// Job to update FSRS parameters for retrieved memories.
+// --- LLM Review ---
+
+/// LLM output for memory review.
+#[derive(Debug, Deserialize, JsonSchema)]
+struct MemoryReviewOutput {
+  pub ratings: Vec<MemoryRatingOutput>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct MemoryRatingOutput {
+  /// Memory ID being reviewed
+  pub memory_id: String,
+  /// Rating: "again", "hard", "good", or "easy"
+  pub rating: String,
+}
+
+/// FSRS rating mapped from LLM output.
+#[derive(Debug, Clone, Copy)]
+enum Rating {
+  Again,
+  Hard,
+  Good,
+  Easy,
+}
+
+impl Rating {
+  fn parse(s: &str) -> Self {
+    match s.to_lowercase().as_str() {
+      "again" => Self::Again,
+      "hard" => Self::Hard,
+      "easy" => Self::Easy,
+      _ => Self::Good,
+    }
+  }
+}
+
+const REVIEW_SYSTEM_PROMPT: &str = "\
+You are a memory relevance reviewer. Evaluate how relevant each retrieved memory was to the conversation context.
+
+For each memory, assign a rating:
+- \"again\": Memory was not used in the conversation at all. It is noise.
+- \"hard\": Memory is tangentially related but required significant inference to connect.
+- \"good\": Memory is directly relevant and visibly influenced the conversation.
+- \"easy\": Memory is a core pillar of the conversation. The conversation could not have proceeded meaningfully without it.
+
+Consider:
+- Whether the assistant's responses reflect knowledge from the memory
+- Whether the memory's content aligns with the conversation topic
+- How central the memory is to the conversation flow
+- A memory matched by multiple queries may indicate higher relevance, but judge by actual usage in context";
+
+/// Build the markdown user message for the reviewer LLM.
+fn build_review_user_message(
+  context_messages: &[Message],
+  memories: &[(Uuid, String, Vec<String>)], // (id, summary, matched_queries)
+) -> String {
+  let mut out = String::new();
+
+  let _ = writeln!(out, "## Conversation Context\n");
+  for msg in context_messages {
+    let _ = writeln!(out, "- {}: \"{}\"", msg.role, msg.content);
+  }
+
+  let _ = writeln!(out, "\n## Retrieved Memories\n");
+  for (id, summary, queries) in memories {
+    let _ = writeln!(out, "### Memory {id}");
+    let _ = writeln!(out, "**Summary:** {summary}");
+    let queries_str = queries
+      .iter()
+      .map(|q| format!("\"{q}\""))
+      .collect::<Vec<_>>()
+      .join(", ");
+    let _ = writeln!(out, "**Matched queries:** {queries_str}");
+    let _ = writeln!(out);
+  }
+
+  out
+}
+
+/// Aggregate pending reviews: deduplicate memory IDs and collect matched queries.
+fn aggregate_pending_reviews(
+  pending_reviews: &[PendingReview],
+) -> HashMap<Uuid, Vec<String>> {
+  let mut map: HashMap<Uuid, Vec<String>> = HashMap::new();
+  for review in pending_reviews {
+    for id in &review.memory_ids {
+      map.entry(*id).or_default().push(review.query.clone());
+    }
+  }
+  map
+}
+
+// --- Job ---
+
+/// Job to review retrieved memories using LLM and update FSRS parameters.
 ///
-/// Currently performs an automatic GOOD review for each retrieved memory,
-/// reinforcing memories that are actively being recalled.
+/// Enqueued by the event segmentation worker when pending reviews exist.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct MemoryReviewJob {
-  pub memory_ids: Vec<Uuid>,
+  pub pending_reviews: Vec<PendingReview>,
+  pub context_messages: Vec<Message>,
   pub reviewed_at: DateTime<Utc>,
 }
 
@@ -22,22 +125,73 @@ pub async fn process_memory_review(
   db: Data<DatabaseConnection>,
 ) -> Result<(), AppError> {
   let db = &*db;
-  let fsrs = FSRS::new(Some(&DEFAULT_PARAMETERS))?;
 
-  for memory_id in &job.memory_ids {
+  if job.pending_reviews.is_empty() {
+    return Ok(());
+  }
+
+  // 1. Aggregate: deduplicate memory IDs, collect matched queries
+  let aggregated = aggregate_pending_reviews(&job.pending_reviews);
+
+  // 2. Fetch summaries from database
+  let mut memories_for_review = Vec::new();
+  for (memory_id, queries) in &aggregated {
     let Some(model) = episodic_memory::Entity::find_by_id(*memory_id)
       .one(db)
       .await?
     else {
-      continue; // memory was deleted, skip
+      continue; // memory was deleted
+    };
+
+    // Stale skip: if job's reviewed_at is not newer than last review
+    let last_reviewed_at = model.last_reviewed_at.with_timezone(&Utc);
+    if job.reviewed_at <= last_reviewed_at {
+      continue;
+    }
+
+    memories_for_review.push((*memory_id, model.content.clone(), queries.clone()));
+  }
+
+  if memories_for_review.is_empty() {
+    return Ok(());
+  }
+
+  // 3. Call LLM for review
+  let user_message = build_review_user_message(&job.context_messages, &memories_for_review);
+
+  let system = ChatCompletionRequestSystemMessage::from(REVIEW_SYSTEM_PROMPT);
+  let user = ChatCompletionRequestUserMessage::from(user_message);
+
+  let output = generate_object::<MemoryReviewOutput>(
+    vec![
+      ChatCompletionRequestMessage::System(system),
+      ChatCompletionRequestMessage::User(user),
+    ],
+    "memory_review".to_owned(),
+    Some("Review retrieved memories for relevance".to_owned()),
+  )
+  .await?;
+
+  // 4. Parse ratings and update FSRS parameters
+  let fsrs = FSRS::new(Some(&DEFAULT_PARAMETERS))?;
+
+  for rating_output in &output.ratings {
+    let Ok(memory_id) = rating_output.memory_id.parse::<Uuid>() else {
+      continue;
+    };
+
+    let Some(model) = episodic_memory::Entity::find_by_id(memory_id)
+      .one(db)
+      .await?
+    else {
+      continue;
     };
 
     let last_reviewed_at = model.last_reviewed_at.with_timezone(&Utc);
     if job.reviewed_at <= last_reviewed_at {
-      continue; // skip stale job to avoid overwriting newer review
+      continue;
     }
 
-    // Use 0 if negative (clock skew) or unreasonably large (>100 years)
     let days_elapsed = u32::try_from(
       (job.reviewed_at - last_reviewed_at).num_days().clamp(0, 365 * 100),
     )
@@ -50,8 +204,13 @@ pub async fn process_memory_review(
 
     let next_states = fsrs.next_states(Some(current_state), DESIRED_RETENTION, days_elapsed)?;
 
-    // Auto GOOD review: being retrieved = reinforcement
-    let new_state = next_states.good.memory;
+    let rating = Rating::parse(&rating_output.rating);
+    let new_state = match rating {
+      Rating::Again => next_states.again.memory,
+      Rating::Hard => next_states.hard.memory,
+      Rating::Good => next_states.good.memory,
+      Rating::Easy => next_states.easy.memory,
+    };
 
     let mut active_model: episodic_memory::ActiveModel = model.into();
     active_model.stability = Set(new_state.stability);

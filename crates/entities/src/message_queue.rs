@@ -9,6 +9,8 @@ pub struct Model {
   pub id: Uuid,
   #[sea_orm(column_type = "JsonBinary")]
   pub messages: Json,
+  #[sea_orm(column_type = "JsonBinary", nullable)]
+  pub pending_reviews: Option<Json>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
