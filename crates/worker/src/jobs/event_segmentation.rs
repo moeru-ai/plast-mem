@@ -207,7 +207,7 @@ pub async fn process_event_segmentation(
         messages = job.messages.len(),
         "Force-creating episode (buffer full)"
       );
-      create_episode(&job, job.messages.len(), db, &review_storage).await?;
+      create_episode(&job, job.messages.len(), None, db, &review_storage).await?;
     }
 
     // Time boundary: skip boundary detection, create episode.
@@ -222,13 +222,15 @@ pub async fn process_event_segmentation(
       // If there's only 1 message, drain_count is 0, so we do nothing.
       let drain_count = job.messages.len().saturating_sub(1);
       if drain_count > 0 {
-        create_episode(&job, drain_count, db, &review_storage).await?;
+        // TimeBoundary doesn't have a pre-computed embedding (no boundary detection happened),
+        // so we pass None and let create_episode compute it if needed.
+        create_episode(&job, drain_count, None, db, &review_storage).await?;
       }
     }
 
     // Needs boundary detection with embedding pre-filter → LLM confirmation.
     SegmentationAction::NeedsBoundaryDetection => {
-      let boundary_detected = check_boundary(&job, db).await?;
+      let (boundary_detected, latest_embedding) = check_boundary(&job, db).await?;
 
       if boundary_detected {
         info!(
@@ -238,7 +240,7 @@ pub async fn process_event_segmentation(
         );
         let drain_count = job.messages.len().saturating_sub(1);
         if drain_count > 0 {
-          create_episode(&job, drain_count, db, &review_storage).await?;
+          create_episode(&job, drain_count, latest_embedding, db, &review_storage).await?;
         }
       } else {
         // No boundary — just process pending reviews, don't drain.
@@ -251,10 +253,12 @@ pub async fn process_event_segmentation(
 }
 
 /// Check for a boundary using embedding similarity pre-filter + LLM confirmation.
+/// Returns (is_boundary, latest_message_embedding) where the embedding can be reused
+/// to avoid redundant computation when creating the next episode.
 async fn check_boundary(
   job: &EventSegmentationJob,
   db: &DatabaseConnection,
-) -> Result<bool, AppError> {
+) -> Result<(bool, Option<PgVector>), AppError> {
   // Step 1: Embedding similarity pre-filter
   let last_embedding = MessageQueue::get_last_embedding(job.conversation_id, db).await?;
 
@@ -282,7 +286,7 @@ async fn check_boundary(
         weighted_average_embedding(stored_embedding.as_slice(), new_embedding.as_slice(), 0.2);
       let new_pg_embedding = PgVector::from(updated_vec);
       MessageQueue::update_last_embedding(job.conversation_id, Some(new_pg_embedding), db).await?;
-      return Ok(false);
+      return Ok((false, Some(new_embedding)));
     }
   }
 
@@ -324,15 +328,14 @@ async fn check_boundary(
       MessageQueue::update_last_embedding(job.conversation_id, Some(pg_embedding), db).await?;
     } else {
       // Initialize if None
-      let pg_embedding = PgVector::from(new_embedding);
-      MessageQueue::update_last_embedding(job.conversation_id, Some(pg_embedding), db).await?;
+      MessageQueue::update_last_embedding(job.conversation_id, Some(new_embedding.clone()), db).await?;
     }
   }
   // If is_boundary is true, we do NOT update event_model or last_embedding here.
   // We proceed to create_episode, which will drain messages and initialize
   // appropriate state for the NEXT event.
 
-  Ok(is_boundary)
+  Ok((is_boundary, Some(new_embedding)))
 }
 
 /// Calculate weighted average of two vectors: (1 - alpha) * current + alpha * new
@@ -362,9 +365,12 @@ fn weighted_average_embedding(current: &[f32], new: &[f32], alpha: f32) -> Vec<f
 }
 
 /// Create an episode from the conversation messages and drain the queue.
+/// `next_event_embedding` is the pre-computed embedding of the message that will start
+/// the next event (when there are preserved messages). This avoids redundant embedding calls.
 async fn create_episode(
   job: &EventSegmentationJob,
   drain_count: usize,
+  next_event_embedding: Option<PgVector>,
   db: &DatabaseConnection,
   review_storage: &PostgresStorage<MemoryReviewJob>,
 ) -> Result<(), AppError> {
@@ -435,11 +441,16 @@ async fn create_episode(
   // If we preserved a message (edge case), that message starts the new context.
   // If we drained everything, we reset to None to force LLM analysis on next message.
   if job.messages.len() > drain_count {
-    // There is an edge message preserved in the queue
-    let next_event_start_msg = &job.messages[drain_count];
-    let next_embedding = embed(&next_event_start_msg.content).await?;
-    let pg_embedding = PgVector::from(next_embedding);
-    MessageQueue::update_last_embedding(job.conversation_id, Some(pg_embedding), db).await?;
+    // There is an edge message preserved in the queue.
+    // Use the pre-computed embedding passed from check_boundary to avoid redundant API call.
+    if let Some(embedding) = next_event_embedding {
+      MessageQueue::update_last_embedding(job.conversation_id, Some(embedding), db).await?;
+    } else {
+      // Fallback: should not happen in normal flow, but handle gracefully
+      let next_event_start_msg = &job.messages[drain_count];
+      let next_embedding = embed(&next_event_start_msg.content).await?;
+      MessageQueue::update_last_embedding(job.conversation_id, Some(next_embedding), db).await?;
+    }
   } else {
     // Buffer empty, reset embedding context
     // You could also use the episode summary embedding here as "past context",
