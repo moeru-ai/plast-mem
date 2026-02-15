@@ -274,9 +274,10 @@ fn weighted_average_embedding(current: &[f32], new: &[f32], alpha: f32) -> Vec<f
 
   // Normalize
   let norm = norm.sqrt();
-  if norm > 0.0 {
+  if norm > 1e-9 {
+    let inv_norm = 1.0 / norm;
     for x in &mut result {
-      *x /= norm;
+      *x *= inv_norm;
     }
   }
 
