@@ -160,13 +160,10 @@ pub async fn detect_boundary(
     0.0
   };
 
-  let surprise_boundary = surprise_signal > 0.0
-    && cosine_similarity(
-      event_model_embedding
-        .as_ref()
-        .map_or(&[] as &[f32], |e| e.as_slice()),
-      new_embedding.as_slice(),
-    ) < SURPRISE_SIMILARITY_THRESHOLD;
+  // `surprise_signal` is `1.0 - sim`. So `sim < THRESHOLD` is equivalent to `1.0 - surprise_signal < THRESHOLD`,
+  // which simplifies to `surprise_signal > 1.0 - THRESHOLD`.
+  // The check for `surprise_signal > 0.0` is implicitly handled if `SURPRISE_SIMILARITY_THRESHOLD < 1.0`.
+  let surprise_boundary = surprise_signal > 1.0 - SURPRISE_SIMILARITY_THRESHOLD;
 
   if surprise_boundary {
     info!(
