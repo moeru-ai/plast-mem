@@ -258,6 +258,7 @@ pub async fn detect_boundary(
 
 /// Calculate weighted average of two vectors: (1 - alpha) * current + alpha * new
 fn weighted_average_embedding(current: &[f32], new: &[f32], alpha: f32) -> Vec<f32> {
+  debug_assert_eq!(current.len(), new.len(), "Embedding dimensions must match for weighted average.");
   if current.len() != new.len() {
     return new.to_vec();
   }
