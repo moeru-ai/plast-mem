@@ -14,6 +14,7 @@ pub struct Model {
   #[sea_orm(column_type = "Text", nullable)]
   pub event_model: Option<String>,
   pub last_embedding: Option<PgVector>,
+  pub event_model_embedding: Option<PgVector>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

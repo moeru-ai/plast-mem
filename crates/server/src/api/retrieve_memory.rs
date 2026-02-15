@@ -9,7 +9,7 @@ use crate::utils::AppState;
 
 // --- Shared ---
 
-const fn default_limit() -> usize {
+const fn default_limit() -> u64 {
   5
 }
 
@@ -21,10 +21,13 @@ pub struct RetrieveMemory {
   pub query: String,
   /// Maximum memories to return (1-100)
   #[serde(default = "default_limit")]
-  pub limit: usize,
+  pub limit: u64,
   /// Detail level: "auto", "none", "low", "high"
   #[serde(default)]
   pub detail: DetailLevel,
+  /// Optional scope: when set, only retrieve memories from this conversation.
+  /// When omitted, searches all conversations (cross-conversation recall).
+  pub scope: Option<Uuid>,
 }
 
 /// Record retrieved memory IDs as pending review in the message queue.
@@ -71,7 +74,9 @@ pub async fn retrieve_memory_raw(
     return Err(AppError::new(anyhow::anyhow!("Query cannot be empty")));
   }
 
-  let results = EpisodicMemory::retrieve(&payload.query, payload.limit as u64, &state.db).await?;
+  let results =
+    EpisodicMemory::retrieve(&payload.query, payload.limit, payload.scope, &state.db)
+      .await?;
 
   record_pending_review(&state, payload.conversation_id, &payload.query, &results).await?;
 
@@ -104,7 +109,9 @@ pub async fn retrieve_memory(
     return Err(AppError::new(anyhow::anyhow!("Query cannot be empty")));
   }
 
-  let results = EpisodicMemory::retrieve(&payload.query, payload.limit as u64, &state.db).await?;
+  let results =
+    EpisodicMemory::retrieve(&payload.query, payload.limit, payload.scope, &state.db)
+      .await?;
 
   record_pending_review(&state, payload.conversation_id, &payload.query, &results).await?;
 

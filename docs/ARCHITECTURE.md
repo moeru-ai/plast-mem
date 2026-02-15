@@ -15,12 +15,18 @@ Entry program. Initializes tracing, database connection, migrations, job storage
 
 ### 2. plastmem_core
 
-Core structure
+Core domain logic
 
 **Key Components**:
 - `memory/`: Various types of memory
   - `episodic.rs`: Episodic Memory (hybrid retrieval with FSRS re-ranking)
-- `message_queue.rs`: Message Queue (rule-based segmentation triggers)
+  - `creation.rs`: Episode generation (LLM) and creation (FSRS init, persistence)
+- `message_queue/`: Message queue and segmentation
+  - `mod.rs`: MessageQueue struct and core queue operations
+  - `segmentation.rs`: Rule-based segmentation triggers
+  - `boundary.rs`: Dual-channel boundary detection (topic shift + surprise)
+  - `pending_reviews.rs`: Pending review tracking
+  - `state.rs`: Event model and embedding state management
 
 ### 3. plastmem_migration
 
@@ -60,7 +66,7 @@ Reusable utilities
 Background tasks worker
 
 **Key Components**:
-- `event_segmentation.rs`: Creates episodic memories with surprise-based FSRS initialization
+- `event_segmentation.rs`: Job scheduling shell — dispatches to core's boundary detection and episode creation
 - `memory_review.rs`: LLM-based review of retrieved memories, updates FSRS parameters
 
 ### 8. plastmem_server

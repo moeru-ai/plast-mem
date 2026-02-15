@@ -3573,9 +3573,11 @@ dependencies = [
  "plastmem_ai",
  "plastmem_entities",
  "plastmem_shared",
+ "schemars",
  "sea-orm",
  "serde",
  "serde_json",
+ "tracing",
  "utoipa",
  "uuid",
 ]

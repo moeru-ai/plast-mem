@@ -68,25 +68,38 @@ impl EpisodicMemory {
     })
   }
 
+  /// Retrieve episodic memories using hybrid BM25 + vector search with FSRS re-ranking.
+  ///
+  /// When `scope` is `Some(conversation_id)`, only memories from that conversation are searched.
+  /// When `scope` is `None`, all memories are searched globally.
   pub async fn retrieve(
     query: &str,
     limit: u64,
+    scope: Option<Uuid>,
     db: &DatabaseConnection,
   ) -> Result<Vec<(Self, f64)>, AppError> {
     let query_embedding = embed(query).await?;
     let fsrs = FSRS::new(Some(&DEFAULT_PARAMETERS))?;
 
-    let retrieve_sql = r"
+    let scope_filter = if scope.is_some() {
+      "AND conversation_id = $5"
+    } else {
+      ""
+    };
+
+    let retrieve_sql = format!(
+      r"
     WITH
     fulltext AS (
       SELECT id, ROW_NUMBER() OVER (ORDER BY pdb.score(id) DESC) AS r
       FROM episodic_memory
-      WHERE content ||| $1
+      WHERE content ||| $1 {scope_filter}
       LIMIT $2
     ),
     semantic AS (
       SELECT id, ROW_NUMBER() OVER (ORDER BY embedding <=> $3) AS r
       FROM episodic_memory
+      WHERE 1=1 {scope_filter}
       LIMIT $2
     ),
     rrf AS (
@@ -118,18 +131,21 @@ impl EpisodicMemory {
     JOIN episodic_memory m USING (id)
     ORDER BY r.score DESC
     LIMIT $4;
-    ";
-
-    let retrieve_stmt = Statement::from_sql_and_values(
-      DbBackend::Postgres,
-      retrieve_sql,
-      vec![
-        query.to_owned().into(),
-        100.into(), // LIMIT 100
-        query_embedding.clone().into(),
-        100.into(), // LIMIT 100
-      ],
+    "
     );
+
+    let mut params: Vec<sea_orm::Value> = vec![
+      query.to_owned().into(),
+      100.into(), // candidate limit
+      query_embedding.clone().into(),
+      100.into(), // candidate limit
+    ];
+    if let Some(cid) = scope {
+      params.push(cid.into());
+    }
+
+    let retrieve_stmt =
+      Statement::from_sql_and_values(DbBackend::Postgres, &retrieve_sql, params);
 
     let rows = db.query_all_raw(retrieve_stmt).await?;
     let mut results = Vec::with_capacity(rows.len());

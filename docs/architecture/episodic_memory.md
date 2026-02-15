@@ -17,6 +17,7 @@ Conversation Messages → Event Segmentation → EpisodicMemory (with FSRS state
 ## Schema
 
 - **Core struct**: `crates/core/src/memory/episodic.rs`
+- **Episode creation**: `crates/core/src/memory/creation.rs`
 - **Database entity**: `crates/entities/src/episodic_memory.rs`
 
 ### Field Semantics
@@ -41,10 +42,10 @@ Conversation Messages → Event Segmentation → EpisodicMemory (with FSRS state
 
 Episodic memories are created via the [segmentation](segmentation.md) pipeline:
 
-1. **Rule check** — Fast path for obvious cases (e.g., < 5 messages = no split)
-2. **LLM analysis** — Structured output decides create/skip + generates summary
-3. **Surprise detection** — Prediction error score (0.0 ~ 1.0)
-4. **FSRS initialization** — Initial stability boosted by surprise
+1. **Rule check** — Fast path for obvious cases (e.g., < 3 messages = no split)
+2. **Dual-channel boundary detection** — Surprise channel (embedding divergence) + Topic channel (embedding pre-filter → LLM)
+3. **Episode generation** — LLM generates title + summary
+4. **FSRS initialization** — Initial stability boosted by surprise signal
 
 ```rust
 // Stability boost formula
@@ -79,7 +80,7 @@ See [FSRS](fsrs.md) for details.
 
 ## Surprise Detection
 
-Surprise measures prediction error—the unexpectedness of information. It serves two purposes:
+Surprise measures prediction error—the unexpectedness of information relative to the current event model. It is computed as `1 - cosine_sim(event_model_embedding, new_message_embedding)` during boundary detection. It serves two purposes:
 
 ### 1. FSRS Stability Boost
 
