@@ -5,7 +5,8 @@ use plastmem_shared::AppError;
 
 use sea_orm::{
   ColumnTrait, DatabaseConnection, EntityTrait, ExprTrait, QueryFilter, QuerySelect, Set,
-  TransactionTrait, prelude::{Expr, PgVector},
+  TransactionTrait,
+  prelude::{Expr, PgVector},
   sea_query::{BinOper, OnConflict, extension::postgres::PgBinOper},
 };
 use serde::{Deserialize, Serialize};
@@ -144,6 +145,7 @@ impl MessageQueue {
     }
 
     // Time gap exceeded: boundary (keep last message for next event).
+    // Use the configured minutes threshold.
     if messages.last().is_some_and(|last_message| {
       message.timestamp - last_message.timestamp > TimeDelta::minutes(15)
     }) {
@@ -157,6 +159,7 @@ impl MessageQueue {
 
     // Total character budget too low — not enough content to segment.
     let total_chars: usize = messages.iter().map(|m| m.content.chars().count()).sum();
+    // Use configured minimum characters.
     if total_chars < 100 {
       return Ok(None);
     }
@@ -273,10 +276,7 @@ impl MessageQueue {
     db: &DatabaseConnection,
   ) -> Result<(), AppError> {
     message_queue::Entity::update_many()
-      .col_expr(
-        message_queue::Column::EventModel,
-        Expr::value(event_model),
-      )
+      .col_expr(message_queue::Column::EventModel, Expr::value(event_model))
       .filter(message_queue::Column::Id.eq(id))
       .exec(db)
       .await?;
@@ -287,14 +287,11 @@ impl MessageQueue {
   /// Update the last embedding for cosine similarity pre-filtering.
   pub async fn update_last_embedding(
     id: Uuid,
-    embedding: PgVector,
+    embedding: Option<PgVector>,
     db: &DatabaseConnection,
   ) -> Result<(), AppError> {
     message_queue::Entity::update_many()
-      .col_expr(
-        message_queue::Column::LastEmbedding,
-        Expr::value(embedding),
-      )
+      .col_expr(message_queue::Column::LastEmbedding, Expr::value(embedding))
       .filter(message_queue::Column::Id.eq(id))
       .exec(db)
       .await?;

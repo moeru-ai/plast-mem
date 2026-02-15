@@ -218,8 +218,12 @@ pub async fn process_event_segmentation(
         messages = job.messages.len(),
         "Creating episode (time boundary)"
       );
-      let drain_count = job.messages.len().saturating_sub(1).max(1);
-      create_episode(&job, drain_count, db, &review_storage).await?;
+      // Drain all except the last one.
+      // If there's only 1 message, drain_count is 0, so we do nothing.
+      let drain_count = job.messages.len().saturating_sub(1);
+      if drain_count > 0 {
+        create_episode(&job, drain_count, db, &review_storage).await?;
+      }
     }
 
     // Needs boundary detection with embedding pre-filter → LLM confirmation.
@@ -232,8 +236,10 @@ pub async fn process_event_segmentation(
           messages = job.messages.len(),
           "Creating episode (boundary detected)"
         );
-        let drain_count = job.messages.len().saturating_sub(1).max(1);
-        create_episode(&job, drain_count, db, &review_storage).await?;
+        let drain_count = job.messages.len().saturating_sub(1);
+        if drain_count > 0 {
+          create_episode(&job, drain_count, db, &review_storage).await?;
+        }
       } else {
         // No boundary — just process pending reviews, don't drain.
         enqueue_pending_reviews(job.conversation_id, &job.messages, db, &review_storage).await?;
@@ -252,27 +258,30 @@ async fn check_boundary(
   // Step 1: Embedding similarity pre-filter
   let last_embedding = MessageQueue::get_last_embedding(job.conversation_id, db).await?;
 
-  if let Some(ref stored_embedding) = last_embedding {
-    // Compute embedding of the latest message
-    let latest_msg = job
-      .messages
-      .last()
-      .map(|m| m.content.as_str())
-      .unwrap_or("");
-    let new_embedding = embed(latest_msg).await?;
+  // Compute embedding of the latest message
+  let latest_msg = job
+    .messages
+    .last()
+    .map(|m| m.content.as_str())
+    .unwrap_or("");
+  let new_embedding = embed(latest_msg).await?;
 
+  if let Some(ref stored_embedding) = last_embedding {
     let similarity = cosine_similarity(stored_embedding.as_slice(), new_embedding.as_slice());
     info!(
       conversation_id = %job.conversation_id,
       similarity = similarity,
+      threshold = SIMILARITY_THRESHOLD,
       "Embedding similarity pre-filter"
     );
 
     // High similarity = same topic, no need for LLM call
     if similarity >= SIMILARITY_THRESHOLD {
-      // Update the stored embedding to a rolling representation
-      let new_pg_embedding = PgVector::from(new_embedding);
-      MessageQueue::update_last_embedding(job.conversation_id, new_pg_embedding, db).await?;
+      // Update the stored embedding using rolling average to avoid drift
+      let updated_vec =
+        weighted_average_embedding(stored_embedding.as_slice(), new_embedding.as_slice(), 0.2);
+      let new_pg_embedding = PgVector::from(updated_vec);
+      MessageQueue::update_last_embedding(job.conversation_id, Some(new_pg_embedding), db).await?;
       return Ok(false);
     }
   }
@@ -293,23 +302,63 @@ async fn check_boundary(
 
   let is_boundary = detection.is_boundary && detection.confidence >= BOUNDARY_CONFIDENCE_THRESHOLD;
 
-  // Update event model if the LLM provided one (no boundary case)
+  if !is_boundary && detection.is_boundary {
+    info!(
+      conversation_id = %job.conversation_id,
+      confidence = detection.confidence,
+      threshold = BOUNDARY_CONFIDENCE_THRESHOLD,
+      "Boundary detected by LLM but confidence too low - skipping"
+    );
+  }
+
   if !is_boundary {
+    // Update event model if the LLM provided one (no boundary case)
     if let Some(updated_model) = detection.updated_event_model {
       MessageQueue::update_event_model(job.conversation_id, Some(updated_model), db).await?;
     }
-    // Update last embedding for next comparison
-    let latest_msg = job
-      .messages
-      .last()
-      .map(|m| m.content.as_str())
-      .unwrap_or("");
-    let new_embedding = embed(latest_msg).await?;
-    let pg_embedding = PgVector::from(new_embedding);
-    MessageQueue::update_last_embedding(job.conversation_id, pg_embedding, db).await?;
+    // Update last embedding for next comparison (using rolling average)
+    if let Some(ref stored_embedding) = last_embedding {
+      let updated_vec =
+        weighted_average_embedding(stored_embedding.as_slice(), new_embedding.as_slice(), 0.2);
+      let pg_embedding = PgVector::from(updated_vec);
+      MessageQueue::update_last_embedding(job.conversation_id, Some(pg_embedding), db).await?;
+    } else {
+      // Initialize if None
+      let pg_embedding = PgVector::from(new_embedding);
+      MessageQueue::update_last_embedding(job.conversation_id, Some(pg_embedding), db).await?;
+    }
   }
+  // If is_boundary is true, we do NOT update event_model or last_embedding here.
+  // We proceed to create_episode, which will drain messages and initialize
+  // appropriate state for the NEXT event.
 
   Ok(is_boundary)
+}
+
+/// Calculate weighted average of two vectors: (1 - alpha) * current + alpha * new
+fn weighted_average_embedding(current: &[f32], new: &[f32], alpha: f32) -> Vec<f32> {
+  if current.len() != new.len() {
+    return new.to_vec();
+  }
+
+  let mut result = Vec::with_capacity(current.len());
+  let mut norm = 0.0_f32;
+
+  for (c, n) in current.iter().zip(new.iter()) {
+    let val = (1.0 - alpha) * c + alpha * n;
+    result.push(val);
+    norm += val * val;
+  }
+
+  // Normalize
+  let norm = norm.sqrt();
+  if norm > 0.0 {
+    for x in &mut result {
+      *x /= norm;
+    }
+  }
+
+  result
 }
 
 /// Create an episode from the conversation messages and drain the queue.
@@ -382,9 +431,21 @@ async fn create_episode(
   // (reset to None — the next boundary detection will establish a new one)
   MessageQueue::update_event_model(job.conversation_id, None, db).await?;
 
-  // Update last embedding with the episode summary embedding
-  let pg_embedding = PgVector::from(embedding);
-  MessageQueue::update_last_embedding(job.conversation_id, pg_embedding, db).await?;
+  // Initialize last_embedding for the NEXT event.
+  // If we preserved a message (edge case), that message starts the new context.
+  // If we drained everything, we reset to None to force LLM analysis on next message.
+  if job.messages.len() > drain_count {
+    // There is an edge message preserved in the queue
+    let next_event_start_msg = &job.messages[drain_count];
+    let next_embedding = embed(&next_event_start_msg.content).await?;
+    let pg_embedding = PgVector::from(next_embedding);
+    MessageQueue::update_last_embedding(job.conversation_id, Some(pg_embedding), db).await?;
+  } else {
+    // Buffer empty, reset embedding context
+    // You could also use the episode summary embedding here as "past context",
+    // but resetting allows the next event to establish its own identity FRESH.
+    MessageQueue::update_last_embedding(job.conversation_id, None, db).await?;
+  }
 
   Ok(())
 }
