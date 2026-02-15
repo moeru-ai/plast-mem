@@ -31,48 +31,44 @@ impl MessageQueue {
   ) -> Result<Option<SegmentationCheck>, AppError> {
     let messages = Self::get(id, db).await?.messages;
 
-    // === Hard rules (no LLM call) ===
+    // === Hard rules (evaluated on buffer only, excluding new message) ===
 
     // Too few messages: never segment.
     if messages.len() < MIN_MESSAGES {
       return Ok(None);
     }
 
-    // Buffer full: force split (drain all messages).
-    if messages.len() >= MAX_BUFFER_SIZE {
-      return Ok(Some(SegmentationCheck {
-        messages,
-        action: SegmentationAction::ForceCreate,
-      }));
-    }
-
-    // Time gap exceeded: boundary (keep last message for next event).
-    if messages.last().is_some_and(|last_message| {
+    // Determine the action based on rules.
+    let action = if messages.len() >= MAX_BUFFER_SIZE {
+      // Buffer full: force split.
+      SegmentationAction::ForceCreate
+    } else if messages.last().is_some_and(|last_message| {
       message.timestamp - last_message.timestamp > TimeDelta::minutes(TIME_GAP_MINUTES)
     }) {
-      return Ok(Some(SegmentationCheck {
-        messages,
-        action: SegmentationAction::TimeBoundary,
-      }));
-    }
+      // Time gap exceeded.
+      SegmentationAction::TimeBoundary
+    } else {
+      // === Content quality checks ===
 
-    // === Content quality checks ===
+      // Total character budget too low — not enough content to segment.
+      let total_chars: usize = messages.iter().map(|m| m.content.chars().count()).sum();
+      if total_chars < MIN_TOTAL_CHARS {
+        return Ok(None);
+      }
 
-    // Total character budget too low — not enough content to segment.
-    let total_chars: usize = messages.iter().map(|m| m.content.chars().count()).sum();
-    if total_chars < MIN_TOTAL_CHARS {
-      return Ok(None);
-    }
+      // Latest message too short to trigger a boundary evaluation.
+      if message.content.chars().count() < MIN_MESSAGE_LENGTH {
+        return Ok(None);
+      }
 
-    // Latest message too short to trigger a boundary evaluation.
-    if message.content.chars().count() < MIN_MESSAGE_LENGTH {
-      return Ok(None);
-    }
+      SegmentationAction::NeedsBoundaryDetection
+    };
 
-    // === Passed rules → needs LLM boundary detection ===
-    Ok(Some(SegmentationCheck {
-      messages,
-      action: SegmentationAction::NeedsBoundaryDetection,
-    }))
+    // Append the triggering message so downstream workers have the full picture.
+    // The last element is always the new message (edge message for the next event).
+    let mut messages = messages;
+    messages.push(message.clone());
+
+    Ok(Some(SegmentationCheck { messages, action }))
   }
 }

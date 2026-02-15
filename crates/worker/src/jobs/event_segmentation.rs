@@ -39,48 +39,47 @@ pub async fn process_event_segmentation(
     "Processing event segmentation"
   );
 
+  // The last element in job.messages is always the triggering (edge) message.
+  // drain_count = len - 1 ensures the edge message stays in the queue for the next event.
+  let drain_count = job.messages.len().saturating_sub(1);
+
   match job.action {
     // Force-create: skip boundary detection, go straight to episode generation.
-    // Drain ALL messages (buffer overflow, no edge to preserve).
     SegmentationAction::ForceCreate => {
       info!(
         conversation_id = %job.conversation_id,
         messages = job.messages.len(),
+        drain_count,
         "Force-creating episode (buffer full)"
       );
-      enqueue_pending_reviews(job.conversation_id, &job.messages, &db, &review_storage).await?;
-      create_episode(
-        job.conversation_id,
-        &job.messages,
-        job.messages.len(),
-        None,
-        0.0,
-        &db,
-      )
-      .await?;
-    }
-
-    // Time boundary: skip boundary detection, create episode.
-    // Preserve the last message for the next event (it triggered the boundary).
-    SegmentationAction::TimeBoundary => {
-      info!(
-        conversation_id = %job.conversation_id,
-        messages = job.messages.len(),
-        "Creating episode (time boundary)"
-      );
-      let drain_count = job.messages.len().saturating_sub(1);
-      // Handle edge case: if only 1 message, still need to drain it.
-      let effective_drain = if drain_count == 0 && !job.messages.is_empty() {
-        1
-      } else {
-        drain_count
-      };
-      if effective_drain > 0 {
+      if drain_count > 0 {
         enqueue_pending_reviews(job.conversation_id, &job.messages, &db, &review_storage).await?;
         create_episode(
           job.conversation_id,
           &job.messages,
-          effective_drain,
+          drain_count,
+          None,
+          0.0,
+          &db,
+        )
+        .await?;
+      }
+    }
+
+    // Time boundary: skip boundary detection, create episode.
+    SegmentationAction::TimeBoundary => {
+      info!(
+        conversation_id = %job.conversation_id,
+        messages = job.messages.len(),
+        drain_count,
+        "Creating episode (time boundary)"
+      );
+      if drain_count > 0 {
+        enqueue_pending_reviews(job.conversation_id, &job.messages, &db, &review_storage).await?;
+        create_episode(
+          job.conversation_id,
+          &job.messages,
+          drain_count,
           None,
           0.0,
           &db,
@@ -97,10 +96,10 @@ pub async fn process_event_segmentation(
         info!(
           conversation_id = %job.conversation_id,
           messages = job.messages.len(),
+          drain_count,
           surprise = result.surprise_signal,
           "Creating episode (boundary detected)"
         );
-        let drain_count = job.messages.len().saturating_sub(1);
         if drain_count > 0 {
           enqueue_pending_reviews(job.conversation_id, &job.messages, &db, &review_storage).await?;
           create_episode(
