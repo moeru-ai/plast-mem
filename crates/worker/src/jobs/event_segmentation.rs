@@ -31,6 +31,18 @@ pub async fn process_event_segmentation(
   review_storage: apalis::prelude::Data<PostgresStorage<MemoryReviewJob>>,
 ) -> Result<(), AppError> {
   let db = &*db;
+
+  // Verify that the job is not stale. The message queue in the database should
+  // still contain the messages that this job was created with.
+  let current_messages = MessageQueue::get(job.conversation_id, db).await?.messages;
+  let job_context_messages = &job.messages[..job.messages.len().saturating_sub(1)];
+  if !current_messages.starts_with(job_context_messages) {
+    info!(
+      conversation_id = %job.conversation_id,
+      "Skipping stale event segmentation job."
+    );
+    return Ok(());
+  }
   let review_storage = &*review_storage;
   info!(
     conversation_id = %job.conversation_id,
