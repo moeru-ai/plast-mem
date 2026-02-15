@@ -121,7 +121,7 @@ pub async fn create_episode(
     messages: segment_messages.to_vec(),
     title: episode.title,
     content: episode.summary,
-    embedding: embedding.clone().into(),
+    embedding: embedding,
     stability: boosted_stability,
     difficulty: initial_memory.difficulty,
     surprise,
