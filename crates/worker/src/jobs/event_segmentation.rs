@@ -219,12 +219,18 @@ pub async fn process_event_segmentation(
         "Creating episode (time boundary)"
       );
       // Drain all except the last one.
-      // If there's only 1 message, drain_count is 0, so we do nothing.
       let drain_count = job.messages.len().saturating_sub(1);
-      if drain_count > 0 {
+      // Handle edge case: if only 1 message, still need to drain it.
+      // Otherwise we'd be stuck with a stale message that has a time boundary with the next one.
+      let effective_drain = if drain_count == 0 && !job.messages.is_empty() {
+        1
+      } else {
+        drain_count
+      };
+      if effective_drain > 0 {
         // TimeBoundary doesn't have a pre-computed embedding (no boundary detection happened),
         // so we pass None and let create_episode compute it if needed.
-        create_episode(&job, drain_count, None, db, &review_storage).await?;
+        create_episode(&job, effective_drain, None, db, &review_storage).await?;
       }
     }
 
@@ -446,7 +452,7 @@ async fn create_episode(
     if let Some(embedding) = next_event_embedding {
       MessageQueue::update_last_embedding(job.conversation_id, Some(embedding), db).await?;
     } else {
-      // Fallback: should not happen in normal flow, but handle gracefully
+      // TimeBoundary doesn't pre-compute embedding; compute it now for the edge message.
       let next_event_start_msg = &job.messages[drain_count];
       let next_embedding = embed(&next_event_start_msg.content).await?;
       MessageQueue::update_last_embedding(job.conversation_id, Some(next_embedding), db).await?;
