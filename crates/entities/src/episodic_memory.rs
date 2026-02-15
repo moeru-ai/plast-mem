@@ -11,6 +11,8 @@ pub struct Model {
   pub conversation_id: Uuid,
   #[sea_orm(column_type = "JsonBinary")]
   pub messages: Json,
+  #[sea_orm(column_type = "Text")]
+  pub title: String,
   pub content: String,
   pub embedding: PgVector,
   pub stability: f32,

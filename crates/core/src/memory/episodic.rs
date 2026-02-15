@@ -17,6 +17,7 @@ pub struct EpisodicMemory {
   pub id: Uuid,
   pub conversation_id: Uuid,
   pub messages: Vec<Message>,
+  pub title: String,
   pub content: String,
   /// Vector embedding (internal use, not exposed in API)
   #[serde(skip)]
@@ -36,6 +37,7 @@ impl EpisodicMemory {
       id: model.id,
       conversation_id: model.conversation_id,
       messages: serde_json::from_value(model.messages)?,
+      title: model.title,
       content: model.content,
       embedding: model.embedding,
       stability: model.stability,
@@ -53,6 +55,7 @@ impl EpisodicMemory {
       id: self.id,
       conversation_id: self.conversation_id,
       messages: serde_json::to_value(self.messages.clone())?,
+      title: self.title.clone(),
       content: self.content.clone(),
       embedding: self.embedding.clone(),
       stability: self.stability,
@@ -100,6 +103,7 @@ impl EpisodicMemory {
       m.id,
       m.conversation_id,
       m.messages,
+      m.title,
       m.content,
       m.embedding,
       m.stability,

@@ -5,7 +5,7 @@ use plastmem_shared::AppError;
 
 use sea_orm::{
   ColumnTrait, DatabaseConnection, EntityTrait, ExprTrait, QueryFilter, QuerySelect, Set,
-  TransactionTrait, prelude::Expr,
+  TransactionTrait, prelude::{Expr, PgVector},
   sea_query::{BinOper, OnConflict, extension::postgres::PgBinOper},
 };
 use serde::{Deserialize, Serialize};
@@ -26,11 +26,22 @@ pub struct PendingReview {
   pub memory_ids: Vec<Uuid>,
 }
 
-/// Result of checking if event segmentation is needed
+/// What kind of segmentation action the rules determined.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum SegmentationAction {
+  /// Buffer is full — force-create an episode, drain all messages.
+  ForceCreate,
+  /// Time gap exceeded — create episode, but the triggering message belongs to the next event.
+  TimeBoundary,
+  /// Rules passed — needs LLM boundary detection (with embedding pre-filter).
+  NeedsBoundaryDetection,
+}
+
+/// Result of checking if event segmentation is needed.
 #[derive(Debug, Clone)]
 pub struct SegmentationCheck {
   pub messages: Vec<Message>,
-  pub check: bool,
+  pub action: SegmentationAction,
 }
 
 impl MessageQueue {
@@ -52,6 +63,8 @@ impl MessageQueue {
       id: Set(id),
       messages: Set(serde_json::to_value(Vec::<Message>::new())?),
       pending_reviews: Set(None),
+      event_model: Set(None),
+      last_embedding: Set(None),
     };
 
     message_queue::Entity::insert(active_model)
@@ -115,42 +128,48 @@ impl MessageQueue {
   ) -> Result<Option<SegmentationCheck>, AppError> {
     let messages = Self::get(id, db).await?.messages;
 
-    // Check messages length
-    match messages.len() {
-      // If fewer than 5 messages are present, skip.
-      n if n < 5 => {
-        return Ok(None);
-      }
-      // If more than 30 messages, force a split.
-      n if n >= 30 => {
-        return Ok(Some(SegmentationCheck {
-          messages,
-          check: false,
-        }));
-      }
-      _ => {}
+    // === Hard rules (no LLM call) ===
+
+    // Too few messages: never segment.
+    if messages.len() < 3 {
+      return Ok(None);
     }
 
-    // Check timestamp gap
-    // If it exceeds 15 minutes, force a split.
+    // Buffer full: force split (drain all messages).
+    if messages.len() >= 30 {
+      return Ok(Some(SegmentationCheck {
+        messages,
+        action: SegmentationAction::ForceCreate,
+      }));
+    }
+
+    // Time gap exceeded: boundary (keep last message for next event).
     if messages.last().is_some_and(|last_message| {
       message.timestamp - last_message.timestamp > TimeDelta::minutes(15)
     }) {
       return Ok(Some(SegmentationCheck {
         messages,
-        check: false,
+        action: SegmentationAction::TimeBoundary,
       }));
     }
 
-    // Check message content length
-    // If the latest message is five characters or fewer, skip.
+    // === Content quality checks ===
+
+    // Total character budget too low — not enough content to segment.
+    let total_chars: usize = messages.iter().map(|m| m.content.chars().count()).sum();
+    if total_chars < 100 {
+      return Ok(None);
+    }
+
+    // Latest message too short to trigger a boundary evaluation.
     if message.content.chars().count() < 5 {
       return Ok(None);
     }
 
+    // === Passed rules → needs LLM boundary detection ===
     Ok(Some(SegmentationCheck {
       messages,
-      check: true,
+      action: SegmentationAction::NeedsBoundaryDetection,
     }))
   }
 
@@ -245,5 +264,59 @@ impl MessageQueue {
     txn.commit().await?;
 
     Ok(reviews)
+  }
+
+  /// Update the event model description for a conversation.
+  pub async fn update_event_model(
+    id: Uuid,
+    event_model: Option<String>,
+    db: &DatabaseConnection,
+  ) -> Result<(), AppError> {
+    message_queue::Entity::update_many()
+      .col_expr(
+        message_queue::Column::EventModel,
+        Expr::value(event_model),
+      )
+      .filter(message_queue::Column::Id.eq(id))
+      .exec(db)
+      .await?;
+
+    Ok(())
+  }
+
+  /// Update the last embedding for cosine similarity pre-filtering.
+  pub async fn update_last_embedding(
+    id: Uuid,
+    embedding: PgVector,
+    db: &DatabaseConnection,
+  ) -> Result<(), AppError> {
+    message_queue::Entity::update_many()
+      .col_expr(
+        message_queue::Column::LastEmbedding,
+        Expr::value(embedding),
+      )
+      .filter(message_queue::Column::Id.eq(id))
+      .exec(db)
+      .await?;
+
+    Ok(())
+  }
+
+  /// Get the current event model for a conversation.
+  pub async fn get_event_model(
+    id: Uuid,
+    db: &DatabaseConnection,
+  ) -> Result<Option<String>, AppError> {
+    let model = Self::get_or_create_model(id, db).await?;
+    Ok(model.event_model)
+  }
+
+  /// Get the last embedding for a conversation.
+  pub async fn get_last_embedding(
+    id: Uuid,
+    db: &DatabaseConnection,
+  ) -> Result<Option<PgVector>, AppError> {
+    let model = Self::get_or_create_model(id, db).await?;
+    Ok(model.last_embedding)
   }
 }

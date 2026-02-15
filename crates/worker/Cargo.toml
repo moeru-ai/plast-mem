@@ -31,4 +31,5 @@ serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 tower = { version = "0.4", features = ["util"] }
+tracing = "0.1"
 uuid.workspace = true

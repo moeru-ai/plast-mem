@@ -46,9 +46,14 @@ pub fn format_tool_result(results: &[(EpisodicMemory, f64)], detail: &DetailLeve
     } else {
       ""
     };
+    let header = if mem.title.is_empty() {
+      format!("Memory {rank}")
+    } else {
+      mem.title.clone()
+    };
     let _ = writeln!(
       out,
-      "## Memory {rank} [rank: {rank}, score: {score:.2}{key_moment}]"
+      "## {header} [rank: {rank}, score: {score:.2}{key_moment}]"
     );
 
     // When

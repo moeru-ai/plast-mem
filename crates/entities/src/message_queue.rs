@@ -2,7 +2,7 @@
 
 use sea_orm::entity::prelude::*;
 
-#[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
+#[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
 #[sea_orm(table_name = "message_queue")]
 pub struct Model {
   #[sea_orm(primary_key, auto_increment = false)]
@@ -11,6 +11,9 @@ pub struct Model {
   pub messages: Json,
   #[sea_orm(column_type = "JsonBinary", nullable)]
   pub pending_reviews: Option<Json>,
+  #[sea_orm(column_type = "Text", nullable)]
+  pub event_model: Option<String>,
+  pub last_embedding: Option<PgVector>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
