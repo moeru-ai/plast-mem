@@ -1,6 +1,6 @@
 use sea_orm_migration::{
   prelude::*,
-  schema::{custom, float, json_binary, string, text, timestamp_with_time_zone, uuid},
+  schema::{custom, float, json_binary, text, timestamp_with_time_zone, uuid},
   sea_orm::Statement,
 };
 
@@ -18,7 +18,7 @@ impl MigrationTrait for Migration {
           .col(uuid(EpisodicMemory::Id).primary_key())
           .col(uuid(EpisodicMemory::ConversationId))
           .col(json_binary(EpisodicMemory::Messages))
-          .col(string(EpisodicMemory::Summary))
+          .col(text(EpisodicMemory::Summary))
           .col(custom(EpisodicMemory::Embedding, "vector(1024)").not_null())
           .col(text(EpisodicMemory::Title).not_null().default(""))
           // FSRS Memory State

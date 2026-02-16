@@ -13,6 +13,7 @@ pub struct Model {
   pub messages: Json,
   #[sea_orm(column_type = "Text")]
   pub title: String,
+  #[sea_orm(column_type = "Text")]
   pub summary: String,
   pub embedding: PgVector,
   pub stability: f32,
