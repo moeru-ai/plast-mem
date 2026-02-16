@@ -1,6 +1,6 @@
 use sea_orm_migration::{
   prelude::*,
-  schema::{custom, float, json_binary, string, timestamp_with_time_zone, uuid},
+  schema::{custom, float, json_binary, string, text, timestamp_with_time_zone, uuid},
   sea_orm::Statement,
 };
 
@@ -20,6 +20,7 @@ impl MigrationTrait for Migration {
           .col(json_binary(EpisodicMemory::Messages))
           .col(string(EpisodicMemory::Content))
           .col(custom(EpisodicMemory::Embedding, "vector(1024)").not_null())
+          .col(text(EpisodicMemory::Title).not_null().default(""))
           // FSRS Memory State
           .col(float(EpisodicMemory::Stability))
           .col(float(EpisodicMemory::Difficulty))
@@ -34,11 +35,21 @@ impl MigrationTrait for Migration {
       )
       .await?;
 
+    // HNSW index for vector similarity search
     manager
       .get_connection()
       .execute_raw(Statement::from_string(
         manager.get_database_backend(),
         "CREATE INDEX cosine_index ON episodic_memory USING hnsw (embedding vector_cosine_ops);",
+      ))
+      .await?;
+
+    // BM25 index for full-text search
+    manager
+      .get_connection()
+      .execute_raw(Statement::from_string(
+        manager.get_database_backend(),
+        "CREATE INDEX bm25_index ON episodic_memory USING bm25 (id, (content::pdb.icu), created_at) WITH (key_field='id');",
       ))
       .await?;
 
@@ -67,6 +78,8 @@ pub enum EpisodicMemory {
   Content,
   // formatted messages embedding (for cosine similarity)
   Embedding,
+  // memory title
+  Title,
 
   // FSRS Memory State
   Stability,
