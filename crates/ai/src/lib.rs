@@ -4,6 +4,9 @@ pub use async_openai::types::chat::{
   ChatCompletionRequestUserMessage,
 };
 
+mod cosine_similarity;
+pub use cosine_similarity::cosine_similarity;
+
 mod embed;
 pub use embed::embed;
 

@@ -1,8 +1,8 @@
 use plastmem_ai::{
   ChatCompletionRequestMessage, ChatCompletionRequestSystemMessage,
-  ChatCompletionRequestUserMessage, embed, generate_object,
+  ChatCompletionRequestUserMessage, cosine_similarity, embed, generate_object,
 };
-use plastmem_shared::{AppError, Message, similarity::cosine_similarity};
+use plastmem_shared::{AppError, Message};
 use schemars::JsonSchema;
 use sea_orm::{DatabaseConnection, prelude::PgVector};
 use serde::Deserialize;
