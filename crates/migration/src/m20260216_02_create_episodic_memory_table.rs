@@ -40,7 +40,7 @@ impl MigrationTrait for Migration {
       .get_connection()
       .execute_raw(Statement::from_string(
         manager.get_database_backend(),
-        "CREATE INDEX cosine_index ON episodic_memory USING hnsw (embedding vector_cosine_ops);",
+        "CREATE INDEX idx_episodic_memory_embedding_hnsw ON episodic_memory USING hnsw (embedding vector_cosine_ops);",
       ))
       .await?;
 
@@ -49,7 +49,7 @@ impl MigrationTrait for Migration {
       .get_connection()
       .execute_raw(Statement::from_string(
         manager.get_database_backend(),
-        "CREATE INDEX bm25_index ON episodic_memory USING bm25 (id, (summary::pdb.icu), created_at) WITH (key_field='id');",
+        "CREATE INDEX idx_episodic_memory_summary_bm25 ON episodic_memory USING bm25 (id, (summary::pdb.icu), created_at) WITH (key_field='id');",
       ))
       .await?;
 
