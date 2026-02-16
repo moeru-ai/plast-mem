@@ -75,8 +75,7 @@ pub async fn retrieve_memory_raw(
   }
 
   let results =
-    EpisodicMemory::retrieve(&payload.query, payload.limit, payload.scope, &state.db)
-      .await?;
+    EpisodicMemory::retrieve(&payload.query, payload.limit, payload.scope, &state.db).await?;
 
   record_pending_review(&state, payload.conversation_id, &payload.query, &results).await?;
 
@@ -110,8 +109,7 @@ pub async fn retrieve_memory(
   }
 
   let results =
-    EpisodicMemory::retrieve(&payload.query, payload.limit, payload.scope, &state.db)
-      .await?;
+    EpisodicMemory::retrieve(&payload.query, payload.limit, payload.scope, &state.db).await?;
 
   record_pending_review(&state, payload.conversation_id, &payload.query, &results).await?;
 

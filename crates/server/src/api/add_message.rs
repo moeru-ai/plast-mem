@@ -1,8 +1,8 @@
 use apalis::prelude::TaskSink;
 use axum::{Json, extract::State, http::StatusCode};
 use chrono::{DateTime, Utc};
-use plastmem_core::{Message, MessageQueue, MessageRole};
-use plastmem_shared::AppError;
+use plastmem_core::MessageQueue;
+use plastmem_shared::{AppError, Message, MessageRole};
 use plastmem_worker::EventSegmentationJob;
 use serde::Deserialize;
 use utoipa::ToSchema;

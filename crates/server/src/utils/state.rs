@@ -15,9 +15,6 @@ impl AppState {
     db: DatabaseConnection,
     job_storage: PostgresStorage<EventSegmentationJob>,
   ) -> Self {
-    Self {
-      db,
-      job_storage,
-    }
+    Self { db, job_storage }
   }
 }

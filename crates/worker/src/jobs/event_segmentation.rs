@@ -1,11 +1,10 @@
 use apalis::prelude::TaskSink;
 use apalis_postgres::PostgresStorage;
 use chrono::Utc;
-use plastmem_core::{Message, MessageQueue, SegmentationAction, create_episode, detect_boundary};
-use plastmem_shared::AppError;
+use plastmem_core::{MessageQueue, SegmentationAction, create_episode, detect_boundary};
+use plastmem_shared::{AppError, Message};
 use sea_orm::DatabaseConnection;
 use serde::{Deserialize, Serialize};
-use tracing::info;
 use uuid::Uuid;
 
 use super::MemoryReviewJob;
@@ -37,14 +36,14 @@ pub async fn process_event_segmentation(
   let current_messages = MessageQueue::get(job.conversation_id, db).await?.messages;
   let job_context_messages = &job.messages[..job.messages.len().saturating_sub(1)];
   if !current_messages.starts_with(job_context_messages) {
-    info!(
+    tracing::debug!(
       conversation_id = %job.conversation_id,
       "Skipping stale event segmentation job."
     );
     return Ok(());
   }
   let review_storage = &*review_storage;
-  info!(
+  tracing::debug!(
     conversation_id = %job.conversation_id,
     action = ?job.action,
     messages = job.messages.len(),
@@ -58,7 +57,7 @@ pub async fn process_event_segmentation(
   match job.action {
     // Force-create: skip boundary detection, go straight to episode generation.
     SegmentationAction::ForceCreate => {
-      info!(
+      tracing::info!(
         conversation_id = %job.conversation_id,
         messages = job.messages.len(),
         drain_count,
@@ -80,7 +79,7 @@ pub async fn process_event_segmentation(
 
     // Time boundary: skip boundary detection, create episode.
     SegmentationAction::TimeBoundary => {
-      info!(
+      tracing::info!(
         conversation_id = %job.conversation_id,
         messages = job.messages.len(),
         drain_count,
@@ -105,7 +104,7 @@ pub async fn process_event_segmentation(
       let result = detect_boundary(job.conversation_id, &job.messages, &db).await?;
 
       if result.is_boundary {
-        info!(
+        tracing::info!(
           conversation_id = %job.conversation_id,
           messages = job.messages.len(),
           drain_count,

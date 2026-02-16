@@ -1,10 +1,9 @@
 use chrono::TimeDelta;
-use plastmem_shared::AppError;
+use plastmem_shared::{AppError, Message};
 use sea_orm::DatabaseConnection;
 use uuid::Uuid;
 
 use super::{MessageQueue, SegmentationAction, SegmentationCheck};
-use crate::Message;
 
 /// Minimum number of messages before segmentation is considered.
 const MIN_MESSAGES: usize = 3;

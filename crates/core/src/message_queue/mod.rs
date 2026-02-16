@@ -5,7 +5,7 @@ mod state;
 
 use anyhow::anyhow;
 use plastmem_entities::message_queue;
-use plastmem_shared::AppError;
+use plastmem_shared::{AppError, Message};
 
 use sea_orm::{
   ColumnTrait, DatabaseConnection, EntityTrait, ExprTrait, QueryFilter, Set,
@@ -14,8 +14,6 @@ use sea_orm::{
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-
-use crate::Message;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct MessageQueue {

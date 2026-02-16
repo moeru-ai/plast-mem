@@ -1,9 +1,8 @@
-use crate::Message;
 use chrono::{DateTime, Utc};
 use fsrs::{DEFAULT_PARAMETERS, FSRS, FSRS6_DEFAULT_DECAY, MemoryState};
 use plastmem_ai::embed;
 use plastmem_entities::episodic_memory;
-use plastmem_shared::AppError;
+use plastmem_shared::{AppError, Message};
 
 use sea_orm::{
   ConnectionTrait, DatabaseConnection, DbBackend, FromQueryResult, Statement, prelude::PgVector,
@@ -144,8 +143,7 @@ impl EpisodicMemory {
       params.push(cid.into());
     }
 
-    let retrieve_stmt =
-      Statement::from_sql_and_values(DbBackend::Postgres, &retrieve_sql, params);
+    let retrieve_stmt = Statement::from_sql_and_values(DbBackend::Postgres, &retrieve_sql, params);
 
     let rows = db.query_all_raw(retrieve_stmt).await?;
     let mut results = Vec::with_capacity(rows.len());
@@ -158,8 +156,8 @@ impl EpisodicMemory {
 
       // FSRS re-ranking: multiply RRF score by retrievability
       // Use 0 if negative (clock skew) or unreasonably large
-      let days_elapsed = u32::try_from((now - mem.last_reviewed_at).num_days().clamp(0, 365 * 100))
-        .unwrap_or(0);
+      let days_elapsed =
+        u32::try_from((now - mem.last_reviewed_at).num_days().clamp(0, 365 * 100)).unwrap_or(0);
       let memory_state = MemoryState {
         stability: mem.stability,
         difficulty: mem.difficulty,

@@ -76,7 +76,8 @@ where
     .chat()
     .create(request)
     .await
-    .map(|r| r.choices.into_iter())?.find_map(|c| c.message.content)
+    .map(|r| r.choices.into_iter())?
+    .find_map(|c| c.message.content)
     .ok_or_else(|| anyhow!("empty message content"))?;
 
   let result: T = serde_json::from_str(&response)?;

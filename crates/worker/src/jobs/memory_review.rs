@@ -8,9 +8,9 @@ use plastmem_ai::{
   ChatCompletionRequestMessage, ChatCompletionRequestSystemMessage,
   ChatCompletionRequestUserMessage, generate_object,
 };
-use plastmem_core::{Message, PendingReview};
+use plastmem_core::PendingReview;
 use plastmem_entities::episodic_memory;
-use plastmem_shared::{AppError, fsrs::DESIRED_RETENTION};
+use plastmem_shared::{AppError, Message, fsrs::DESIRED_RETENTION};
 use schemars::JsonSchema;
 use sea_orm::{ActiveModelTrait, DatabaseConnection, EntityTrait, Set};
 use serde::{Deserialize, Serialize};
@@ -96,9 +96,7 @@ fn build_review_user_message(
 }
 
 /// Aggregate pending reviews: deduplicate memory IDs and collect matched queries.
-fn aggregate_pending_reviews(
-  pending_reviews: &[PendingReview],
-) -> HashMap<Uuid, Vec<String>> {
+fn aggregate_pending_reviews(pending_reviews: &[PendingReview]) -> HashMap<Uuid, Vec<String>> {
   let mut map: HashMap<Uuid, Vec<String>> = HashMap::new();
   for review in pending_reviews {
     for id in &review.memory_ids {
@@ -193,7 +191,9 @@ pub async fn process_memory_review(
     }
 
     let days_elapsed = u32::try_from(
-      (job.reviewed_at - last_reviewed_at).num_days().clamp(0, 365 * 100),
+      (job.reviewed_at - last_reviewed_at)
+        .num_days()
+        .clamp(0, 365 * 100),
     )
     .unwrap_or(0);
 

@@ -2,7 +2,7 @@ use plastmem_ai::{
   ChatCompletionRequestMessage, ChatCompletionRequestSystemMessage,
   ChatCompletionRequestUserMessage, embed, generate_object,
 };
-use plastmem_shared::{AppError, similarity::cosine_similarity};
+use plastmem_shared::{AppError, Message, similarity::cosine_similarity};
 use schemars::JsonSchema;
 use sea_orm::{DatabaseConnection, prelude::PgVector};
 use serde::Deserialize;
@@ -10,7 +10,6 @@ use tracing::info;
 use uuid::Uuid;
 
 use super::MessageQueue;
-use crate::Message;
 
 /// Topic channel: cosine similarity threshold for embedding pre-filtering.
 /// Below this threshold, the LLM boundary detector is invoked.
@@ -191,8 +190,11 @@ pub async fn detect_boundary(
     // High similarity = same topic, no need for LLM call
     if similarity >= TOPIC_SIMILARITY_THRESHOLD {
       // Update the stored embedding using rolling average to avoid drift
-      let updated_vec =
-        weighted_average_embedding(stored_embedding.as_slice(), new_embedding.as_slice(), EMBEDDING_ROLLING_ALPHA);
+      let updated_vec = weighted_average_embedding(
+        stored_embedding.as_slice(),
+        new_embedding.as_slice(),
+        EMBEDDING_ROLLING_ALPHA,
+      );
       let new_pg_embedding = PgVector::from(updated_vec);
       MessageQueue::update_last_embedding(conversation_id, Some(new_pg_embedding), db).await?;
       return Ok(BoundaryResult {
@@ -239,8 +241,11 @@ pub async fn detect_boundary(
     }
     // Update last embedding for next comparison (using rolling average)
     if let Some(ref stored_embedding) = last_embedding {
-      let updated_vec =
-        weighted_average_embedding(stored_embedding.as_slice(), new_embedding.as_slice(), EMBEDDING_ROLLING_ALPHA);
+      let updated_vec = weighted_average_embedding(
+        stored_embedding.as_slice(),
+        new_embedding.as_slice(),
+        EMBEDDING_ROLLING_ALPHA,
+      );
       let pg_embedding = PgVector::from(updated_vec);
       MessageQueue::update_last_embedding(conversation_id, Some(pg_embedding), db).await?;
     } else {
@@ -258,7 +263,11 @@ pub async fn detect_boundary(
 
 /// Calculate weighted average of two vectors: (1 - alpha) * current + alpha * new
 fn weighted_average_embedding(current: &[f32], new: &[f32], alpha: f32) -> Vec<f32> {
-  debug_assert_eq!(current.len(), new.len(), "Embedding dimensions must match for weighted average.");
+  debug_assert_eq!(
+    current.len(),
+    new.len(),
+    "Embedding dimensions must match for weighted average."
+  );
   if current.len() != new.len() {
     return new.to_vec();
   }

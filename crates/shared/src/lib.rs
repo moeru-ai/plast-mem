@@ -10,4 +10,3 @@ mod message;
 pub use message::{Message, MessageRole};
 
 pub mod similarity;
-

@@ -5,14 +5,14 @@ use plastmem_ai::{
   ChatCompletionRequestUserMessage, embed, generate_object,
 };
 use plastmem_entities::episodic_memory;
-use plastmem_shared::AppError;
 use schemars::JsonSchema;
 use sea_orm::{DatabaseConnection, EntityTrait, prelude::PgVector};
 use serde::Deserialize;
 use uuid::Uuid;
 
-use super::EpisodicMemory;
-use crate::{Message, MessageQueue};
+use plastmem_shared::{AppError, Message};
+
+use crate::{EpisodicMemory, MessageQueue};
 
 /// Desired retention rate for FSRS scheduling.
 const DESIRED_RETENTION: f32 = 0.9;

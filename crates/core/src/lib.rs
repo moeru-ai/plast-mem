@@ -6,5 +6,3 @@ pub use memory::{DetailLevel, format_tool_result};
 mod message_queue;
 pub use message_queue::boundary::{BoundaryResult, detect_boundary};
 pub use message_queue::{MessageQueue, PendingReview, SegmentationAction, SegmentationCheck};
-
-pub use plastmem_shared::{Message, MessageRole};

@@ -1,7 +1,10 @@
 use plastmem_entities::message_queue;
 use plastmem_shared::AppError;
 
-use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, prelude::{Expr, PgVector}};
+use sea_orm::{
+  ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter,
+  prelude::{Expr, PgVector},
+};
 use uuid::Uuid;
 
 use super::MessageQueue;
