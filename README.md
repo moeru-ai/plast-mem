@@ -16,7 +16,7 @@ and requires only a connection to an LLM service (such as [llama.cpp](https://gi
 ### Event Segmentation Theory
 
 Conversations flow continuously, but human memory segments them into discrete episodes.
-Plast Mem uses [Event Segmentation Theory](https://en.wikipedia.org/wiki/Psychology_of_film#Segmentation) to detect natural boundaries—topic shifts, time gaps, or message accumulation—and creates episodic memories at these boundaries. The dual-channel boundary detection (topic shift + surprise) is inspired by [HiMem](https://arxiv.org/abs/2410.21385).
+Plast Mem uses [Event Segmentation Theory](https://en.wikipedia.org/wiki/Psychology_of_film#Segmentation) to detect natural boundaries—topic shifts, time gaps, or message accumulation—and creates episodic memories at these boundaries. The dual-channel boundary detection (topic shift + surprise) is inspired by [HiMem](https://arxiv.org/abs/2601.06377).
 
 ### FSRS
 
@@ -50,4 +50,4 @@ No, but I might draw inspiration from some of it - or I might not.
 This project is inspired by the design of:
 
 - [Nemori: Self-Organizing Agent Memory Inspired by Cognitive Science](https://arxiv.org/abs/2508.03341)
-- [HiMem: A Hierarchical Memory Framework for LLM-Based Agents](https://arxiv.org/abs/2410.21385) — dual-channel segmentation design
+- [HiMem: A Hierarchical Memory Framework for LLM-Based Agents](https://arxiv.org/abs/2601.06377) — dual-channel segmentation design

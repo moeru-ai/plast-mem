@@ -1,6 +1,6 @@
 # Event Segmentation
 
-Plast Mem implements an event segmentation system aligned with **Event Segmentation Theory (EST)** and the **Two-Step Alignment Principle** (from the Nemori paper). The dual-channel boundary detection design (topic shift + surprise) is inspired by [HiMem](https://arxiv.org/abs/2410.21385).
+Plast Mem implements an event segmentation system aligned with **Event Segmentation Theory (EST)** and the **Two-Step Alignment Principle** (from the Nemori paper). The dual-channel boundary detection design (topic shift + surprise) is inspired by [HiMem](https://arxiv.org/abs/2601.06377).
 
 The system continuously monitors the conversation stream to detect event boundaries—moments where the "current event model" (what is happening now) no longer predicts the incoming information efficiently.
 
