@@ -17,12 +17,12 @@ flowchart TB
   B -->|Check Needed| DC["Dual-Channel Boundary Detection"]
   DC --> SC["Surprise Channel"]
   DC --> TC["Topic Channel"]
-  SC -->|"sim < 0.35"| E2["Boundary (Direct)"]
-  SC -->|"sim ≥ 0.35"| TC
+  SC -->|"surprise > 0.65"| E2["Boundary (Direct)"]
+  SC -->|"surprise ≤ 0.65"| TC
   TC -->|"sim ≥ 0.5"| S2[Skip (Update Rolling Avg)]
   TC -->|"sim < 0.5"| L3["LLM Topic Shift Detection"]
-  L3 -->|"confidence ≥ 0.7"| E["Boundary Detected (Keep Last)"]
-  L3 -->|"confidence < 0.7"| U["Update Event Model, Continue"]
+  L3 -->|"is_boundary = true"| E["Boundary Detected (Keep Last)"]
+  L3 -->|"is_boundary = false"| U["Update Event Model, Continue"]
   F --> G["Episode Generation"]
   T --> G
   E --> G
@@ -55,9 +55,9 @@ When the rule layer determines `NeedsBoundaryDetection`, the system runs two ind
 
 Detects when incoming information diverges significantly from the current event model—a direct measure of prediction error.
 
-- Computes `cosine_sim(event_model_embedding, new_message_embedding)`
-- **sim < 0.35**: High prediction error → boundary triggered **directly** (no LLM needed)
-- **sim ≥ 0.35**: No surprise boundary
+- Computes `surprise = 1 - cosine_sim(event_model_embedding, new_message_embedding)`
+- **surprise > 0.65**: High prediction error → boundary triggered **directly** (no LLM needed)
+- **surprise ≤ 0.65**: No surprise boundary
 
 The surprise signal (`1 - cosine_sim`) is also recorded on the created episode for FSRS stability boosting.
 
@@ -85,12 +85,8 @@ The LLM evaluates multiple dimensions:
 - Recent conversation history
 
 **Output**:
-- `is_boundary`: Boolean
-- `confidence`: 0.0 - 1.0
-- `signals`: Multi-dimensional scores (topic_shift, intent_shift, temporal_marker)
-- `updated_event_model`: Updated description of the event (if NOT a boundary)
-
-If `is_boundary` is true AND `confidence` ≥ 0.7, a boundary is confirmed.
+- `is_boundary`: Boolean — whether a meaningful event boundary has been crossed
+- `updated_event_model`: Updated description of the event (if NOT a boundary; null if IS a boundary)
 
 **Code**: `llm_topic_shift_detect()` in `crates/core/src/message_queue/boundary.rs`
 
