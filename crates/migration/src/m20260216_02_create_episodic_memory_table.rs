@@ -18,7 +18,7 @@ impl MigrationTrait for Migration {
           .col(uuid(EpisodicMemory::Id).primary_key())
           .col(uuid(EpisodicMemory::ConversationId))
           .col(json_binary(EpisodicMemory::Messages))
-          .col(string(EpisodicMemory::Content))
+          .col(string(EpisodicMemory::Summary))
           .col(custom(EpisodicMemory::Embedding, "vector(1024)").not_null())
           .col(text(EpisodicMemory::Title).not_null().default(""))
           // FSRS Memory State
@@ -49,7 +49,7 @@ impl MigrationTrait for Migration {
       .get_connection()
       .execute_raw(Statement::from_string(
         manager.get_database_backend(),
-        "CREATE INDEX bm25_index ON episodic_memory USING bm25 (id, (content::pdb.icu), created_at) WITH (key_field='id');",
+        "CREATE INDEX bm25_index ON episodic_memory USING bm25 (id, (summary::pdb.icu), created_at) WITH (key_field='id');",
       ))
       .await?;
 
@@ -74,9 +74,9 @@ pub enum EpisodicMemory {
 
   // json messages
   Messages,
-  // formatted messages (for bm25)
-  Content,
-  // formatted messages embedding (for cosine similarity)
+  // memory summary (for bm25)
+  Summary,
+  // memory summary embedding (for cosine similarity)
   Embedding,
   // memory title
   Title,

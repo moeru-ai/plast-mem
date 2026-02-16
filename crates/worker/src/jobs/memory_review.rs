@@ -147,7 +147,7 @@ pub async fn process_memory_review(
       continue;
     }
 
-    memories_for_review.push((*memory_id, model.content.clone(), queries.clone()));
+    memories_for_review.push((*memory_id, model.summary.clone(), queries.clone()));
   }
 
   if memories_for_review.is_empty() {

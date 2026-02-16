@@ -120,7 +120,7 @@ pub async fn create_episode(
     conversation_id,
     messages: segment_messages.to_vec(),
     title: episode.title,
-    content: episode.summary,
+    summary: episode.summary,
     embedding: embedding,
     stability: boosted_stability,
     difficulty: initial_memory.difficulty,

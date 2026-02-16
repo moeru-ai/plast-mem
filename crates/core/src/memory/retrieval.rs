@@ -62,7 +62,7 @@ pub fn format_tool_result(results: &[(EpisodicMemory, f64)], detail: &DetailLeve
     let _ = writeln!(out, "**When:** {relative}");
 
     // Summary
-    let _ = writeln!(out, "**Summary:** {}", mem.content);
+    let _ = writeln!(out, "**Summary:** {}", mem.summary);
 
     // Details
     if detail.include_details(rank, mem.surprise) {
