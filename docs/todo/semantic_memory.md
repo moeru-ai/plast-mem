@@ -1,291 +1,415 @@
 # Semantic Memory (TODO)
 
-Semantic Memory extracts abstract facts from concrete episodic events. While Episodic Memory stores "what happened," Semantic Memory stores "what is true" — including facts about the user and facts about "us" (the relationship).
+## What is Semantic Memory?
 
-## Comparison
+In cognitive science, Episodic Memory records *what happened* — concrete experiences tied to time and context. Semantic Memory stores *what I know* — knowledge, preferences, and facts distilled from many experiences.
 
-| Dimension | Episodic Memory | Semantic Memory |
-|-----------|----------------|-----------------|
-| Content | Specific events | Abstract facts |
-| Example | "Yesterday we discussed Rust borrow checker" | "User's primary language: Rust" |
-| Trigger | Automatic segmentation | Extracted from high-surprise episodic memories |
-| Mutability | Immutable (historical facts) | Updatable (facts change over time) |
-| Retrieval | Similarity + FSRS | Exact match on entity + relation |
-| Forgetting | FSRS retrievability decay | Superseded by new knowledge (no FSRS) |
+Complementary Learning Systems (CLS) theory describes this:
+- **Hippocampus** = Episodic Memory: rapid encoding of single experiences
+- **Neocortex** = Semantic Memory: slow extraction of patterns across experiences
 
-## Data Model
+Plast Mem already has Episodic Memory (hippocampus). Semantic Memory is its "neocortex."
+
+### Value for Cyber Waifu
+
+| Without Semantic Memory | With Semantic Memory |
+|---|---|
+| Must search episodes to know user preferences | Directly knows "he prefers dark themes" |
+| Same fact scattered across 50 episodes | One fact record with provenance |
+| Retrieval always returns episode fragments | Can directly answer factual questions |
+| No awareness of relationship dynamics | Knows "we usually joke around" as a relational fact |
+
+## Cognitive Science Foundations
+
+### Predict-Calibrate Principle (from Nemori)
+
+Knowledge is not passively extracted but actively learned through a predict-calibrate loop, aligning with the Free-Energy Principle — the brain learns by minimizing prediction error.
+
+```
+  New Episode arrives
+       │
+       ▼
+  Use existing Semantic Memories
+  to predict episode content (Predict)
+       │
+       ▼
+  Compare prediction vs actual (Calibrate)
+       │
+       ├─ Correct → reinforce existing fact
+       └─ Wrong   → extract new fact / fix old fact
+```
+
+### Gist Extraction (Schema Theory)
+
+Memory consolidation naturally favors *gist* over *detail*. Episodes (details) are consolidated into semantic memories (gist). This happens implicitly: the LLM extracts lasting knowledge and discards transient states.
+
+### Our Simplification
+
+Nemori's full Predict-Calibrate is a two-step async pipeline. We simplify:
+
+> **At episode creation time, a single LLM call extracts facts.**
+
+In Phase 1 (MVP), the LLM extracts without seeing existing facts. In Phase 2, existing facts are provided as context for the full predict-calibrate loop.
+
+## Design
+
+### Fact: The Unit of Semantic Memory
 
 ```rust
 pub struct SemanticMemory {
     pub id: Uuid,
 
-    /// Knowledge triple: entity - relation - target
-    pub entity: String,
-    pub relation: RelationType,
-    pub target: String,
+    // ── Triple ──
+    pub subject: String,       // "user", "user's cat", "we", "Tokyo"
+    pub predicate: String,     // "likes", "lives_in", "communicate_in_style"
+    pub object: String,        // "Rust", "Tokyo", "playful banter"
 
-    /// Provenance tracking
-    pub source_episodic_ids: Vec<Uuid>,
-    pub confidence: f32,  // 0.0 ~ 1.0
+    // ── Natural language form ──
+    pub fact: String,          // "User lives in Tokyo"
 
-    /// Usage tracking for retrieval ranking
-    pub access_count: i32,
+    // ── Provenance ──
+    pub source_ids: Vec<Uuid>, // source episode IDs (length = implicit confidence)
 
-    /// Metadata
-    pub extracted_at: DateTime<Utc>,
-    pub last_accessed_at: DateTime<Utc>,
-}
+    // ── Bitemporal ──
+    pub valid_at: DateTime<Utc>,            // Utc::now() at creation
+    pub invalid_at: Option<DateTime<Utc>>,  // Utc::now() when invalidated (NULL = active)
 
-pub enum RelationType {
-    // User facts
-    IsA,
-    HasProperty,
-    RelatedTo,
-    PartOf,
-    Causes,
-    UsedFor,
-    Prefers,       // User preference ("User PREFERS dark mode")
-
-    // Relationship facts
-    Needs,         // Emotional needs ("User NEEDS to be heard")
-    Avoids,        // Topics to avoid ("User AVOIDS talking about ex")
-    Pattern,       // Interaction patterns ("We PATTERN joke-then-laugh")
-
-    Contradicts,   // For conflict detection
+    // ── Indexing ──
+    pub embedding: PgVector,   // embedding of `fact`
+    pub created_at: DateTime<Utc>,
 }
 ```
 
-## Two Types of Facts
+> [!NOTE]
+> No explicit `confidence` field. The length of `source_ids` serves as a natural confidence proxy — a fact mentioned in 5 episodes is more reliable than one mentioned in 1. A computed confidence score can be added in a later version if needed.
 
-### 1. User Facts
-Traditional knowledge about the user:
+### Why Both Triple AND Natural Language Sentence?
+
+The **triple** (subject, predicate, object) enables structured operations:
+- Query all facts about `"user"`
+- Find all `"likes"` relations
+- Future graph extension: subjects/objects become nodes, facts become edges
+
+The **`fact` sentence** enables semantic operations:
+- Embedding-based similarity search and deduplication
+- Better retrieval quality ("User moved from Beijing to Tokyo" is richer than `(user, lives_in, Tokyo)`)
+- Human-readable display
+
+### Subject Categories
+
+Subjects and objects are free-form strings. For cyber waifu, three patterns are important:
+
+| Pattern | Examples | Purpose |
+|---|---|---|
+| **User** | `"user"`, `"user's cat"`, `"user's mother"` | Personal facts, preferences |
+| **Assistant** | `"assistant"` | Persona traits shaped by the user |
+| **We** | `"we"` | Relational dynamics, shared context |
+
+The **"we" subject** captures the relationship itself — critical for emotional companionship:
+
 ```
-entity: "User", relation: "IsA", target: "backend engineer"
-entity: "User", relation: "HasProperty", target: "3 years Rust experience"
-entity: "User", relation: "Prefers", target: "concise answers"
+("we", "communicate_in_style", "playful banter")
+("we", "have_shared_reference", "that time the code caught fire")
+("we", "relationship_is", "close friends")
 ```
 
-### 2. Relationship Facts
-Facts about "us" — the ongoing relationship:
+### Predicate Consistency
+
+Predicates are stored as free-form `String`. Consistency is achieved through **prompt guidance only** (no runtime normalization in MVP).
+
+The extraction prompt provides recommended predicates:
+
 ```
-// Emotional needs
-entity: "User", relation: "Needs", target: "validation before advice"
-entity: "User", relation: "Needs", target: "space when angry"
-
-// Topics to avoid
-entity: "User", relation: "Avoids", target: "discussing salary"
-
-// Interaction patterns ("Our Rhythm")
-entity: "We", relation: "Pattern", target: "late night deep talks"
-entity: "We", relation: "Pattern", target: "teasing each other playfully"
-entity: "We", relation: "Pattern", target: "he vents first, I listen"
+Recommended predicates (use these when applicable, create new ones if needed):
+- likes, dislikes, prefers
+- lives_in, works_at, age_is, name_is
+- is_interested_in, has_experience_with, knows_about
+- communicate_in_style, relationship_is, has_shared_reference, has_routine
 ```
 
-## Extraction Pipeline
+This is sufficient because:
+- The same LLM tends to produce consistent output within a prompt
+- Occasional duplicates ("likes" vs "enjoys") don't break retrieval (embedding similarity catches them)
+- Runtime canonicalization can be added in a later phase if fragmentation becomes a real problem
 
-### Trigger Condition
+### Bitemporal Model
 
-Semantic extraction runs as a background job after episode creation. Only episodes with `surprise > 0.3` are selected — high-surprise events are more likely to contain novel knowledge worth extracting.
+| Field | Meaning | Value |
+|---|---|---|
+| `valid_at` | When we learned this fact | `Utc::now()` at creation |
+| `invalid_at` | When we learned it was no longer true | `Utc::now()` when invalidated, `NULL` = active |
 
-### Workflow
+We do **not** ask the LLM to infer real-world timestamps ("last summer" → specific date). Both timestamps are simply `Utc::now()` at the moment we create or invalidate the fact.
+
+**Active facts**: `invalid_at IS NULL`
+
+**Example — residence change**:
+
+```
+Episode 1:  "I live in Beijing"
+  → INSERT ("user", "lives_in", "Beijing")  valid_at: 2025-01-01, invalid_at: NULL
+
+Episode 10: "I moved to Tokyo"
+  → Phase 2: LLM detects conflict, sets invalid_at on Beijing fact
+  → ("user", "lives_in", "Beijing")  valid_at: 2025-01-01, invalid_at: 2025-06-15
+  → INSERT ("user", "lives_in", "Tokyo")  valid_at: 2025-06-15, invalid_at: NULL
+```
+
+In MVP (Phase 1), both facts simply coexist. `invalid_at` is only set in Phase 2 when LLM-based conflict detection is implemented.
+
+### Deduplication and Conflict Resolution
+
+#### Phase 1 (MVP): Embedding-Based Dedupe Only
 
 ```rust
-pub async fn extract_from_episodic(
-    episodic_id: Uuid,
-    db: &DatabaseConnection,
-) -> Result<Vec<SemanticMemory>, AppError> {
-    let episodic = EpisodicMemory::get(episodic_id, db).await?;
+fn normalize(s: &str) -> String {
+    s.trim().to_lowercase()
+}
 
-    // LLM extracts knowledge triples (structured output)
-    let triples = ai::extract_knowledge_triples(&episodic.summary, &episodic.messages).await?;
+async fn upsert_fact(new_fact: ExtractedFact, db: &DatabaseConnection) {
+    // 1. Find highly similar existing facts (strict threshold)
+    let similar = find_similar_facts(&new_fact.embedding, 0.95, db).await;
 
-    for triple in triples {
-        if let Some(existing) = SemanticMemory::find(&triple.entity, &triple.relation, db).await? {
-            if existing.target == triple.target {
-                // Consistent: reinforce confidence
-                existing.reinforce(triple.confidence, episodic_id).await?;
-            } else {
-                // Conflict: resolve (typically keep newer or higher confidence)
-                resolve_conflict(&existing, &triple, episodic_id, db).await?;
-            }
-        } else {
-            // New knowledge
-            SemanticMemory::create(triple, vec![episodic_id], db).await?;
+    if let Some(existing) = similar.first() {
+        // High embedding similarity — but verify the object matches.
+        // This prevents merging corrections: "name is Bob" ≈ "name is Alice"
+        // can have high embedding similarity but different objects.
+        if normalize(&existing.object) == normalize(&new_fact.object) {
+            // True duplicate: merge source_ids
+            append_source_ids(existing.id, &new_fact.source_ids, db).await;
+            return;
         }
+        // Same structure, different object → not a duplicate, fall through to insert
     }
+
+    // 2. No match → insert as new fact
+    // Even if it might contradict an existing fact (MVP accepts this)
+    insert_fact(new_fact, db).await;
 }
 ```
 
-### Knowledge Extraction Prompt
+**Why 0.95?** Strict enough to only merge true duplicates ("User likes Rust" ≈ "user likes Rust"), without merging distinct facts ("likes Rust" vs "likes TypeScript" ≈ 0.85).
+
+**MVP accepts contradictions** — "lives in Beijing" and "lives in Tokyo" can coexist. This is safe: better to preserve noisy signal than to silently delete valid facts with wrong heuristics.
+
+#### Phase 2: LLM-Based Conflict Detection
+
+When extracting facts, retrieve related existing facts as LLM context. The LLM determines whether new information invalidates an existing fact:
 
 ```
-Extract knowledge triples from the following conversation episode.
-Focus on persistent facts, preferences, and relationship patterns — NOT transient events.
+For each extracted fact, determine its relationship to existing facts:
+- "new": No existing fact covers this.
+- "reinforce": An existing fact says the same thing. Include its ID.
+- "invalidate": An existing fact is no longer true. Include its ID.
 
-Format (structured output):
-- entity: The subject (e.g., "User", "We", "User's job")
-- relation: One of IS_A, HAS_PROPERTY, RELATED_TO, PART_OF, CAUSES, USED_FOR,
-            PREFERS, NEEDS, AVOIDS, PATTERN
-- target: The object/value
-- confidence: 0.0 - 1.0
-
-Extract two types of facts:
-1. User facts: What we know about the user
-2. Relationship facts: Patterns about how we interact
-
-Example user facts:
-  { entity: "User", relation: "HAS_PROPERTY", target: "5 years TypeScript experience", confidence: 0.9 }
-  { entity: "User", relation: "PREFERS", target: "concise answers", confidence: 0.8 }
-
-Example relationship facts:
-  { entity: "User", relation: "NEEDS", target: "to be heard before getting advice", confidence: 0.85 }
-  { entity: "We", relation: "PATTERN", target: "late night conversations", confidence: 0.7 }
-  { entity: "User", relation: "AVOIDS", target: "discussing family conflicts", confidence: 0.6 }
+Important: Multiple values for the same predicate can coexist
+(e.g., liking multiple things). Only mark as "invalidate" when the
+new information genuinely replaces the old (e.g., changing residence).
 ```
 
-## Conflict Resolution
+When a fact is invalidated: `UPDATE semantic_memory SET invalid_at = now() WHERE id = $1`.
 
-When new knowledge contradicts existing knowledge (same entity + relation, different target):
+### Data Flow: Episode → Facts
 
-| Strategy | When to Use |
-|----------|-------------|
-| KeepBoth | Subjective knowledge where multiple views valid |
-| HigherConfidence | Confidence differs significantly (>0.3 gap) |
-| MoreRecent | Temporal knowledge that updates over time (default) |
-| HumanReview | Critical knowledge requiring verification |
+```
+ Event Segmentation creates Episode
+              │
+              ▼
+     Semantic Extraction Job
+              │
+              ├─ 1. LLM: extract facts from episode
+              │     Input: episode summary + messages
+              │     Output: Vec<ExtractedFact>
+              │
+              ├─ 2. For each extracted fact:
+              │     ├─ Embed the `fact` sentence
+              │     ├─ Search for similar existing facts (cosine > 0.95)
+              │     ├─ Match found  → merge source_ids
+              │     └─ No match    → insert new fact
+              │
+              └─ Done
+```
 
-Default: `MoreRecent` — new fact supersedes old fact. The old record is deleted or archived to audit log.
-
-## Retrieval
-
-Semantic memories participate in the unified retrieval pipeline alongside episodic memories.
-
-### Query Classification
+### LLM Extraction Interface
 
 ```rust
-pub async fn retrieve(query: &str, db: &DatabaseConnection) -> Result<RetrievalResult, AppError> {
-    let query_type = classify_query(query);
+#[derive(Debug, Deserialize, JsonSchema)]
+struct SemanticExtractionOutput {
+    pub facts: Vec<ExtractedFact>,
+}
 
-    match query_type {
-        QueryType::Factual => {
-            // Prioritize semantic, include supporting episodes
-            let semantic = SemanticMemory::search(query, db).await?;
-            let supporting = EpisodicMemory::get_by_ids(&semantic.source_episodic_ids, db).await?;
-            Ok(RetrievalResult::Factual { semantic, supporting })
-        }
-        QueryType::Event => {
-            // Pure episodic retrieval
-            let episodic = EpisodicMemory::retrieve(query, limit, None, db).await?;
-            Ok(RetrievalResult::Eventual(episodic))
-        }
-        QueryType::Mixed => {
-            // Both: semantic for facts, episodic for context
-            let semantic = SemanticMemory::search(query, db).await?;
-            let expanded_query = expand_query(query, &semantic);
-            let episodic = EpisodicMemory::retrieve(&expanded_query, limit, None, db).await?;
-            Ok(RetrievalResult::Mixed { semantic, episodic })
-        }
-    }
+#[derive(Debug, Deserialize, JsonSchema)]
+struct ExtractedFact {
+    pub subject: String,
+    pub predicate: String,
+    pub object: String,
+    pub fact: String,  // natural language sentence
 }
 ```
 
-### Search Methods
+**System prompt guidelines**:
 
-1. **Exact match**: `entity + relation` lookup for direct queries ("What language does user prefer?")
-2. **Entity prefix match**: Simple prefix search on entity name for fuzzy matching
+```
+Extract lasting knowledge about the user from this conversation segment.
 
-Results are ranked by `confidence` weighted by `access_count`. More frequently accessed facts surface first.
+Rules:
+1. Only extract long-term facts. Ignore transient states ("I'm hungry now" is NOT a fact).
+2. Use subject-predicate-object format.
+3. Include a natural language `fact` sentence for each triple.
+4. Preferences, habits, personal info, relationships, and significant events are good candidates.
+5. Include "we" facts about the relationship dynamic when relevant.
 
-## System Prompt Integration
-
-Relationship facts are used to personalize the assistant's behavior:
-
-```rust
-pub fn build_system_prompt(facts: &[SemanticMemory]) -> String {
-    let user_facts: Vec<_> = facts.iter()
-        .filter(|f| f.entity == "User")
-        .collect();
-
-    let relationship_facts: Vec<_> = facts.iter()
-        .filter(|f| f.entity == "We" || f.relation == Needs || f.relation == Avoids)
-        .collect();
-
-    format!(r#"
-User profile:
-{}
-
-Our relationship:
-{}
-"#,
-        format_facts(&user_facts),
-        format_facts(&relationship_facts)
-    )
-}
+Recommended predicates (use when applicable, create new ones if needed):
+likes, dislikes, prefers, lives_in, works_at, age_is, name_is,
+is_interested_in, has_experience_with, knows_about,
+communicate_in_style, relationship_is, has_shared_reference, has_routine
 ```
 
-Example output:
+### Retrieval
+
+Semantic memories are returned **separately from episodic memories** in the existing `retrieve_memory` API:
+
+```markdown
+## Known Facts
+- User likes Rust (sources: 3 conversations)
+- User likes TypeScript (sources: 1 conversation)
+- User's cat is named Mochi (sources: 2 conversations)
+- We usually communicate with playful banter (sources: 4 conversations)
+
+## Episodic Memories
+## Memory 1 [rank: 1, score: 0.85]
+...
 ```
-User profile:
-- User is a backend engineer
-- User prefers concise answers
-- User has 3 years Rust experience
 
-Our relationship:
-- User needs validation before advice
-- User avoids discussing salary
-- We have a pattern of late night deep talks
-- We playfully tease each other
-```
+Retrieval: BM25 + vector hybrid search on the `fact` field. Only active facts (`invalid_at IS NULL`) are returned. No FSRS re-ranking — facts don't decay.
 
-## No FSRS for Semantic Memory
+#### API Integration
 
-Semantic Memory does not use FSRS scheduling. Knowledge is not "forgotten" — it is either current or **superseded**:
+No new endpoints. Extend the existing `retrieve_memory` handlers:
 
-- New consistent knowledge → updates confidence, adds source episode
-- New contradictory knowledge → triggers conflict resolution, old fact replaced
-- Unused knowledge → remains available (no decay)
-- Accessed knowledge → `access_count` incremented, `last_accessed_at` updated
+- **`/api/v0/retrieve_memory`** (markdown): Add `## Known Facts` section before episodic memories in `format_tool_result()`
+- **`/api/v0/retrieve_memory/raw`** (JSON): Extend response struct with a `facts: Vec<SemanticFactResult>` field alongside `memories`
 
-Rationale: Factual truth does not decay. Prioritization uses simple access frequency — no complex activation formula needed.
+This follows the principle of least surprise — callers get richer results from the same API.
 
-## Database Schema
+### Database Schema
 
 ```sql
-CREATE TYPE relation_type AS ENUM (
-    'IsA', 'HasProperty', 'RelatedTo', 'PartOf',
-    'Causes', 'UsedFor', 'Prefers',
-    'Needs', 'Avoids', 'Pattern',
-    'Contradicts'
-);
-
 CREATE TABLE semantic_memory (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    entity TEXT NOT NULL,
-    relation relation_type NOT NULL,
-    target TEXT NOT NULL,
-    source_episodic_ids UUID[] NOT NULL,
-    confidence FLOAT NOT NULL CHECK (confidence >= 0 AND confidence <= 1),
-    access_count INTEGER DEFAULT 0,
-    extracted_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    last_accessed_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-
-    UNIQUE(entity, relation, target)
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    subject         TEXT NOT NULL,
+    predicate       TEXT NOT NULL,
+    object          TEXT NOT NULL,
+    fact            TEXT NOT NULL,
+    source_ids      UUID[] NOT NULL DEFAULT '{}',
+    valid_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    invalid_at      TIMESTAMPTZ,
+    embedding       vector(1024) NOT NULL,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX idx_semantic_entity ON semantic_memory(entity);
-CREATE INDEX idx_semantic_triple ON semantic_memory(entity, relation);
+-- Full-text search on natural language fact
+CREATE INDEX idx_semantic_memory_bm25 ON semantic_memory
+    USING bm25 (fact);
+
+-- Vector search on fact embedding
+CREATE INDEX idx_semantic_memory_embedding ON semantic_memory
+    USING hnsw (embedding vector_cosine_ops);
+
+-- Active facts for a subject
+CREATE INDEX idx_semantic_memory_active_subject ON semantic_memory (subject)
+    WHERE invalid_at IS NULL;
 ```
 
-## Implementation Phases
+## Implementation Plan
 
-1. **Phase 1**: Implement SemanticMemory entity, migration, and extraction worker job
-2. **Phase 2**: Integrate into unified retrieval with query classification
+### Phase 1: MVP — Extract, Dedupe, Retrieve
 
-## Dependencies
+- [ ] `semantic_memory` table migration
+- [ ] `plastmem_entities::semantic_memory` entity
+- [ ] `plastmem_core::memory::semantic.rs` — `SemanticFact` struct, CRUD, embedding dedupe
+- [ ] `SemanticExtractionJob` — triggered after episode creation
+- [ ] LLM extraction prompt + `generate_object()` call
+- [ ] `SemanticFact::retrieve()` — hybrid search, filter `invalid_at IS NULL`
+- [ ] Modify `retrieve_memory` API to include semantic memories
+- [ ] Update tool result format
 
-- Episodic Memory `surprise` field (already implemented)
-- `plastmem_ai` structured output for triple extraction
+### Phase 2: Predict-Calibrate + Conflict Resolution
 
-## See Also
+- [ ] Retrieve related existing facts as LLM context during extraction
+- [ ] Extend `ExtractedFact` with `action` field ("new" / "reinforce" / "invalidate")
+- [ ] LLM-based conflict detection (sets `invalid_at` on contradicted facts)
+- [ ] Optional: predicate canonicalization via embedding similarity
+- [ ] Optional: computed confidence score from `source_ids`
+- [ ] Optional: trigger extraction only for high-information episodes
 
-- [Episodic Memory](../architecture/episodic_memory.md) — Source of semantic extractions
+## Scenario Walkthrough
+
+### A. Repeated mention (dedupe works)
+
+```
+Episode 1: "I like Rust"  → extract (user, likes, Rust)
+Episode 5: "I like Rust"  → extract (user, likes, Rust)
+                                 ↓
+                     embedding similarity ~0.98
+                                 ↓
+                  merge source_ids = [ep1, ep5]
+```
+
+### B. Additive preferences (correctly preserved)
+
+```
+Episode 1: "I like Rust"        → (user, likes, Rust)
+Episode 3: "I like TypeScript"  → (user, likes, TypeScript)
+                                       ↓
+                           embedding similarity ~0.85 (< 0.95)
+                                       ↓
+                        both facts coexist ✓
+```
+
+### C. Actual conflict (safe in MVP, resolved in Phase 2)
+
+```
+Episode 1:  "I live in Beijing"  → (user, lives_in, Beijing)
+Episode 10: "I moved to Tokyo"  → (user, lives_in, Tokyo)
+                                       ↓
+                           embedding similarity ~0.80 (< 0.95)
+                                       ↓
+             MVP:     both coexist (safe, no data loss)
+             Phase 2: LLM detects conflict → invalidate Beijing
+```
+
+### D. Correction (object check prevents wrong merge)
+
+```
+Episode 1: "My name is Bob"    → (user, name_is, Bob)
+Episode 3: "Sorry, my name is actually Alice"
+                               → (user, name_is, Alice)
+                                       ↓
+                           embedding similarity ~0.96 (> 0.95)
+                           but object "bob" ≠ "alice"
+                                       ↓
+             Both coexist (not merged)
+             Phase 2: LLM detects correction → invalidate Bob
+```
+
+## Open Questions
+
+2. **Dedupe threshold**: 0.95 is a starting point. Needs empirical validation — too low risks merging distinct facts, too high risks fragmentation.
+3. **Extraction frequency**: Every episode for now. Consider optimizing to high-surprise episodes in Phase 2 if LLM cost becomes a concern.
+
+## References
+
+- [Nemori](https://arxiv.org/abs/2508.03341) — Predict-Calibrate principle
+- [EDC Framework](https://aclanthology.org/2024.findings-naacl.7/) — Extract, Define, Canonicalize
+- [A-MEM](https://arxiv.org/abs/2502.12110) — Zettelkasten-inspired agentic memory
+- [Complementary Learning Systems](https://en.wikipedia.org/wiki/Complementary_learning_systems) — Hippocampus ↔ Neocortex
+
+## What We Don't Do
+
+- **No knowledge graph engine**: Free-form triples stored in Postgres. Subjects/objects can become graph nodes in the future.
+- **No FSRS for facts**: Semantic knowledge doesn't follow forgetting curves.
+- **No predicate enum**: Prompt guidance only. Canonicalization deferred.
+- **No confidence formula**: `source_ids.len()` is sufficient for MVP.
+- **No LLM conflict detection in MVP**: Embedding dedupe only. Contradictions are safe to coexist temporarily.
+- **No procedural memory**: Out of scope for v0.1.0.
