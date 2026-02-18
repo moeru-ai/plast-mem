@@ -234,7 +234,7 @@ async fn append_source_episodic_ids(
     .col_expr(
       semantic_memory::Column::SourceEpisodicIds,
       Expr::cust_with_values(
-        "source_episodic_ids || (SELECT ARRAY_AGG(x) FROM UNNEST($1::uuid[]) AS x)",
+        "source_episodic_ids || ?::uuid[]",
         [Value::Array(
           ArrayType::Uuid,
           Some(Box::new(ids_to_add.into_iter().map(Into::into).collect())),
