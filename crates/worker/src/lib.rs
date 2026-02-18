@@ -11,16 +11,17 @@ use sea_orm::DatabaseConnection;
 pub mod jobs;
 pub use jobs::EventSegmentationJob;
 pub use jobs::MemoryReviewJob;
-pub use jobs::SemanticExtractionJob;
+pub use jobs::SemanticConsolidationJob;
 use jobs::{
-  WorkerError, process_event_segmentation, process_memory_review, process_semantic_extraction,
+  WorkerError, process_event_segmentation, process_memory_review,
+  process_semantic_consolidation,
 };
 
 pub async fn worker(
   db: &DatabaseConnection,
   segmentation_backend: PostgresStorage<EventSegmentationJob>,
   review_backend: PostgresStorage<MemoryReviewJob>,
-  semantic_backend: PostgresStorage<SemanticExtractionJob>,
+  semantic_backend: PostgresStorage<SemanticConsolidationJob>,
 ) -> Result<(), AppError> {
   let db = db.clone();
 
@@ -60,12 +61,12 @@ pub async fn worker(
     .register({
       let db = db.clone();
       move |_run_id| {
-        WorkerBuilder::new("semantic-extraction")
+        WorkerBuilder::new("semantic-consolidation")
           .backend(semantic_backend.clone())
           .enable_tracing()
           .data(db.clone())
           .build(move |job, data| async move {
-            process_semantic_extraction(job, data)
+            process_semantic_consolidation(job, data)
               .await
               .map_err(WorkerError::from)
           })

@@ -4,8 +4,8 @@ pub use event_segmentation::*;
 mod memory_review;
 pub use memory_review::*;
 
-mod semantic_extraction;
-pub use semantic_extraction::*;
+mod semantic_consolidation;
+pub use semantic_consolidation::*;
 
 use plastmem_shared::AppError;
 

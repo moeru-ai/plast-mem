@@ -1,13 +1,16 @@
 use apalis::prelude::TaskSink;
 use apalis_postgres::PostgresStorage;
 use chrono::Utc;
-use plastmem_core::{MessageQueue, SegmentationAction, create_episode, detect_boundary};
+use plastmem_core::{
+  CONSOLIDATION_EPISODE_THRESHOLD, EpisodicMemory, FLASHBULB_SURPRISE_THRESHOLD, MessageQueue,
+  SegmentationAction, create_episode, detect_boundary,
+};
 use plastmem_shared::{AppError, Message};
 use sea_orm::DatabaseConnection;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::{MemoryReviewJob, SemanticExtractionJob};
+use super::{MemoryReviewJob, SemanticConsolidationJob};
 
 // ──────────────────────────────────────────────────
 // Job definition
@@ -28,7 +31,7 @@ pub async fn process_event_segmentation(
   job: EventSegmentationJob,
   db: apalis::prelude::Data<DatabaseConnection>,
   review_storage: apalis::prelude::Data<PostgresStorage<MemoryReviewJob>>,
-  semantic_storage: apalis::prelude::Data<PostgresStorage<SemanticExtractionJob>>,
+  semantic_storage: apalis::prelude::Data<PostgresStorage<SemanticConsolidationJob>>,
 ) -> Result<(), AppError> {
   let db = &*db;
 
@@ -83,7 +86,8 @@ pub async fn process_event_segmentation(
         )
         .await?
         {
-          enqueue_semantic_extraction(job.conversation_id, episode, semantic_storage).await?;
+          enqueue_semantic_consolidation(job.conversation_id, episode, &db, semantic_storage)
+            .await?;
         }
       }
     }
@@ -112,7 +116,8 @@ pub async fn process_event_segmentation(
           )
           .await?
           {
-            enqueue_semantic_extraction(job.conversation_id, episode, semantic_storage).await?;
+            enqueue_semantic_consolidation(job.conversation_id, episode, &db, semantic_storage)
+              .await?;
           }
         }
       } else {
@@ -148,29 +153,41 @@ async fn enqueue_pending_reviews(
   Ok(())
 }
 
-// ──────────────────────────────────────────────────
-// Semantic extraction enqueueing
-// ──────────────────────────────────────────────────
-
-/// Enqueue a SemanticExtractionJob after an episode is created.
-async fn enqueue_semantic_extraction(
+/// Enqueue a SemanticConsolidationJob if threshold is met or it's a flashbulb memory.
+async fn enqueue_semantic_consolidation(
   conversation_id: Uuid,
   episode: plastmem_core::CreatedEpisode,
-  semantic_storage: &PostgresStorage<SemanticExtractionJob>,
+  db: &DatabaseConnection,
+  semantic_storage: &PostgresStorage<SemanticConsolidationJob>,
 ) -> Result<(), AppError> {
-  let job = SemanticExtractionJob {
-    episode_id: episode.id,
-    conversation_id,
-    summary: episode.summary,
-    messages: episode.messages,
-    surprise: episode.surprise,
-  };
-  let mut storage = semantic_storage.clone();
-  storage.push(job).await?;
-  tracing::debug!(
-    episode_id = %episode.id,
-    conversation_id = %conversation_id,
-    "Enqueued semantic extraction job"
-  );
+  // Check if we should trigger consolidation
+  // 1. Flashbulb memory (high surprise) -> immediate force consolidation
+  // 2. Threshold reached (>= 3 unconsolidated episodes) -> standard consolidation
+
+  let is_flashbulb = episode.surprise >= FLASHBULB_SURPRISE_THRESHOLD;
+  let unconsolidated_count = EpisodicMemory::count_unconsolidated(db).await?;
+  let threshold_reached = unconsolidated_count >= CONSOLIDATION_EPISODE_THRESHOLD;
+
+  if is_flashbulb || threshold_reached {
+    let job = SemanticConsolidationJob {
+      conversation_id,
+      force: is_flashbulb,
+    };
+    let mut storage = semantic_storage.clone();
+    storage.push(job).await?;
+    tracing::info!(
+      conversation_id = %conversation_id,
+      unconsolidated_count,
+      is_flashbulb,
+      "Enqueued semantic consolidation job"
+    );
+  } else {
+    tracing::debug!(
+      conversation_id = %conversation_id,
+      unconsolidated_count,
+      "Accumulating episode for later consolidation"
+    );
+  }
+
   Ok(())
 }

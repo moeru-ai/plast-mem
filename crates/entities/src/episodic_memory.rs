@@ -25,6 +25,7 @@ pub struct Model {
   pub end_at: DateTimeWithTimeZone,
   pub created_at: DateTimeWithTimeZone,
   pub last_reviewed_at: DateTimeWithTimeZone,
+  pub consolidated_at: Option<DateTimeWithTimeZone>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

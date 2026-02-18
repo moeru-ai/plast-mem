@@ -137,6 +137,7 @@ pub async fn create_episode(
     end_at,
     created_at: now,
     last_reviewed_at: now,
+    consolidated_at: None,
   };
 
   // Insert into database
