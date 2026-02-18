@@ -32,6 +32,7 @@ pub struct SemanticFact {
   pub invalid_at: Option<DateTime<Utc>>,
   #[serde(skip)]
   pub embedding: PgVector,
+  #[serde(skip)]
   pub created_at: DateTime<Utc>,
 }
 
@@ -267,7 +268,13 @@ async fn upsert_fact(
       similar_count = similar.len(),
       "Merging duplicate semantic fact"
     );
-    append_source_episodic_ids(existing.id, &existing.source_episodic_ids, &[source_episode_id], db).await?;
+    append_source_episodic_ids(
+      existing.id,
+      &existing.source_episodic_ids,
+      &[source_episode_id],
+      db,
+    )
+    .await?;
     return Ok(());
   }
 
