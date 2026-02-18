@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use plastmem_ai::{
   ChatCompletionRequestMessage, ChatCompletionRequestSystemMessage,
-  ChatCompletionRequestUserMessage, embed_batch, generate_object,
+  ChatCompletionRequestUserMessage, embed_many, generate_object,
 };
 use plastmem_entities::semantic_memory;
 use plastmem_shared::{AppError, Message};
@@ -378,7 +378,7 @@ pub async fn process_extraction(
 
   // 4. Batch embed all extracted facts
   let fact_texts: Vec<String> = output.facts.iter().map(|f| f.fact.clone()).collect();
-  let embeddings = embed_batch(&fact_texts).await?;
+  let embeddings = embed_many(&fact_texts).await?;
 
   // 5. Upsert each fact
   for (extracted, embedding) in output.facts.iter().zip(embeddings.into_iter()) {

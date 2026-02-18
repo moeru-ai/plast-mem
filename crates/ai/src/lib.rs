@@ -10,8 +10,8 @@ pub use cosine_similarity::cosine_similarity;
 mod embed;
 pub use embed::embed;
 
-mod embed_batch;
-pub use embed_batch::embed_batch;
+mod embed_many;
+pub use embed_many::embed_many;
 
 mod generate_object;
 pub use generate_object::generate_object;

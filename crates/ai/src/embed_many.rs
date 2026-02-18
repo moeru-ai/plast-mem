@@ -6,7 +6,7 @@ use sea_orm::prelude::PgVector;
 /// Embed multiple texts in a single API call.
 ///
 /// Returns one `PgVector` per input, in the same order.
-pub async fn embed_batch(inputs: &[String]) -> Result<Vec<PgVector>, AppError> {
+pub async fn embed_many(inputs: &[String]) -> Result<Vec<PgVector>, AppError> {
   if inputs.is_empty() {
     return Ok(vec![]);
   }
