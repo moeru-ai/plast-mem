@@ -1,5 +1,5 @@
 use axum::{Json, extract::State};
-use plastmem_core::{DetailLevel, EpisodicMemory, MessageQueue, SemanticFact, format_tool_result};
+use plastmem_core::{DetailLevel, EpisodicMemory, MessageQueue, SemanticMemory, format_tool_result};
 use plastmem_shared::AppError;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -55,17 +55,17 @@ async fn record_pending_review(
 // --- Raw JSON endpoint ---
 
 #[derive(Serialize, ToSchema)]
-pub struct SemanticFactResult {
+pub struct SemanticMemoryResult {
   #[serde(flatten)]
-  pub fact: SemanticFact,
+  pub memory: SemanticMemory,
   /// Cosine similarity score
   pub score: f64,
 }
 
 #[derive(Serialize, ToSchema)]
 pub struct RetrieveMemoryRawResponse {
-  /// Semantic facts (known facts + behavioral guidelines)
-  pub facts: Vec<SemanticFactResult>,
+  /// Semantic memories (known facts + behavioral guidelines)
+  pub facts: Vec<SemanticMemoryResult>,
   /// Episodic memories with scores
   pub memories: Vec<RetrieveMemoryRawResult>,
 }
@@ -98,7 +98,7 @@ pub async fn retrieve_memory_raw(
   }
 
   let (facts_results, episodic_results) = tokio::try_join!(
-    SemanticFact::retrieve(&payload.query, payload.facts_limit, &state.db),
+    SemanticMemory::retrieve(&payload.query, payload.facts_limit, &state.db),
     EpisodicMemory::retrieve(&payload.query, payload.limit, payload.scope, &state.db),
   )?;
 
@@ -108,7 +108,7 @@ pub async fn retrieve_memory_raw(
   let response = RetrieveMemoryRawResponse {
     facts: facts_results
       .into_iter()
-      .map(|(fact, score)| SemanticFactResult { fact, score })
+      .map(|(memory, score)| SemanticMemoryResult { memory, score })
       .collect(),
     memories: episodic_results
       .into_iter()
@@ -141,7 +141,7 @@ pub async fn retrieve_memory(
   }
 
   let (facts_results, episodic_results) = tokio::try_join!(
-    SemanticFact::retrieve(&payload.query, payload.facts_limit, &state.db),
+    SemanticMemory::retrieve(&payload.query, payload.facts_limit, &state.db),
     EpisodicMemory::retrieve(&payload.query, payload.limit, payload.scope, &state.db),
   )?;
 

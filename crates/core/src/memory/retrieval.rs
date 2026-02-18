@@ -6,7 +6,7 @@ use serde::Deserialize;
 use utoipa::ToSchema;
 
 use super::EpisodicMemory;
-use super::SemanticFact;
+use super::SemanticMemory;
 
 #[derive(Debug, Clone, Default, Deserialize, ToSchema)]
 #[serde(rename_all = "lowercase")]
@@ -35,7 +35,7 @@ impl DetailLevel {
 
 #[must_use]
 pub fn format_tool_result(
-  facts: &[(SemanticFact, f64)],
+  facts: &[(SemanticMemory, f64)],
   results: &[(EpisodicMemory, f64)],
   detail: &DetailLevel,
 ) -> String {

@@ -21,7 +21,7 @@ use uuid::Uuid;
 // ──────────────────────────────────────────────────
 
 #[derive(Debug, Serialize, Clone, ToSchema)]
-pub struct SemanticFact {
+pub struct SemanticMemory {
   pub id: Uuid,
   pub subject: String,
   pub predicate: String,
@@ -36,7 +36,7 @@ pub struct SemanticFact {
   pub created_at: DateTime<Utc>,
 }
 
-impl SemanticFact {
+impl SemanticMemory {
   pub fn from_model(model: semantic_memory::Model) -> Self {
     Self {
       id: model.id,
