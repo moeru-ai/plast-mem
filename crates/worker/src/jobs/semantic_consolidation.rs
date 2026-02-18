@@ -27,8 +27,9 @@ pub async fn process_semantic_consolidation(
 ) -> Result<(), AppError> {
   let db = &*db;
 
-  // Fetch unconsolidated episodes
-  let episodes = EpisodicMemory::fetch_unconsolidated(db).await?;
+  // Fetch unconsolidated episodes for this specific conversation
+  let episodes =
+    EpisodicMemory::fetch_unconsolidated_for_conversation(job.conversation_id, db).await?;
 
   if episodes.is_empty() {
     tracing::debug!(

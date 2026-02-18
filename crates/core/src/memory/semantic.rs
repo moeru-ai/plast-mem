@@ -8,7 +8,7 @@ use plastmem_shared::AppError;
 use schemars::JsonSchema;
 use sea_orm::{
   ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, DbBackend, EntityTrait,
-  FromQueryResult, IntoActiveModel, QueryFilter, Statement,
+  FromQueryResult, IntoActiveModel, QueryFilter, Statement, TransactionTrait,
   prelude::{Expr, PgVector},
   sea_query::{ArrayType, Value},
 };
@@ -189,7 +189,7 @@ Predicate taxonomy (use these when applicable; create new ones if needed):
 pub const CONSOLIDATION_EPISODE_THRESHOLD: u64 = 3;
 
 /// Surprise threshold for flashbulb memory — triggers immediate consolidation.
-pub const FLASHBULB_SURPRISE_THRESHOLD: f32 = 0.90;
+pub const FLASHBULB_SURPRISE_THRESHOLD: f32 = 0.85;
 
 // ──────────────────────────────────────────────────
 // Deduplication threshold
@@ -205,10 +205,10 @@ const DEDUPE_THRESHOLD: f64 = 0.95;
 
 /// Find existing active facts similar to the given embedding.
 /// Returns all facts above the similarity threshold, ordered by similarity (highest first).
-async fn find_similar_facts(
+async fn find_similar_facts<C: ConnectionTrait>(
   embedding: &PgVector,
   threshold: f64,
-  db: &DatabaseConnection,
+  db: &C,
 ) -> Result<Vec<semantic_memory::Model>, AppError> {
   let sql = r"
   SELECT
@@ -239,11 +239,11 @@ async fn find_similar_facts(
 
 /// Append source IDs to an existing fact (merge duplicates).
 /// Skips IDs that are already present to avoid duplicates.
-async fn append_source_episodic_ids(
+async fn append_source_episodic_ids<C: ConnectionTrait>(
   fact_id: Uuid,
   existing_source_episodic_ids: &[Uuid],
   new_source_episodic_ids: &[Uuid],
-  db: &DatabaseConnection,
+  db: &C,
 ) -> Result<(), AppError> {
   // Filter out IDs that already exist
   let existing_set: std::collections::HashSet<_> = existing_source_episodic_ids.iter().collect();
@@ -276,7 +276,7 @@ async fn append_source_episodic_ids(
 }
 
 /// Invalidate a fact by setting its `invalid_at` timestamp.
-async fn invalidate_fact(fact_id: Uuid, db: &DatabaseConnection) -> Result<(), AppError> {
+async fn invalidate_fact<C: ConnectionTrait>(fact_id: Uuid, db: &C) -> Result<(), AppError> {
   semantic_memory::Entity::update_many()
     .col_expr(
       semantic_memory::Column::InvalidAt,
@@ -317,12 +317,27 @@ async fn load_related_facts(
 // ──────────────────────────────────────────────────
 
 /// Process a single consolidated fact action.
-async fn process_fact_action(
+/// `valid_existing_ids` contains IDs that were actually presented to the LLM (for hallucination check).
+async fn process_fact_action<C: ConnectionTrait>(
   fact: &ConsolidatedFact,
   embedding: PgVector,
   episode_ids: &[Uuid],
-  db: &DatabaseConnection,
+  valid_existing_ids: &[Uuid],
+  db: &C,
 ) -> Result<(), AppError> {
+  // Validate existing_fact_id if provided
+  let validated_existing_id = fact.existing_fact_id.as_deref()
+    .and_then(|s| Uuid::parse_str(s).ok())
+    .filter(|id| valid_existing_ids.contains(id));
+
+  if fact.existing_fact_id.is_some() && validated_existing_id.is_none() {
+    tracing::warn!(
+      fact = %fact.fact,
+      existing_fact_id = ?fact.existing_fact_id,
+      "LLM returned invalid or hallucinated fact ID, treating as 'new'"
+    );
+  }
+
   match fact.action {
     FactAction::New => {
       // Check for embedding-based duplicates before inserting
@@ -368,7 +383,7 @@ async fn process_fact_action(
     }
 
     FactAction::Reinforce => {
-      if let Some(existing_id) = parse_existing_fact_id(fact) {
+      if let Some(existing_id) = validated_existing_id {
         // Find the existing fact and append source IDs
         if let Some(existing) = semantic_memory::Entity::find_by_id(existing_id)
           .one(db)
@@ -388,11 +403,13 @@ async fn process_fact_action(
             "Reinforced existing semantic fact"
           );
         }
+      } else {
+        tracing::warn!(fact = %fact.fact, "Reinforce action without valid existing_fact_id, skipping");
       }
     }
 
     FactAction::Update => {
-      if let Some(existing_id) = parse_existing_fact_id(fact) {
+      if let Some(existing_id) = validated_existing_id {
         // Invalidate old fact and insert updated version
         invalidate_fact(existing_id, db).await?;
 
@@ -418,11 +435,13 @@ async fn process_fact_action(
           fact = %fact.fact,
           "Updated semantic fact (invalidated old, inserted new)"
         );
+      } else {
+        tracing::warn!(fact = %fact.fact, "Update action without valid existing_fact_id, skipping");
       }
     }
 
     FactAction::Invalidate => {
-      if let Some(existing_id) = parse_existing_fact_id(fact) {
+      if let Some(existing_id) = validated_existing_id {
         invalidate_fact(existing_id, db).await?;
 
         tracing::debug!(
@@ -430,6 +449,8 @@ async fn process_fact_action(
           fact = %fact.fact,
           "Invalidated semantic fact via consolidation"
         );
+      } else {
+        tracing::warn!(fact = %fact.fact, "Invalidate action without valid existing_fact_id, skipping");
       }
     }
   }
@@ -437,13 +458,11 @@ async fn process_fact_action(
   Ok(())
 }
 
-/// Parse the existing_fact_id from a consolidated fact (LLM returns it as String).
-fn parse_existing_fact_id(fact: &ConsolidatedFact) -> Option<Uuid> {
-  fact
-    .existing_fact_id
-    .as_deref()
-    .and_then(|s| Uuid::parse_str(s).ok())
+/// Extract valid fact IDs from loaded existing facts for hallucination checking.
+fn extract_valid_fact_ids(existing_facts: &[SemanticMemory]) -> Vec<Uuid> {
+  existing_facts.iter().map(|f| f.id).collect()
 }
+
 
 // ──────────────────────────────────────────────────
 // End-to-end consolidation pipeline
@@ -457,6 +476,8 @@ fn parse_existing_fact_id(fact: &ConsolidatedFact) -> Option<Uuid> {
 /// 3. Single LLM call → ConsolidationOutput (calibrate — "what changed?")
 /// 4. Process each result: insert/reinforce/update/invalidate
 /// 5. Mark episodes as consolidated
+///
+/// All database operations are wrapped in a transaction for atomicity.
 pub async fn process_consolidation(
   episodes: &[EpisodicMemory],
   db: &DatabaseConnection,
@@ -469,6 +490,7 @@ pub async fn process_consolidation(
 
   // 1. Load related existing facts (the "predict" step)
   let existing_facts = load_related_facts(episodes, 20, db).await?;
+  let valid_fact_ids = extract_valid_fact_ids(&existing_facts);
 
   // 2. Build the consolidation prompt
   let mut existing_facts_section = String::new();
@@ -520,23 +542,28 @@ pub async fn process_consolidation(
     "Semantic consolidation completed"
   );
 
+  // 4-6. All database mutations in a transaction
+  let txn = db.begin().await?;
+
   if output.facts.is_empty() {
-    // No facts to process, but still mark episodes as consolidated
-    EpisodicMemory::mark_consolidated(&episode_ids, db).await?;
+    // No facts to process, just mark episodes as consolidated
+    EpisodicMemory::mark_consolidated(&episode_ids, &txn).await?;
+    txn.commit().await?;
     return Ok(());
   }
 
-  // 4. Batch embed all fact sentences (for new/update facts)
+  // Batch embed all fact sentences (for new/update facts)
   let fact_texts: Vec<String> = output.facts.iter().map(|f| f.fact.clone()).collect();
   let embeddings = embed_many(&fact_texts).await?;
 
-  // 5. Process each consolidated fact
+  // Process each consolidated fact within the transaction
   for (fact, embedding) in output.facts.iter().zip(embeddings.into_iter()) {
-    process_fact_action(fact, embedding, &episode_ids, db).await?;
+    process_fact_action(fact, embedding, &episode_ids, &valid_fact_ids, &txn).await?;
   }
 
-  // 6. Mark episodes as consolidated
-  EpisodicMemory::mark_consolidated(&episode_ids, db).await?;
+  // Mark episodes as consolidated
+  EpisodicMemory::mark_consolidated(&episode_ids, &txn).await?;
 
+  txn.commit().await?;
   Ok(())
 }

@@ -165,7 +165,8 @@ async fn enqueue_semantic_consolidation(
   // 2. Threshold reached (>= 3 unconsolidated episodes) -> standard consolidation
 
   let is_flashbulb = episode.surprise >= FLASHBULB_SURPRISE_THRESHOLD;
-  let unconsolidated_count = EpisodicMemory::count_unconsolidated(db).await?;
+  let unconsolidated_count =
+    EpisodicMemory::count_unconsolidated_for_conversation(conversation_id, db).await?;
   let threshold_reached = unconsolidated_count >= CONSOLIDATION_EPISODE_THRESHOLD;
 
   if is_flashbulb || threshold_reached {

@@ -5,8 +5,8 @@ use plastmem_entities::episodic_memory;
 use plastmem_shared::{AppError, Message};
 
 use sea_orm::{
-  ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, DbBackend, EntityTrait,
-  FromQueryResult, QueryFilter, QueryOrder, Set, Statement, prelude::PgVector,
+  ColumnTrait, ConnectionTrait, DatabaseConnection, DbBackend, EntityTrait, FromQueryResult,
+  QueryFilter, QueryOrder, Statement, prelude::{Expr, PgVector},
 };
 use serde::Serialize;
 use utoipa::ToSchema;
@@ -71,43 +71,61 @@ impl EpisodicMemory {
     })
   }
 
-  /// Count episodes that haven't been consolidated into semantic memory yet.
-  pub async fn count_unconsolidated(db: &DatabaseConnection) -> Result<u64, AppError> {
+  /// Count unconsolidated episodes for a specific conversation.
+  pub async fn count_unconsolidated_for_conversation(
+    conversation_id: Uuid,
+    db: &DatabaseConnection,
+  ) -> Result<u64, AppError> {
     use sea_orm::PaginatorTrait;
     let count = episodic_memory::Entity::find()
       .filter(episodic_memory::Column::ConsolidatedAt.is_null())
+      .filter(episodic_memory::Column::ConversationId.eq(conversation_id))
       .count(db)
       .await?;
     Ok(count)
   }
 
-  /// Fetch all unconsolidated episodes, ordered by creation time (oldest first).
-  pub async fn fetch_unconsolidated(
+  /// Fetch unconsolidated episodes for a specific conversation.
+  pub async fn fetch_unconsolidated_for_conversation(
+    conversation_id: Uuid,
     db: &DatabaseConnection,
   ) -> Result<Vec<Self>, AppError> {
     let models = episodic_memory::Entity::find()
       .filter(episodic_memory::Column::ConsolidatedAt.is_null())
+      .filter(episodic_memory::Column::ConversationId.eq(conversation_id))
       .order_by_asc(episodic_memory::Column::CreatedAt)
       .all(db)
       .await?;
     models.into_iter().map(Self::from_model).collect()
   }
 
-  /// Mark the given episodes as consolidated.
-  pub async fn mark_consolidated(
+  /// Mark the given episodes as consolidated (bulk update).
+  pub async fn mark_consolidated<C: ConnectionTrait>(
     ids: &[Uuid],
-    db: &DatabaseConnection,
+    db: &C,
   ) -> Result<(), AppError> {
-    let now: sea_orm::prelude::DateTimeWithTimeZone = Utc::now().into();
-    for &id in ids {
-      let mut active: episodic_memory::ActiveModel = episodic_memory::Entity::find_by_id(id)
-        .one(db)
-        .await?
-        .ok_or_else(|| AppError::new(anyhow::anyhow!("Episode {id} not found")))?
-        .into();
-      active.consolidated_at = Set(Some(now));
-      active.update(db).await?;
+    use sea_orm::sea_query::Value as SeaValue;
+
+    if ids.is_empty() {
+      return Ok(());
     }
+
+    let now: sea_orm::prelude::DateTimeWithTimeZone = Utc::now().into();
+
+    // Bulk update: UPDATE episodic_memory SET consolidated_at = now WHERE id = ANY(ids)
+    episodic_memory::Entity::update_many()
+      .col_expr(
+        episodic_memory::Column::ConsolidatedAt,
+        Expr::value(now),
+      )
+      .filter(
+        episodic_memory::Column::Id.is_in(
+          ids.iter().copied().map(SeaValue::from).collect::<Vec<_>>()
+        )
+      )
+      .exec(db)
+      .await?;
+
     Ok(())
   }
 
