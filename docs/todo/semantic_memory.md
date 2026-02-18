@@ -68,20 +68,22 @@ pub struct SemanticMemory {
     pub fact: String,          // "User lives in Tokyo"
 
     // ── Provenance ──
-    pub source_ids: Vec<Uuid>, // source episode IDs (length = implicit confidence)
+    pub source_episodic_ids: Vec<Uuid>, // source episode IDs (length = implicit confidence)
 
     // ── Bitemporal ──
     pub valid_at: DateTime<Utc>,            // Utc::now() at creation
     pub invalid_at: Option<DateTime<Utc>>,  // Utc::now() when invalidated (NULL = active)
 
     // ── Indexing ──
+    #[serde(skip)]
     pub embedding: PgVector,   // embedding of `fact`
-    pub created_at: DateTime<Utc>,
+    #[serde(skip)]
+    pub created_at: DateTime<Utc>, // system timestamp, not exposed in API
 }
 ```
 
 > [!NOTE]
-> No explicit `confidence` field. The length of `source_ids` serves as a natural confidence proxy — a fact mentioned in 5 episodes is more reliable than one mentioned in 1. A computed confidence score can be added in a later version if needed.
+> No explicit `confidence` field. The length of `source_episodic_ids` serves as a natural confidence proxy — a fact mentioned in 5 episodes is more reliable than one mentioned in 1. A computed confidence score can be added in a later version if needed.
 
 ### Why Both Triple AND Natural Language Sentence?
 
@@ -162,19 +164,25 @@ In MVP (Phase 1), both facts simply coexist. `invalid_at` is only set in Phase 2
 #### Phase 1 (MVP): Embedding-Based Dedupe Only
 
 ```rust
-async fn upsert_fact(new_fact: ExtractedFact, db: &DatabaseConnection) {
-    // 1. Find highly similar existing facts (strict threshold)
-    let similar = find_similar_facts(&new_fact.embedding, 0.95, db).await;
+async fn upsert_fact(extracted: &ExtractedFact, embedding: PgVector, source_episode_id: Uuid, db: &DatabaseConnection) {
+    // 1. Find highly similar existing facts (strict threshold, up to 5)
+    let similar = find_similar_facts(&embedding, 0.95, db).await?;
 
+    // 2. If any similar facts found, merge into the most similar one
     if let Some(existing) = similar.first() {
-        // True duplicate: merge source_ids
-        append_source_ids(existing.id, &new_fact.source_ids, db).await;
+        // True duplicate: merge source_episodic_ids (idempotent)
+        append_source_episodic_ids(
+            existing.id,
+            &existing.source_episodic_ids,
+            &[source_episode_id],
+            db
+        ).await?;
         return;
     }
 
-    // 2. No match → insert as new fact
+    // 3. No match → insert as new fact
     // Even if it might contradict an existing fact (MVP accepts this)
-    insert_fact(new_fact, db).await;
+    insert_fact(extracted, embedding, db).await?;
 }
 ```
 
@@ -214,26 +222,19 @@ The extraction job adapts its behavior based on the episode's surprise score. Th
               │
               ├─ 1. Check episode surprise score
               │     ├─ surprise < 0.85: standard extraction
-              │     ├─ surprise ≥ 0.85: deep extraction (more thorough prompt)
-              │     └─ surprise ≥ 0.90: deep extraction + surprise_explanation
+              │     └─ surprise ≥ 0.85: deep extraction (more thorough prompt)
               │
               ├─ 2. LLM: extract facts from episode
               │     Input: episode summary + messages + surprise level
               │     Output: SemanticExtractionOutput
-              │       ├─ facts: Vec<ExtractedFact>
-              │       └─ surprise_explanation: Option<String> (if surprise ≥ 0.90)
+              │       └─ facts: Vec<ExtractedFact>
               │
               ├─ 3. Batch embed all extracted facts (single API call)
               │
-              ├─ 4. For each extracted fact:
-              │     ├─ Search for similar existing facts (cosine > 0.95)
-              │     ├─ Match found  → merge source_ids
-              │     └─ No match    → insert new fact
-              │
-              ├─ 5. If surprise_explanation exists:
-              │     └─ Store on episode (episodic_memory.surprise_explanation)
-              │
-              └─ Done
+              └─ 4. For each extracted fact:
+                    ├─ Search for similar existing facts (cosine > 0.95)
+                    ├─ Match found  → merge source_episodic_ids
+                    └─ No match    → insert new fact
 ```
 
 > [!NOTE]
@@ -247,10 +248,6 @@ The extraction job adapts its behavior based on the episode's surprise score. Th
 #[derive(Debug, Deserialize, JsonSchema)]
 struct SemanticExtractionOutput {
     pub facts: Vec<ExtractedFact>,
-
-    /// Only populated when surprise ≥ 0.90.
-    /// Explains why this episode was surprising and what prediction failed.
-    pub surprise_explanation: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -295,13 +292,12 @@ Predicate taxonomy (use these when applicable; use "other" for novel predicates)
 > Grouping predicates into a taxonomy in the prompt reduces fragmentation (LLMs produce more consistent output when given categorical structure). This is a prompt-only convention — no runtime enforcement.
 
 > [!NOTE]
-> For high-surprise episodes (≥ 0.90), the prompt is extended with:
+> For high-surprise episodes (≥ 0.85), the prompt is extended with:
 > ```
-> This episode had a surprise score of {surprise}/1.0, indicating it significantly
-> diverged from expectations. In addition to extracting facts, provide a brief
-> `surprise_explanation`: why was this surprising? What assumption was challenged?
+> This episode had a surprise score of {surprise}/1.0.
+> Extract facts more thoroughly — pay attention to novel or unexpected information.
 > ```
-> This replaces the need for a dedicated Surprise Analysis Job.
+> Note: `surprise_explanation` was considered but removed in Phase 1 to keep the API simple.
 
 ### Procedural Memory via Semantic Facts
 
@@ -346,7 +342,24 @@ Presentation-time separation: facts where `subject = "assistant"` with procedura
 No new endpoints. Extend the existing `retrieve_memory` handlers:
 
 - **`/api/v0/retrieve_memory`** (markdown): Add `## Known Facts` and `## Behavioral Guidelines` sections before episodic memories in `format_tool_result()`
-- **`/api/v0/retrieve_memory/raw`** (JSON): Extend response struct with `facts: Vec<SemanticFactResult>` and `guidelines: Vec<SemanticFactResult>` alongside `memories`
+- **`/api/v0/retrieve_memory/raw`** (JSON): Extend response struct with `facts: Vec<SemanticMemoryResult>` alongside `memories`
+
+Response structure:
+```rust
+pub struct RetrieveMemoryRawResponse {
+    /// Semantic memories (known facts + behavioral guidelines)
+    pub facts: Vec<SemanticMemoryResult>,
+    /// Episodic memories with scores
+    pub memories: Vec<RetrieveMemoryRawResult>,
+}
+
+pub struct SemanticMemoryResult {
+    #[serde(flatten)]
+    pub memory: SemanticMemory,
+    /// Cosine similarity score
+    pub score: f64,
+}
+```
 
 This follows the principle of least surprise — callers get richer results from the same API.
 
@@ -354,16 +367,16 @@ This follows the principle of least surprise — callers get richer results from
 
 ```sql
 CREATE TABLE semantic_memory (
-    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    subject         TEXT NOT NULL,
-    predicate       TEXT NOT NULL,
-    object          TEXT NOT NULL,
-    fact            TEXT NOT NULL,
-    source_ids      UUID[] NOT NULL DEFAULT '{}',
-    valid_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
-    invalid_at      TIMESTAMPTZ,
-    embedding       vector(1024) NOT NULL,
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+    id                   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    subject              TEXT NOT NULL,
+    predicate            TEXT NOT NULL,
+    object               TEXT NOT NULL,
+    fact                 TEXT NOT NULL,
+    source_episodic_ids  UUID[] NOT NULL DEFAULT '{}',
+    valid_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+    invalid_at           TIMESTAMPTZ,
+    embedding            vector(1024) NOT NULL,
+    created_at           TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 -- Vector search on fact embedding
@@ -379,18 +392,17 @@ CREATE INDEX idx_semantic_memory_active_subject ON semantic_memory (subject)
 
 ### Phase 1: MVP — Extract, Dedupe, Retrieve
 
-- [ ] `semantic_memory` table migration
-- [ ] `plastmem_entities::semantic_memory` entity
-- [ ] `plastmem_core::memory::semantic.rs` — `SemanticFact` struct, CRUD, embedding dedupe
-- [ ] `SemanticExtractionJob` — triggered after episode creation
-  - [ ] Extraction gating: skip low-information episodes (short content + low surprise)
-  - [ ] Batch embedding: embed all extracted facts in a single API call
-- [ ] LLM extraction prompt (with predicate taxonomy + procedural category) + `generate_object()` call
-- [ ] Surprise-aware extraction: deeper prompt for surprise ≥ 0.85, `surprise_explanation` for ≥ 0.90
-- [ ] Add `surprise_explanation: Option<String>` column to `episodic_memory`
-- [ ] `SemanticFact::retrieve()` — vector-only search, filter `invalid_at IS NULL`
-- [ ] Modify `retrieve_memory` API: add `## Known Facts` + `## Behavioral Guidelines` sections
-- [ ] Update tool result format (presentation-time filter on `subject = "assistant"`)
+- [x] `semantic_memory` table migration
+- [x] `plastmem_entities::semantic_memory` entity
+- [x] `plastmem_core::memory::semantic.rs` — `SemanticMemory` struct, CRUD, embedding dedupe
+- [x] `SemanticExtractionJob` — triggered after episode creation
+  - [x] Extraction gating: skip low-information episodes (short content + low surprise)
+  - [x] Batch embedding: embed all extracted facts in a single API call
+- [x] LLM extraction prompt (with predicate taxonomy + procedural category) + `generate_object()` call
+- [x] Surprise-aware extraction: deeper prompt for surprise ≥ 0.85
+- [x] `SemanticMemory::retrieve()` — vector-only search, filter `invalid_at IS NULL`
+- [x] Modify `retrieve_memory` API: add `## Known Facts` + `## Behavioral Guidelines` sections
+- [x] Update tool result format (presentation-time filter on `subject = "assistant"`)
 
 ### Phase 2: Predict-Calibrate + Conflict Resolution (incorporates Surprise Response)
 
@@ -402,7 +414,7 @@ CREATE INDEX idx_semantic_memory_active_subject ON semantic_memory (subject)
 - [ ] LLM-based conflict detection (sets `invalid_at` on contradicted facts)
 - [ ] For high-surprise episodes: LLM identifies which existing beliefs are challenged → `invalidate`
 - [ ] Optional: predicate canonicalization via embedding similarity
-- [ ] Optional: computed confidence score from `source_ids`
+- [ ] Optional: computed confidence score from `source_episodic_ids`
 
 ## Scenario Walkthrough
 
@@ -414,7 +426,7 @@ Episode 5: "I like Rust"  → extract (user, likes, Rust)
                                  ↓
                      embedding similarity ~0.98
                                  ↓
-                  merge source_ids = [ep1, ep5]
+                  merge source_episodic_ids = [ep1, ep5]
 ```
 
 ### B. Additive preferences (correctly preserved)
@@ -475,7 +487,7 @@ Episode 3: "Sorry, my name is actually Alice"
 - **No BM25 for facts**: Facts are short sentences where TF-IDF adds no value. Vector-only search is sufficient and simpler.
 - **No FSRS for facts**: Semantic knowledge doesn't follow forgetting curves.
 - **No predicate enum**: Prompt-level taxonomy guidance only. Runtime canonicalization deferred.
-- **No confidence formula**: `source_ids.len()` is sufficient for MVP.
+- **No confidence formula**: `source_episodic_ids.len()` is sufficient for MVP.
 - **No LLM conflict detection in MVP**: Embedding dedupe only. Contradictions are safe to coexist temporarily.
 - **No separate procedural memory table**: Procedural rules reuse semantic memory with `subject = "assistant"` convention.
 - **No separate Surprise Response system**: Surprise-aware behavior is folded into `SemanticExtractionJob` (surprise → deeper extraction + explanation), not a standalone job.

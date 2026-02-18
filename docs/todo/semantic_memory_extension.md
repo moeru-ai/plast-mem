@@ -460,7 +460,7 @@ pub async fn get_facts_with_inferences(
 
 | Rule Type | Base Confidence | Notes |
 |-----------|----------------|-------|
-| Direct fact | 1.0 | From source_ids count |
+| Direct fact | 1.0 | From source_episodic_ids count |
 | TransitiveLocation | 0.85 | Reliable for admin boundaries |
 | TemporalChain | 0.75 | Each hop reduces confidence |
 | CategoryPreference | 0.60 | Preferences don't always generalize |
