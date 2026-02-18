@@ -174,6 +174,7 @@ const DEDUPE_THRESHOLD: f64 = 0.95;
 // ──────────────────────────────────────────────────
 
 /// Find existing active facts similar to the given embedding.
+/// Returns all facts above the similarity threshold, ordered by similarity (highest first).
 async fn find_similar_facts(
   embedding: &PgVector,
   threshold: f64,
@@ -188,7 +189,7 @@ async fn find_similar_facts(
   WHERE invalid_at IS NULL
     AND 1 - (embedding <=> $1) > $2
   ORDER BY similarity DESC
-  LIMIT 1;
+  LIMIT 5;
   ";
 
   let stmt = Statement::from_sql_and_values(
@@ -207,24 +208,46 @@ async fn find_similar_facts(
 }
 
 /// Append source IDs to an existing fact (merge duplicates).
+/// Skips IDs that are already present to avoid duplicates.
 async fn append_source_ids(
   fact_id: Uuid,
+  existing_source_ids: &[Uuid],
   new_source_ids: &[Uuid],
   db: &DatabaseConnection,
 ) -> Result<(), AppError> {
-  // Use raw SQL for array concatenation to avoid loading + saving the full array
-  let source_ids_array: Vec<String> = new_source_ids.iter().map(|id| format!("'{id}'")).collect();
-  let sql = format!(
-    "UPDATE semantic_memory SET source_ids = source_ids || ARRAY[{}]::uuid[] WHERE id = $1",
-    source_ids_array.join(", ")
-  );
+  // Filter out IDs that already exist
+  let existing_set: std::collections::HashSet<_> = existing_source_ids.iter().collect();
+  let ids_to_add: Vec<_> = new_source_ids
+    .iter()
+    .filter(|id| !existing_set.contains(id))
+    .copied()
+    .collect();
 
-  let stmt = Statement::from_sql_and_values(DbBackend::Postgres, &sql, vec![fact_id.into()]);
+  if ids_to_add.is_empty() {
+    return Ok(());
+  }
+
+  // Build parameterized query: UNNEST($2::uuid[]) for safe array handling
+  let sql = r#"
+    UPDATE semantic_memory
+    SET source_ids = source_ids || (SELECT ARRAY_AGG(x) FROM UNNEST($2::uuid[]) AS x)
+    WHERE id = $1
+  "#;
+
+  let stmt = Statement::from_sql_and_values(
+    DbBackend::Postgres,
+    sql,
+    vec![
+      fact_id.into(),
+      sea_orm::Value::Array(sea_orm::sea_query::ArrayType::Uuid, Some(Box::new(ids_to_add.into_iter().map(Into::into).collect()))),
+    ],
+  );
   db.execute_raw(stmt).await?;
   Ok(())
 }
 
 /// Upsert a fact: deduplicate by embedding similarity, merge source_ids or insert new.
+/// When multiple similar facts exist, merges into the most similar one.
 async fn upsert_fact(
   extracted: &ExtractedFact,
   embedding: PgVector,
@@ -234,18 +257,20 @@ async fn upsert_fact(
   // 1. Find highly similar existing facts (strict threshold)
   let similar = find_similar_facts(&embedding, DEDUPE_THRESHOLD, db).await?;
 
+  // 2. If any similar facts found, merge source_ids into the most similar one
+  // The results are already ordered by similarity DESC
   if let Some(existing) = similar.first() {
-    // True duplicate: merge source_ids
     tracing::debug!(
       existing_id = %existing.id,
       fact = %extracted.fact,
+      similar_count = similar.len(),
       "Merging duplicate semantic fact"
     );
-    append_source_ids(existing.id, &[source_episode_id], db).await?;
+    append_source_ids(existing.id, &existing.source_ids, &[source_episode_id], db).await?;
     return Ok(());
   }
 
-  // 2. No match → insert as new fact
+  // 3. No match → insert as new fact
   let now = Utc::now();
   let model = semantic_memory::ActiveModel {
     id: Set(Uuid::now_v7()),
