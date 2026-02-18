@@ -15,7 +15,7 @@ pub struct Model {
   pub object: String,
   #[sea_orm(column_type = "Text")]
   pub fact: String,
-  pub source_ids: Vec<Uuid>,
+  pub source_episodic_ids: Vec<Uuid>,
   pub valid_at: DateTimeWithTimeZone,
   pub invalid_at: Option<DateTimeWithTimeZone>,
   pub embedding: PgVector,

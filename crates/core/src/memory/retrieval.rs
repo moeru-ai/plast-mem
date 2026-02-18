@@ -48,7 +48,7 @@ pub fn format_tool_result(
   if !known.is_empty() {
     let _ = writeln!(out, "## Known Facts");
     for (fact, _score) in &known {
-      let sources = fact.source_ids.len();
+      let sources = fact.source_episodic_ids.len();
       let _ = writeln!(
         out,
         "- {} (sources: {} conversation{})",
@@ -63,7 +63,7 @@ pub fn format_tool_result(
   if !behavioral.is_empty() {
     let _ = writeln!(out, "## Behavioral Guidelines");
     for (fact, _score) in &behavioral {
-      let sources = fact.source_ids.len();
+      let sources = fact.source_episodic_ids.len();
       let _ = writeln!(
         out,
         "- {} (sources: {} conversation{})",

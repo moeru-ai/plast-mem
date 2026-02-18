@@ -27,7 +27,7 @@ pub struct SemanticFact {
   pub predicate: String,
   pub object: String,
   pub fact: String,
-  pub source_ids: Vec<Uuid>,
+  pub source_episodic_ids: Vec<Uuid>,
   pub valid_at: DateTime<Utc>,
   pub invalid_at: Option<DateTime<Utc>>,
   #[serde(skip)]
@@ -43,7 +43,7 @@ impl SemanticFact {
       predicate: model.predicate,
       object: model.object,
       fact: model.fact,
-      source_ids: model.source_ids,
+      source_episodic_ids: model.source_episodic_ids,
       valid_at: model.valid_at.with_timezone(&Utc),
       invalid_at: model.invalid_at.map(|dt| dt.with_timezone(&Utc)),
       embedding: model.embedding,
@@ -71,7 +71,7 @@ impl SemanticFact {
 
     let sql = r"
     SELECT
-      id, subject, predicate, object, fact, source_ids,
+      id, subject, predicate, object, fact, source_episodic_ids,
       valid_at, invalid_at, embedding, created_at,
       1 - (embedding <=> $1) AS score
     FROM semantic_memory
@@ -184,7 +184,7 @@ async fn find_similar_facts(
 ) -> Result<Vec<semantic_memory::Model>, AppError> {
   let sql = r"
   SELECT
-    id, subject, predicate, object, fact, source_ids,
+    id, subject, predicate, object, fact, source_episodic_ids,
     valid_at, invalid_at, embedding, created_at,
     1 - (embedding <=> $1) AS similarity
   FROM semantic_memory
@@ -211,15 +211,15 @@ async fn find_similar_facts(
 
 /// Append source IDs to an existing fact (merge duplicates).
 /// Skips IDs that are already present to avoid duplicates.
-async fn append_source_ids(
+async fn append_source_episodic_ids(
   fact_id: Uuid,
-  existing_source_ids: &[Uuid],
-  new_source_ids: &[Uuid],
+  existing_source_episodic_ids: &[Uuid],
+  new_source_episodic_ids: &[Uuid],
   db: &DatabaseConnection,
 ) -> Result<(), AppError> {
   // Filter out IDs that already exist
-  let existing_set: std::collections::HashSet<_> = existing_source_ids.iter().collect();
-  let ids_to_add: Vec<_> = new_source_ids
+  let existing_set: std::collections::HashSet<_> = existing_source_episodic_ids.iter().collect();
+  let ids_to_add: Vec<_> = new_source_episodic_ids
     .iter()
     .filter(|id| !existing_set.contains(id))
     .copied()
@@ -231,9 +231,9 @@ async fn append_source_ids(
 
   semantic_memory::Entity::update_many()
     .col_expr(
-      semantic_memory::Column::SourceIds,
+      semantic_memory::Column::SourceEpisodicIds,
       Expr::cust_with_values(
-        "source_ids || (SELECT ARRAY_AGG(x) FROM UNNEST($1::uuid[]) AS x)",
+        "source_episodic_ids || (SELECT ARRAY_AGG(x) FROM UNNEST($1::uuid[]) AS x)",
         [Value::Array(
           ArrayType::Uuid,
           Some(Box::new(ids_to_add.into_iter().map(Into::into).collect())),
@@ -247,7 +247,7 @@ async fn append_source_ids(
   Ok(())
 }
 
-/// Upsert a fact: deduplicate by embedding similarity, merge source_ids or insert new.
+/// Upsert a fact: deduplicate by embedding similarity, merge source_episodic_ids or insert new.
 /// When multiple similar facts exist, merges into the most similar one.
 async fn upsert_fact(
   extracted: &ExtractedFact,
@@ -258,7 +258,7 @@ async fn upsert_fact(
   // 1. Find highly similar existing facts (strict threshold)
   let similar = find_similar_facts(&embedding, DEDUPE_THRESHOLD, db).await?;
 
-  // 2. If any similar facts found, merge source_ids into the most similar one
+  // 2. If any similar facts found, merge source_episodic_ids into the most similar one
   // The results are already ordered by similarity DESC
   if let Some(existing) = similar.first() {
     tracing::debug!(
@@ -267,7 +267,7 @@ async fn upsert_fact(
       similar_count = similar.len(),
       "Merging duplicate semantic fact"
     );
-    append_source_ids(existing.id, &existing.source_ids, &[source_episode_id], db).await?;
+    append_source_episodic_ids(existing.id, &existing.source_episodic_ids, &[source_episode_id], db).await?;
     return Ok(());
   }
 
@@ -280,7 +280,7 @@ async fn upsert_fact(
     predicate: extracted.predicate.clone(),
     object: extracted.object.clone(),
     fact: extracted.fact.clone(),
-    source_ids: vec![source_episode_id],
+    source_episodic_ids: vec![source_episode_id],
     valid_at: now.into(),
     invalid_at: None,
     embedding,
