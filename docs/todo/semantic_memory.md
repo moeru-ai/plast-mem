@@ -26,7 +26,7 @@ We moved from immediate per-episode extraction to a **batch consolidation** mode
 ### Consolidation Triggers
 
 1.  **Threshold Trigger**: Consolidate when **3 unconsolidated episodes** accumulate.
-2.  **Flashbulb Trigger**: Consolidate **immediately** if an episode has surprise ≥ 0.90.
+2.  **Flashbulb Trigger**: Consolidate **immediately** if an episode has surprise ≥ 0.85.
 
 ### The Predict-Calibrate Loop
 
@@ -63,10 +63,10 @@ Event Segmentation -> Episode Created
        v
 Check Consolidation Triggers
        |
-       +-> If Threshold < 3 AND Surprise < 0.90:
+       +-> If Threshold < 3 AND Surprise < 0.85:
        |      Accumulate (Do nothing)
        |
-       +-> If Threshold >= 3 OR Surprise >= 0.90:
+       +-> If Threshold >= 3 OR Surprise >= 0.85:
               Trigger SemanticConsolidationJob
                        |
                        v
