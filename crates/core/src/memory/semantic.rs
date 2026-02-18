@@ -7,8 +7,8 @@ use plastmem_entities::semantic_memory;
 use plastmem_shared::{AppError, Message};
 use schemars::JsonSchema;
 use sea_orm::{
-  ConnectionTrait, DatabaseConnection, DbBackend, EntityTrait, FromQueryResult, Set, Statement,
-  prelude::PgVector,
+  ActiveModelTrait, ConnectionTrait, DatabaseConnection, DbBackend, FromQueryResult,
+  IntoActiveModel, Statement, prelude::PgVector,
 };
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -239,7 +239,10 @@ async fn append_source_ids(
     sql,
     vec![
       fact_id.into(),
-      sea_orm::Value::Array(sea_orm::sea_query::ArrayType::Uuid, Some(Box::new(ids_to_add.into_iter().map(Into::into).collect()))),
+      sea_orm::Value::Array(
+        sea_orm::sea_query::ArrayType::Uuid,
+        Some(Box::new(ids_to_add.into_iter().map(Into::into).collect())),
+      ),
     ],
   );
   db.execute_raw(stmt).await?;
@@ -271,21 +274,22 @@ async fn upsert_fact(
   }
 
   // 3. No match → insert as new fact
+  let id = Uuid::now_v7();
   let now = Utc::now();
-  let model = semantic_memory::ActiveModel {
-    id: Set(Uuid::now_v7()),
-    subject: Set(extracted.subject.clone()),
-    predicate: Set(extracted.predicate.clone()),
-    object: Set(extracted.object.clone()),
-    fact: Set(extracted.fact.clone()),
-    source_ids: Set(vec![source_episode_id]),
-    valid_at: Set(now.into()),
-    invalid_at: Set(None),
-    embedding: Set(embedding),
-    created_at: Set(now.into()),
+  let model = semantic_memory::Model {
+    id,
+    subject: extracted.subject.clone(),
+    predicate: extracted.predicate.clone(),
+    object: extracted.object.clone(),
+    fact: extracted.fact.clone(),
+    source_ids: vec![source_episode_id],
+    valid_at: now.into(),
+    invalid_at: None,
+    embedding,
+    created_at: now.into(),
   };
 
-  semantic_memory::Entity::insert(model).exec(db).await?;
+  model.into_active_model().insert(db).await?;
 
   tracing::debug!(
     fact = %extracted.fact,
