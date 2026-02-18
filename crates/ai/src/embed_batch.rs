@@ -6,7 +6,7 @@ use sea_orm::prelude::PgVector;
 /// Embed multiple texts in a single API call.
 ///
 /// Returns one `PgVector` per input, in the same order.
-pub async fn embed_batch(inputs: &Vec<String>) -> Result<Vec<PgVector>, AppError> {
+pub async fn embed_batch(inputs: &[String]) -> Result<Vec<PgVector>, AppError> {
   if inputs.is_empty() {
     return Ok(vec![]);
   }
@@ -19,7 +19,7 @@ pub async fn embed_batch(inputs: &Vec<String>) -> Result<Vec<PgVector>, AppError
 
   let request = CreateEmbeddingRequestArgs::default()
     .model(&APP_ENV.openai_embedding_model)
-    .input(inputs)
+    .input(inputs.to_vec())
     .dimensions(1024u32)
     .build()?;
 
