@@ -2,6 +2,11 @@
 
 Phase 2+ enhancements for the semantic memory system.
 
+> **Architecture Note**: This document has been updated to align with the current batch-consolidation architecture (`SemanticConsolidationJob`) rather than the deprecated per-episode extraction model. Key changes:
+> - Semantic Note generation triggers after batch consolidation
+> - Adaptive threshold is per-conversation (not per-user)
+> - Flashbulb detection uses relative surprise (mean + 2σ) rather than fixed thresholds
+
 ---
 
 ## 1. Semantic Note
@@ -206,12 +211,12 @@ baseline 0.7 will rarely trigger deep extraction.
 
 ### 2.2 Design
 
-Per-user surprise profile with sliding window statistics:
+Per-conversation surprise profile with sliding window statistics:
 
 ```rust
 // plastmem_entities/src/surprise_profile.rs
 pub struct SurpriseProfile {
-    pub user_id: String,
+    pub conversation_id: Uuid,
 
     // Sliding window (last N episodes, default: 100)
     pub window_size: usize,
@@ -222,8 +227,7 @@ pub struct SurpriseProfile {
     pub std: f32,
 
     // Computed thresholds
-    pub deep_extraction_threshold: f32,
-    pub explanation_threshold: f32,
+    pub flashbulb_threshold: f32,
 
     pub updated_at: DateTime<Utc>,
 }
@@ -246,11 +250,10 @@ impl SurpriseProfile {
             .sum::<f32>() / n;
         self.std = variance.sqrt();
 
-        // Thresholds: mean + k*std, with floor values
-        self.deep_extraction_threshold =
-            (self.mean + 0.5 * self.std).max(0.70);
-        self.explanation_threshold =
-            (self.mean + 1.0 * self.std).max(0.80);
+        // Flashbulb threshold: mean + 2*std (significant deviation)
+        // With hard bounds to prevent extremes
+        self.flashbulb_threshold =
+            (self.mean + 2.0 * self.std).clamp(0.75, 0.95);
     }
 }
 ```
@@ -259,16 +262,15 @@ impl SurpriseProfile {
 
 ```rust
 impl SurpriseProfile {
-    pub fn new(user_id: &str) -> Self {
+    pub fn new(conversation_id: Uuid) -> Self {
         Self {
-            user_id: user_id.to_string(),
+            conversation_id,
             window_size: 100,
             scores: VecDeque::new(),
             mean: 0.5,
             std: 0.2,
-            // Start with global defaults
-            deep_extraction_threshold: 0.85,
-            explanation_threshold: 0.90,
+            // Start with global defaults (will be replaced as we gather data)
+            flashbulb_threshold: FLASHBULB_SURPRISE_THRESHOLD, // 0.85
             updated_at: Utc::now(),
         }
     }
@@ -278,42 +280,63 @@ impl SurpriseProfile {
 ### 2.4 Integration
 
 ```rust
-// crates/worker/src/jobs/semantic_extraction.rs
-pub async fn process_episode(
-    episode: &EpisodicMemory,
+// crates/worker/src/jobs/event_segmentation.rs
+pub async fn enqueue_semantic_consolidation(
+    conversation_id: Uuid,
+    episode: plastmem_core::CreatedEpisode,
     db: &DatabaseConnection,
-) -> Result<ExtractionOutput> {
-    // Load or initialize profile
-    let mut profile = SurpriseProfile::load(&episode.user_id, db).await?
-        .unwrap_or_else(|| SurpriseProfile::new(&episode.user_id));
+    semantic_storage: &PostgresStorage<SemanticConsolidationJob>,
+) -> Result<(), AppError> {
+    // Load or initialize per-conversation surprise profile
+    let mut profile = SurpriseProfile::load(conversation_id, db).await?
+        .unwrap_or_else(|| SurpriseProfile::new(conversation_id));
 
-    // Use adaptive thresholds
-    let config = if episode.surprise >= profile.explanation_threshold {
-        ExtractionConfig::DeepWithExplanation
-    } else if episode.surprise >= profile.deep_extraction_threshold {
-        ExtractionConfig::Deep
-    } else {
-        ExtractionConfig::Standard
-    };
-
-    // Extract facts...
-    let output = extract_facts(episode, config).await?;
-
-    // Update profile with this episode's score
+    // Update profile with this episode's surprise score
     profile.update(episode.surprise);
     profile.save(db).await?;
 
-    Ok(output)
+    // Check if we should trigger consolidation
+    // 1. Flashbulb memory (high surprise relative to baseline) -> immediate force consolidation
+    // 2. Threshold reached (>= 3 unconsolidated episodes) -> standard consolidation
+
+    let is_flashbulb = episode.surprise >= profile.flashbulb_threshold;
+    let unconsolidated_count =
+        EpisodicMemory::count_unconsolidated_for_conversation(conversation_id, db).await?;
+    let threshold_reached = unconsolidated_count >= CONSOLIDATION_EPISODE_THRESHOLD;
+
+    if is_flashbulb || threshold_reached {
+        let job = SemanticConsolidationJob {
+            conversation_id,
+            force: is_flashbulb,
+        };
+        let mut storage = semantic_storage.clone();
+        storage.push(job).await?;
+        tracing::info!(
+            conversation_id = %conversation_id,
+            unconsolidated_count,
+            is_flashbulb,
+            flashbulb_threshold = profile.flashbulb_threshold,
+            "Enqueued semantic consolidation job"
+        );
+    } else {
+        tracing::debug!(
+            conversation_id = %conversation_id,
+            unconsolidated_count,
+            "Accumulating episode for later consolidation"
+        );
+    }
+
+    Ok(())
 }
 ```
 
 ### 2.5 Behavior Examples
 
-| User Type | History | Mean | Std | Deep Threshold | Effect |
-|-----------|---------|------|-----|----------------|--------|
-| Quiet | 0.1-0.3 | 0.20 | 0.05 | 0.23 | Minor deviations trigger deep extraction |
-| Balanced | 0.4-0.6 | 0.50 | 0.10 | 0.55 | Moderate sensitivity |
-| Chaotic | 0.6-0.9 | 0.75 | 0.15 | 0.83 | Only significant surprises flagged |
+| Conversation Type | History | Mean | Std | Flashbulb Threshold | Effect |
+|-------------------|---------|------|-----|---------------------|--------|
+| Quiet | 0.1-0.3 | 0.20 | 0.05 | ~0.30 | Even mild surprises trigger immediate consolidation |
+| Balanced | 0.4-0.6 | 0.50 | 0.10 | ~0.70 | Moderate sensitivity |
+| Chaotic | 0.6-0.9 | 0.75 | 0.15 | ~0.85 | Only significant surprises (relative to baseline) trigger flashbulb |
 
 ---
 
@@ -486,18 +509,19 @@ Inferred facts are marked but included naturally:
 
 1. Add `semantic_note` table migration
 2. Create entity and CRUD operations
-3. Implement generation trigger in `SemanticExtractionJob`
-4. Implement incremental update check (≥ 20% new facts OR invalidation → regenerate)
+3. Implement generation trigger in `SemanticConsolidationJob` (batch generation after consolidation)
+4. Implement incremental update check (≥ 3 new facts OR ≥ 20% change OR invalidation → regenerate)
 5. Implement cross-subject linking via shared objects
 6. Modify retrieval to include notes
 7. Update presentation format
 
 ### Phase 2 Mid: Adaptive Threshold
 
-1. Add `surprise_profile` table
+1. Add `surprise_profile` table (per-conversation, not per-user)
 2. Implement sliding window statistics
-3. Integrate into extraction job
-4. Add metrics/logging for threshold changes
+3. Integrate into `event_segmentation.rs` (update profile when episodes are created)
+4. Modify flashbulb detection to use adaptive threshold
+5. Add metrics/logging for threshold changes
 
 ### Phase 2 Late: Inferred Relations
 
@@ -518,7 +542,7 @@ Inferred facts are marked but included naturally:
 
 4. **Cache invalidation**: When underlying facts change, how aggressively should we invalidate inference caches?
 
-5. **Incremental vs full regeneration**: Is the 20% fact-change threshold the right trigger for Semantic Note regeneration? May need empirical tuning.
+5. **Incremental vs full regeneration**: Changed to "≥ 3 new facts OR ≥ 20% change" to handle both small and large fact sets. Empirical validation needed.
 
 ---
 
