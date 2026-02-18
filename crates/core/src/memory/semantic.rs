@@ -7,8 +7,10 @@ use plastmem_entities::semantic_memory;
 use plastmem_shared::{AppError, Message};
 use schemars::JsonSchema;
 use sea_orm::{
-  ActiveModelTrait, ConnectionTrait, DatabaseConnection, DbBackend, FromQueryResult,
-  IntoActiveModel, Statement, prelude::PgVector,
+  ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, DbBackend, EntityTrait,
+  FromQueryResult, IntoActiveModel, QueryFilter, Statement,
+  prelude::{Expr, PgVector},
+  sea_query::{ArrayType, Value},
 };
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -227,25 +229,21 @@ async fn append_source_ids(
     return Ok(());
   }
 
-  // Build parameterized query: UNNEST($2::uuid[]) for safe array handling
-  let sql = r#"
-    UPDATE semantic_memory
-    SET source_ids = source_ids || (SELECT ARRAY_AGG(x) FROM UNNEST($2::uuid[]) AS x)
-    WHERE id = $1
-  "#;
-
-  let stmt = Statement::from_sql_and_values(
-    DbBackend::Postgres,
-    sql,
-    vec![
-      fact_id.into(),
-      sea_orm::Value::Array(
-        sea_orm::sea_query::ArrayType::Uuid,
-        Some(Box::new(ids_to_add.into_iter().map(Into::into).collect())),
+  semantic_memory::Entity::update_many()
+    .col_expr(
+      semantic_memory::Column::SourceIds,
+      Expr::cust_with_values(
+        "source_ids || (SELECT ARRAY_AGG(x) FROM UNNEST($1::uuid[]) AS x)",
+        [Value::Array(
+          ArrayType::Uuid,
+          Some(Box::new(ids_to_add.into_iter().map(Into::into).collect())),
+        )],
       ),
-    ],
-  );
-  db.execute_raw(stmt).await?;
+    )
+    .filter(semantic_memory::Column::Id.eq(fact_id))
+    .exec(db)
+    .await?;
+
   Ok(())
 }
 
