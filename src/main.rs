@@ -2,7 +2,7 @@ use apalis_postgres::PostgresStorage;
 use plastmem_migration::{Migrator, MigratorTrait};
 use plastmem_server::server;
 use plastmem_shared::{APP_ENV, AppError};
-use plastmem_worker::{EventSegmentationJob, MemoryReviewJob, worker};
+use plastmem_worker::{EventSegmentationJob, MemoryReviewJob, SemanticExtractionJob, worker};
 use sea_orm::Database;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -25,9 +25,10 @@ async fn main() -> Result<(), AppError> {
   PostgresStorage::setup(pool).await?;
   let segment_job_storage = PostgresStorage::<EventSegmentationJob>::new(pool);
   let review_job_storage = PostgresStorage::<MemoryReviewJob>::new(pool);
+  let semantic_job_storage = PostgresStorage::<SemanticExtractionJob>::new(pool);
 
   let _ = tokio::try_join!(
-    worker(&db, segment_job_storage.clone(), review_job_storage.clone()),
+    worker(&db, segment_job_storage.clone(), review_job_storage.clone(), semantic_job_storage.clone()),
     server(db.clone(), segment_job_storage)
   );
 

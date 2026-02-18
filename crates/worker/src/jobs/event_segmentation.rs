@@ -7,7 +7,7 @@ use sea_orm::DatabaseConnection;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::MemoryReviewJob;
+use super::{MemoryReviewJob, SemanticExtractionJob};
 
 // ──────────────────────────────────────────────────
 // Job definition
@@ -28,6 +28,7 @@ pub async fn process_event_segmentation(
   job: EventSegmentationJob,
   db: apalis::prelude::Data<DatabaseConnection>,
   review_storage: apalis::prelude::Data<PostgresStorage<MemoryReviewJob>>,
+  semantic_storage: apalis::prelude::Data<PostgresStorage<SemanticExtractionJob>>,
 ) -> Result<(), AppError> {
   let db = &*db;
 
@@ -43,6 +44,7 @@ pub async fn process_event_segmentation(
     return Ok(());
   }
   let review_storage = &*review_storage;
+  let semantic_storage = &*semantic_storage;
   tracing::debug!(
     conversation_id = %job.conversation_id,
     action = ?job.action,
@@ -65,7 +67,7 @@ pub async fn process_event_segmentation(
       );
       if drain_count > 0 {
         enqueue_pending_reviews(job.conversation_id, &job.messages, &db, &review_storage).await?;
-        create_episode(
+        if let Some(episode) = create_episode(
           job.conversation_id,
           &job.messages,
           drain_count,
@@ -73,7 +75,10 @@ pub async fn process_event_segmentation(
           0.0,
           &db,
         )
-        .await?;
+        .await?
+        {
+          enqueue_semantic_extraction(job.conversation_id, episode, semantic_storage).await?;
+        }
       }
     }
 
@@ -87,7 +92,7 @@ pub async fn process_event_segmentation(
       );
       if drain_count > 0 {
         enqueue_pending_reviews(job.conversation_id, &job.messages, &db, &review_storage).await?;
-        create_episode(
+        if let Some(episode) = create_episode(
           job.conversation_id,
           &job.messages,
           drain_count,
@@ -95,7 +100,10 @@ pub async fn process_event_segmentation(
           0.0,
           &db,
         )
-        .await?;
+        .await?
+        {
+          enqueue_semantic_extraction(job.conversation_id, episode, semantic_storage).await?;
+        }
       }
     }
 
@@ -113,7 +121,7 @@ pub async fn process_event_segmentation(
         );
         if drain_count > 0 {
           enqueue_pending_reviews(job.conversation_id, &job.messages, &db, &review_storage).await?;
-          create_episode(
+          if let Some(episode) = create_episode(
             job.conversation_id,
             &job.messages,
             drain_count,
@@ -121,7 +129,10 @@ pub async fn process_event_segmentation(
             result.surprise_signal,
             &db,
           )
-          .await?;
+          .await?
+          {
+            enqueue_semantic_extraction(job.conversation_id, episode, semantic_storage).await?;
+          }
         }
       } else {
         // No boundary — just process pending reviews, don't drain.
@@ -153,5 +164,32 @@ async fn enqueue_pending_reviews(
     let mut storage = review_storage.clone();
     storage.push(review_job).await?;
   }
+  Ok(())
+}
+
+// ──────────────────────────────────────────────────
+// Semantic extraction enqueueing
+// ──────────────────────────────────────────────────
+
+/// Enqueue a SemanticExtractionJob after an episode is created.
+async fn enqueue_semantic_extraction(
+  conversation_id: Uuid,
+  episode: plastmem_core::CreatedEpisode,
+  semantic_storage: &PostgresStorage<SemanticExtractionJob>,
+) -> Result<(), AppError> {
+  let job = SemanticExtractionJob {
+    episode_id: episode.id,
+    conversation_id,
+    summary: episode.summary,
+    messages: episode.messages,
+    surprise: episode.surprise,
+  };
+  let mut storage = semantic_storage.clone();
+  storage.push(job).await?;
+  tracing::debug!(
+    episode_id = %episode.id,
+    conversation_id = %conversation_id,
+    "Enqueued semantic extraction job"
+  );
   Ok(())
 }

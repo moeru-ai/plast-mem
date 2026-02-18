@@ -9,7 +9,9 @@ mod add_message;
 mod retrieve_memory;
 
 pub use add_message::{AddMessage, AddMessageMessage};
-pub use retrieve_memory::{RetrieveMemory, RetrieveMemoryRawResult};
+pub use retrieve_memory::{
+  RetrieveMemory, RetrieveMemoryRawResponse, RetrieveMemoryRawResult, SemanticFactResult,
+};
 
 pub fn app() -> Router<AppState> {
   let (router, openapi) = OpenApiRouter::with_openapi(ApiDoc::openapi())
@@ -35,8 +37,11 @@ pub fn app() -> Router<AppState> {
     AddMessage,
     AddMessageMessage,
     RetrieveMemory,
+    RetrieveMemoryRawResponse,
     RetrieveMemoryRawResult,
+    SemanticFactResult,
     plastmem_core::EpisodicMemory,
+    plastmem_core::SemanticFact,
     plastmem_core::DetailLevel,
     plastmem_shared::Message,
     plastmem_shared::MessageRole,

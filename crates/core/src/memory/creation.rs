@@ -70,6 +70,14 @@ async fn generate_episode_info(messages: &[Message]) -> Result<EpisodeGeneration
 // Episode Creation
 // ──────────────────────────────────────────────────
 
+/// Info about a successfully created episode, for downstream jobs.
+pub struct CreatedEpisode {
+  pub id: Uuid,
+  pub summary: String,
+  pub messages: Vec<Message>,
+  pub surprise: f32,
+}
+
 /// Create an episode from the conversation messages and drain the queue.
 ///
 /// `next_event_embedding` is the pre-computed embedding of the message that will start
@@ -77,7 +85,7 @@ async fn generate_episode_info(messages: &[Message]) -> Result<EpisodeGeneration
 ///
 /// `surprise_signal` is the embedding-based surprise (0.0 for ForceCreate/TimeBoundary).
 ///
-/// Returns `true` if an episode was created, `false` if skipped (empty summary).
+/// Returns `Some(CreatedEpisode)` if an episode was created, `None` if skipped (empty summary).
 pub async fn create_episode(
   conversation_id: Uuid,
   messages: &[Message],
@@ -85,7 +93,7 @@ pub async fn create_episode(
   next_event_embedding: Option<PgVector>,
   surprise_signal: f32,
   db: &DatabaseConnection,
-) -> Result<bool, AppError> {
+) -> Result<Option<CreatedEpisode>, AppError> {
   // Only generate episode from the messages being drained
   let segment_messages = &messages[..drain_count];
 
@@ -97,7 +105,7 @@ pub async fn create_episode(
   if episode.summary.is_empty() {
     // Edge case: LLM returned empty summary — just drain and return
     MessageQueue::drain(conversation_id, drain_count, db).await?;
-    return Ok(false);
+    return Ok(None);
   }
 
   // Generate embedding for the summary
@@ -120,7 +128,7 @@ pub async fn create_episode(
     conversation_id,
     messages: segment_messages.to_vec(),
     title: episode.title,
-    summary: episode.summary,
+    summary: episode.summary.clone(),
     embedding: embedding,
     stability: boosted_stability,
     difficulty: initial_memory.difficulty,
@@ -161,5 +169,11 @@ pub async fn create_episode(
     MessageQueue::update_last_embedding(conversation_id, None, db).await?;
   }
 
-  Ok(true)
+  Ok(Some(CreatedEpisode {
+    id,
+    summary: episode.summary,
+    messages: segment_messages.to_vec(),
+    surprise,
+  }))
 }
+

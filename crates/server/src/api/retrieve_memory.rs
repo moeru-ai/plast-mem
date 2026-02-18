@@ -1,5 +1,5 @@
 use axum::{Json, extract::State};
-use plastmem_core::{DetailLevel, EpisodicMemory, MessageQueue, format_tool_result};
+use plastmem_core::{DetailLevel, EpisodicMemory, MessageQueue, SemanticFact, format_tool_result};
 use plastmem_shared::AppError;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -13,15 +13,22 @@ const fn default_limit() -> u64 {
   5
 }
 
+const fn default_facts_limit() -> u64 {
+  20
+}
+
 #[derive(Deserialize, ToSchema)]
 pub struct RetrieveMemory {
   /// Conversation ID to associate pending review with
   pub conversation_id: Uuid,
   /// Search query text
   pub query: String,
-  /// Maximum memories to return (1-100)
+  /// Maximum episodic memories to return (1-100)
   #[serde(default = "default_limit")]
   pub limit: u64,
+  /// Maximum semantic facts to return
+  #[serde(default = "default_facts_limit")]
+  pub facts_limit: u64,
   /// Detail level: "auto", "none", "low", "high"
   #[serde(default)]
   pub detail: DetailLevel,
@@ -48,6 +55,22 @@ async fn record_pending_review(
 // --- Raw JSON endpoint ---
 
 #[derive(Serialize, ToSchema)]
+pub struct SemanticFactResult {
+  #[serde(flatten)]
+  pub fact: SemanticFact,
+  /// Cosine similarity score
+  pub score: f64,
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct RetrieveMemoryRawResponse {
+  /// Semantic facts (known facts + behavioral guidelines)
+  pub facts: Vec<SemanticFactResult>,
+  /// Episodic memories with scores
+  pub memories: Vec<RetrieveMemoryRawResult>,
+}
+
+#[derive(Serialize, ToSchema)]
 pub struct RetrieveMemoryRawResult {
   #[serde(flatten)]
   pub memory: EpisodicMemory,
@@ -61,7 +84,7 @@ pub struct RetrieveMemoryRawResult {
   path = "/api/v0/retrieve_memory/raw",
   request_body = RetrieveMemory,
   responses(
-    (status = 200, description = "List of memories with scores", body = Vec<RetrieveMemoryRawResult>),
+    (status = 200, description = "Semantic facts and episodic memories", body = RetrieveMemoryRawResponse),
     (status = 400, description = "Query cannot be empty")
   )
 )]
@@ -69,20 +92,29 @@ pub struct RetrieveMemoryRawResult {
 pub async fn retrieve_memory_raw(
   State(state): State<AppState>,
   Json(payload): Json<RetrieveMemory>,
-) -> Result<Json<Vec<RetrieveMemoryRawResult>>, AppError> {
+) -> Result<Json<RetrieveMemoryRawResponse>, AppError> {
   if payload.query.is_empty() {
     return Err(AppError::new(anyhow::anyhow!("Query cannot be empty")));
   }
 
-  let results =
-    EpisodicMemory::retrieve(&payload.query, payload.limit, payload.scope, &state.db).await?;
+  let (facts_results, episodic_results) = tokio::try_join!(
+    SemanticFact::retrieve(&payload.query, payload.facts_limit, &state.db),
+    EpisodicMemory::retrieve(&payload.query, payload.limit, payload.scope, &state.db),
+  )?;
 
-  record_pending_review(&state, payload.conversation_id, &payload.query, &results).await?;
+  record_pending_review(&state, payload.conversation_id, &payload.query, &episodic_results)
+    .await?;
 
-  let response = results
-    .into_iter()
-    .map(|(memory, score)| RetrieveMemoryRawResult { memory, score })
-    .collect();
+  let response = RetrieveMemoryRawResponse {
+    facts: facts_results
+      .into_iter()
+      .map(|(fact, score)| SemanticFactResult { fact, score })
+      .collect(),
+    memories: episodic_results
+      .into_iter()
+      .map(|(memory, score)| RetrieveMemoryRawResult { memory, score })
+      .collect(),
+  };
 
   Ok(Json(response))
 }
@@ -108,10 +140,13 @@ pub async fn retrieve_memory(
     return Err(AppError::new(anyhow::anyhow!("Query cannot be empty")));
   }
 
-  let results =
-    EpisodicMemory::retrieve(&payload.query, payload.limit, payload.scope, &state.db).await?;
+  let (facts_results, episodic_results) = tokio::try_join!(
+    SemanticFact::retrieve(&payload.query, payload.facts_limit, &state.db),
+    EpisodicMemory::retrieve(&payload.query, payload.limit, payload.scope, &state.db),
+  )?;
 
-  record_pending_review(&state, payload.conversation_id, &payload.query, &results).await?;
+  record_pending_review(&state, payload.conversation_id, &payload.query, &episodic_results)
+    .await?;
 
-  Ok(format_tool_result(&results, &payload.detail))
+  Ok(format_tool_result(&facts_results, &episodic_results, &payload.detail))
 }

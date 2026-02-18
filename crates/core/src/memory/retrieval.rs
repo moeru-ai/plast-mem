@@ -6,6 +6,7 @@ use serde::Deserialize;
 use utoipa::ToSchema;
 
 use super::EpisodicMemory;
+use super::SemanticFact;
 
 #[derive(Debug, Clone, Default, Deserialize, ToSchema)]
 #[serde(rename_all = "lowercase")]
@@ -33,8 +34,52 @@ impl DetailLevel {
 }
 
 #[must_use]
-pub fn format_tool_result(results: &[(EpisodicMemory, f64)], detail: &DetailLevel) -> String {
+pub fn format_tool_result(
+  facts: &[(SemanticFact, f64)],
+  results: &[(EpisodicMemory, f64)],
+  detail: &DetailLevel,
+) -> String {
   let mut out = String::new();
+
+  // ── Known Facts & Behavioral Guidelines ──
+  let (known, behavioral): (Vec<_>, Vec<_>) =
+    facts.iter().partition(|(f, _)| !f.is_behavioral());
+
+  if !known.is_empty() {
+    let _ = writeln!(out, "## Known Facts");
+    for (fact, _score) in &known {
+      let sources = fact.source_ids.len();
+      let _ = writeln!(
+        out,
+        "- {} (sources: {} conversation{})",
+        fact.fact,
+        sources,
+        if sources == 1 { "" } else { "s" }
+      );
+    }
+    let _ = writeln!(out);
+  }
+
+  if !behavioral.is_empty() {
+    let _ = writeln!(out, "## Behavioral Guidelines");
+    for (fact, _score) in &behavioral {
+      let sources = fact.source_ids.len();
+      let _ = writeln!(
+        out,
+        "- {} (sources: {} conversation{})",
+        fact.fact,
+        sources,
+        if sources == 1 { "" } else { "s" }
+      );
+    }
+    let _ = writeln!(out);
+  }
+
+  // ── Episodic Memories ──
+  if !results.is_empty() {
+    let _ = writeln!(out, "## Episodic Memories");
+  }
+
   let now = Utc::now();
 
   for (rank, (mem, score)) in results.iter().enumerate() {
@@ -53,7 +98,7 @@ pub fn format_tool_result(results: &[(EpisodicMemory, f64)], detail: &DetailLeve
     };
     let _ = writeln!(
       out,
-      "## {header} [rank: {rank}, score: {score:.2}{key_moment}]"
+      "### {header} [rank: {rank}, score: {score:.2}{key_moment}]"
     );
 
     // When

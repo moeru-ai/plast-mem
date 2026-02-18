@@ -4,6 +4,9 @@ pub use event_segmentation::*;
 mod memory_review;
 pub use memory_review::*;
 
+mod semantic_extraction;
+pub use semantic_extraction::*;
+
 use plastmem_shared::AppError;
 
 /// Error type for apalis job boundary.
