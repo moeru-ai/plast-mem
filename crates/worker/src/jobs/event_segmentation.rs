@@ -57,38 +57,19 @@ pub async fn process_event_segmentation(
   let drain_count = job.messages.len().saturating_sub(1);
 
   match job.action {
-    // Force-create: skip boundary detection, go straight to episode generation.
-    SegmentationAction::ForceCreate => {
-      tracing::info!(
-        conversation_id = %job.conversation_id,
-        messages = job.messages.len(),
-        drain_count,
+    // Force-create and Time-boundary both skip boundary detection, go straight to episode generation.
+    SegmentationAction::ForceCreate | SegmentationAction::TimeBoundary => {
+      let log_msg = if matches!(job.action, SegmentationAction::ForceCreate) {
         "Force-creating episode (buffer full)"
-      );
-      if drain_count > 0 {
-        enqueue_pending_reviews(job.conversation_id, &job.messages, &db, &review_storage).await?;
-        if let Some(episode) = create_episode(
-          job.conversation_id,
-          &job.messages,
-          drain_count,
-          None,
-          0.0,
-          &db,
-        )
-        .await?
-        {
-          enqueue_semantic_extraction(job.conversation_id, episode, semantic_storage).await?;
-        }
-      }
-    }
-
-    // Time boundary: skip boundary detection, create episode.
-    SegmentationAction::TimeBoundary => {
+      } else {
+        "Creating episode (time boundary)"
+      };
       tracing::info!(
         conversation_id = %job.conversation_id,
         messages = job.messages.len(),
         drain_count,
-        "Creating episode (time boundary)"
+        "{}",
+        log_msg
       );
       if drain_count > 0 {
         enqueue_pending_reviews(job.conversation_id, &job.messages, &db, &review_storage).await?;

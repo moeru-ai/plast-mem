@@ -378,11 +378,7 @@ pub async fn process_extraction(
 
   // 4. Batch embed all extracted facts
   let fact_texts: Vec<String> = output.facts.iter().map(|f| f.fact.clone()).collect();
-  let embeddings = if fact_texts.is_empty() {
-    vec![]
-  } else {
-    embed_batch(&fact_texts).await?
-  };
+  let embeddings = embed_batch(&fact_texts).await?;
 
   // 5. Upsert each fact
   for (extracted, embedding) in output.facts.iter().zip(embeddings.into_iter()) {

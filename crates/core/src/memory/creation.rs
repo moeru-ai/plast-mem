@@ -95,10 +95,10 @@ pub async fn create_episode(
   db: &DatabaseConnection,
 ) -> Result<Option<CreatedEpisode>, AppError> {
   // Only generate episode from the messages being drained
-  let segment_messages = &messages[..drain_count];
+  let segment_messages: Vec<Message> = messages[..drain_count].to_vec();
 
   // Episode generation (Representation Alignment)
-  let episode = generate_episode_info(segment_messages).await?;
+  let episode = generate_episode_info(&segment_messages).await?;
 
   let surprise = surprise_signal.clamp(0.0, 1.0);
 
@@ -126,7 +126,7 @@ pub async fn create_episode(
   let episodic_memory = EpisodicMemory {
     id,
     conversation_id,
-    messages: segment_messages.to_vec(),
+    messages: segment_messages.clone(),
     title: episode.title,
     summary: episode.summary.clone(),
     embedding: embedding,
@@ -172,7 +172,7 @@ pub async fn create_episode(
   Ok(Some(CreatedEpisode {
     id,
     summary: episode.summary,
-    messages: segment_messages.to_vec(),
+    messages: segment_messages,
     surprise,
   }))
 }
