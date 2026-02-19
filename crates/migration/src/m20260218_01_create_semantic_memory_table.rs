@@ -47,6 +47,15 @@ impl MigrationTrait for Migration {
       ))
       .await?;
 
+    // BM25 index for full-text search on fact
+    manager
+      .get_connection()
+      .execute_raw(Statement::from_string(
+        manager.get_database_backend(),
+        "CREATE INDEX idx_semantic_memory_fact_bm25 ON semantic_memory USING bm25 (id, (fact::pdb.icu), created_at) WITH (key_field='id');",
+      ))
+      .await?;
+
     Ok(())
   }
 

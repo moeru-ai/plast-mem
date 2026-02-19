@@ -63,7 +63,7 @@ impl SemanticMemory {
         || self.predicate.starts_with("responds_to_"))
   }
 
-  /// Retrieve semantic facts using vector-only search.
+  /// Retrieve semantic facts using hybrid BM25 + vector search with RRF.
   /// Only active facts (`invalid_at IS NULL`) are returned.
   pub async fn retrieve(
     query: &str,
@@ -73,20 +73,48 @@ impl SemanticMemory {
     let query_embedding = plastmem_ai::embed(query).await?;
 
     let sql = r"
+    WITH
+    fulltext AS (
+      SELECT id, ROW_NUMBER() OVER (ORDER BY pdb.score(id) DESC) AS r
+      FROM semantic_memory
+      WHERE fact ||| $1 AND invalid_at IS NULL
+      LIMIT $2
+    ),
+    semantic AS (
+      SELECT id, ROW_NUMBER() OVER (ORDER BY embedding <=> $3) AS r
+      FROM semantic_memory
+      WHERE invalid_at IS NULL
+      LIMIT $2
+    ),
+    rrf AS (
+      SELECT id, 1.0 / (60 + r) AS s FROM fulltext
+      UNION ALL
+      SELECT id, 1.0 / (60 + r) AS s FROM semantic
+    ),
+    rrf_score AS (
+      SELECT id, SUM(s) AS score
+      FROM rrf
+      GROUP BY id
+    )
     SELECT
-      id, subject, predicate, object, fact, source_episodic_ids,
-      valid_at, invalid_at, embedding, created_at,
-      1 - (embedding <=> $1) AS score
-    FROM semantic_memory
-    WHERE invalid_at IS NULL
-    ORDER BY embedding <=> $1
-    LIMIT $2;
+      m.id, m.subject, m.predicate, m.object, m.fact, m.source_episodic_ids,
+      m.valid_at, m.invalid_at, m.embedding, m.created_at,
+      r.score AS score
+    FROM rrf_score r
+    JOIN semantic_memory m USING (id)
+    ORDER BY r.score DESC
+    LIMIT $4;
     ";
 
     let stmt = Statement::from_sql_and_values(
       DbBackend::Postgres,
       sql,
-      vec![query_embedding.into(), (limit as i64).into()],
+      vec![
+        query.to_owned().into(),
+        100.into(), // candidate limit
+        query_embedding.into(),
+        (limit as i64).into(),
+      ],
     );
 
     let rows = db.query_all_raw(stmt).await?;
