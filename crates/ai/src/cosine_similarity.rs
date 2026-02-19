@@ -1,6 +1,7 @@
-/// Compute cosine similarity between two embedding vectors.
+/// Compute inner product between two embedding vectors.
 ///
-/// Returns a value in [-1.0, 1.0] where 1.0 means identical direction.
+/// Assumes both vectors are L2 normalized. Returns a value in [-1.0, 1.0]
+/// where 1.0 means identical direction.
 pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
   debug_assert_eq!(a.len(), b.len(), "embedding dimensions must match");
   if a.len() != b.len() || a.is_empty() {
@@ -8,22 +9,10 @@ pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
   }
 
   let mut dot = 0.0_f64;
-  let mut norm_a = 0.0_f64;
-  let mut norm_b = 0.0_f64;
 
   for (&x, &y) in a.iter().zip(b.iter()) {
-    let x = x as f64;
-    let y = y as f64;
-    dot = x.mul_add(y, dot);
-    norm_a = x.mul_add(x, norm_a);
-    norm_b = y.mul_add(y, norm_b);
+    dot += (x as f64) * (y as f64);
   }
 
-  let denom = norm_a.sqrt() * norm_b.sqrt();
-
-  if denom < 1e-12 {
-    0.0
-  } else {
-    (dot / denom) as f32
-  }
+  dot as f32
 }

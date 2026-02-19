@@ -3,6 +3,8 @@ use async_openai::{Client, config::OpenAIConfig, types::embeddings::CreateEmbedd
 use plastmem_shared::{APP_ENV, AppError};
 use sea_orm::prelude::PgVector;
 
+use crate::embed_shared::process_embedding;
+
 /// Embed multiple texts in a single API call.
 ///
 /// Returns one `PgVector` per input, in the same order.
@@ -40,10 +42,8 @@ pub async fn embed_many(inputs: &[String]) -> Result<Vec<PgVector>, AppError> {
     );
   }
 
-  Ok(
-    data
-      .into_iter()
-      .map(|e| PgVector::from(e.embedding))
-      .collect(),
-  )
+  data
+    .into_iter()
+    .map(|e| process_embedding(e.embedding).map(PgVector::from))
+    .collect::<Result<Vec<_>, _>>()
 }

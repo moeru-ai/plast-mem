@@ -81,7 +81,7 @@ impl SemanticMemory {
       LIMIT $2
     ),
     semantic AS (
-      SELECT id, ROW_NUMBER() OVER (ORDER BY embedding <=> $3) AS r
+      SELECT id, ROW_NUMBER() OVER (ORDER BY embedding <#> $3) AS r
       FROM semantic_memory
       WHERE invalid_at IS NULL
       LIMIT $2
@@ -242,10 +242,10 @@ async fn find_similar_facts<C: ConnectionTrait>(
   SELECT
     id, subject, predicate, object, fact, source_episodic_ids,
     valid_at, invalid_at, embedding, created_at,
-    1 - (embedding <=> $1) AS similarity
+    -(embedding <#> $1) AS similarity
   FROM semantic_memory
   WHERE invalid_at IS NULL
-    AND 1 - (embedding <=> $1) > $2
+    AND -(embedding <#> $1) > $2
   ORDER BY similarity DESC
   LIMIT 5;
   ";

@@ -158,7 +158,7 @@ impl EpisodicMemory {
       LIMIT $2
     ),
     semantic AS (
-      SELECT id, ROW_NUMBER() OVER (ORDER BY embedding <=> $3) AS r
+      SELECT id, ROW_NUMBER() OVER (ORDER BY embedding <#> $3) AS r
       FROM episodic_memory
       WHERE 1=1 {scope_filter}
       LIMIT $2

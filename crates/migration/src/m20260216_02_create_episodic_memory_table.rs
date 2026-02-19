@@ -40,7 +40,7 @@ impl MigrationTrait for Migration {
       .get_connection()
       .execute_raw(Statement::from_string(
         manager.get_database_backend(),
-        "CREATE INDEX idx_episodic_memory_embedding_hnsw ON episodic_memory USING hnsw (embedding vector_cosine_ops);",
+        "CREATE INDEX idx_episodic_memory_embedding_hnsw ON episodic_memory USING hnsw (embedding vector_ip_ops);",
       ))
       .await?;
 
