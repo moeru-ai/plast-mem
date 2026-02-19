@@ -19,14 +19,14 @@ export const Header = () => (
         {version}
       </Text>
       <Text>
-        BaseURL:
-        {' '}
-        {env.OPENAI_BASE_URL}
-      </Text>
-      <Text>
         Model:
         {' '}
         {env.OPENAI_CHAT_MODEL}
+      </Text>
+      <Text>
+        BaseURL:
+        {' '}
+        {env.OPENAI_BASE_URL}
       </Text>
     </Box>
   </Box>
