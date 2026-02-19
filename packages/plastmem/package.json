@@ -1,0 +1,35 @@
+{
+  "name": "plastmem",
+  "type": "module",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Plast Mem Client SDK",
+  "author": "Moeru AI",
+  "license": "MIT",
+  "homepage": "https://github.com/moeru-ai/plast-mem",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/moeru-ai/plast-mem.git",
+    "directory": "packages/plastmem"
+  },
+  "bugs": "https://github.com/moeru-ai/plast-mem/issues",
+  "sideEffects": false,
+  "exports": "./src/index.ts",
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "./package.json": "./package.json"
+    },
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts"
+  },
+  "scripts": {
+    "build": "pkgroll"
+  }
+}

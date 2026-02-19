@@ -2,5 +2,13 @@
   "name": "@plastmem/workspace",
   "type": "module",
   "private": true,
-  "packageManager": "pnpm@10.30.0"
+  "packageManager": "pnpm@10.30.0",
+  "scripts": {
+    "build": "pnpm -r build",
+    "client:gen": "pnpm dlx @hey-api/openapi-ts -i http://localhost:3000/openapi.json -o packages/plastmem/src"
+  },
+  "devDependencies": {
+    "pkgroll": "^2.26.2",
+    "typescript": "^5.9.3"
+  }
 }
