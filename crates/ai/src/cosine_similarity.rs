@@ -8,11 +8,5 @@ pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     return 0.0;
   }
 
-  let mut dot = 0.0_f64;
-
-  for (&x, &y) in a.iter().zip(b.iter()) {
-    dot += (x as f64) * (y as f64);
-  }
-
-  dot as f32
+  a.iter().zip(b).map(|(&x, &y)| x * y).sum()
 }
