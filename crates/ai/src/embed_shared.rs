@@ -15,14 +15,14 @@ pub fn process_embedding(mut vec: Vec<f32>) -> Result<Vec<f32>, AppError> {
     d if d > TARGET_DIM => {
       // Truncate to 1024 and L2 normalize
       vec.truncate(TARGET_DIM);
-      l2_normalize(&mut vec);
+      l2_normalize(&mut vec, None);
       Ok(vec)
     }
     d if d == TARGET_DIM => {
       // Check if already L2 normalized
       let norm_sq: f32 = vec.iter().map(|x| x * x).sum();
       if (norm_sq - 1.0).abs() > L2_NORM_TOLERANCE {
-        l2_normalize(&mut vec);
+        l2_normalize(&mut vec, Some(norm_sq));
       }
       Ok(vec)
     }
@@ -35,8 +35,8 @@ pub fn process_embedding(mut vec: Vec<f32>) -> Result<Vec<f32>, AppError> {
 }
 
 /// L2 normalize a vector in-place.
-fn l2_normalize(vec: &mut [f32]) {
-  let norm_sq: f32 = vec.iter().map(|x| x * x).sum();
+fn l2_normalize(vec: &mut [f32], norm_sq: Option<f32>) {
+  let norm_sq = norm_sq.unwrap_or_else(|| vec.iter().map(|x| x * x).sum());
   let norm = norm_sq.sqrt();
   if norm > 1e-12 {
     for x in vec.iter_mut() {
