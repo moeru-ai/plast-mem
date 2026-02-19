@@ -16,6 +16,7 @@ impl MigrationTrait for Migration {
           .table(SemanticMemory::Table)
           .if_not_exists()
           .col(uuid(SemanticMemory::Id).primary_key())
+          .col(uuid(SemanticMemory::ConversationId).not_null())
           .col(text(SemanticMemory::Subject).not_null())
           .col(text(SemanticMemory::Predicate).not_null())
           .col(text(SemanticMemory::Object).not_null())
@@ -72,14 +73,15 @@ impl MigrationTrait for Migration {
 pub enum SemanticMemory {
   Table,
 
-  Id,           // uuid v7
-  Subject,      // e.g. "user", "assistant", "we"
-  Predicate,    // e.g. "likes", "lives_in"
-  Object,       // e.g. "Rust", "Tokyo"
-  Fact,         // natural language sentence
+  Id,              // uuid v7
+  ConversationId,  // conversation this fact belongs to
+  Subject,         // e.g. "user", "assistant", "we"
+  Predicate,       // e.g. "likes", "lives_in"
+  Object,          // e.g. "Rust", "Tokyo"
+  Fact,            // natural language sentence
   SourceEpisodicIds, // source episode IDs (UUID[])
-  ValidAt,      // when we learned this fact
-  InvalidAt,    // when we learned it was no longer true (NULL = active)
-  Embedding,    // vector(1024) embedding of `fact`
-  CreatedAt,    // creation timestamp
+  ValidAt,         // when we learned this fact
+  InvalidAt,       // when we learned it was no longer true (NULL = active)
+  Embedding,       // vector(1024) embedding of `fact`
+  CreatedAt,       // creation timestamp
 }

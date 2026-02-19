@@ -25,6 +25,7 @@ use crate::EpisodicMemory;
 #[derive(Debug, Serialize, Clone, ToSchema)]
 pub struct SemanticMemory {
   pub id: Uuid,
+  pub conversation_id: Uuid,
   pub subject: String,
   pub predicate: String,
   pub object: String,
@@ -42,6 +43,7 @@ impl SemanticMemory {
   pub fn from_model(model: semantic_memory::Model) -> Self {
     Self {
       id: model.id,
+      conversation_id: model.conversation_id,
       subject: model.subject,
       predicate: model.predicate,
       object: model.object,
@@ -64,10 +66,11 @@ impl SemanticMemory {
   }
 
   /// Retrieve semantic facts using hybrid BM25 + vector search with RRF.
-  /// Only active facts (`invalid_at IS NULL`) are returned.
+  /// Only active facts (`invalid_at IS NULL`) from the specified conversation are returned.
   pub async fn retrieve(
     query: &str,
     limit: u64,
+    conversation_id: Uuid,
     db: &DatabaseConnection,
   ) -> Result<Vec<(Self, f64)>, AppError> {
     let query_embedding = plastmem_ai::embed(query).await?;
@@ -77,14 +80,14 @@ impl SemanticMemory {
     fulltext AS (
       SELECT id, ROW_NUMBER() OVER (ORDER BY pdb.score(id) DESC) AS r
       FROM semantic_memory
-      WHERE fact ||| $1 AND invalid_at IS NULL
-      LIMIT $2
+      WHERE fact ||| $1 AND conversation_id = $2 AND invalid_at IS NULL
+      LIMIT $3
     ),
     semantic AS (
-      SELECT id, ROW_NUMBER() OVER (ORDER BY embedding <#> $3) AS r
+      SELECT id, ROW_NUMBER() OVER (ORDER BY embedding <#> $4) AS r
       FROM semantic_memory
-      WHERE invalid_at IS NULL
-      LIMIT $2
+      WHERE conversation_id = $2 AND invalid_at IS NULL
+      LIMIT $3
     ),
     rrf AS (
       SELECT id, 1.0 / (60 + r) AS s FROM fulltext
@@ -97,23 +100,24 @@ impl SemanticMemory {
       GROUP BY id
     )
     SELECT
-      m.id, m.subject, m.predicate, m.object, m.fact, m.source_episodic_ids,
+      m.id, m.conversation_id, m.subject, m.predicate, m.object, m.fact, m.source_episodic_ids,
       m.valid_at, m.invalid_at, m.embedding, m.created_at,
       r.score AS score
     FROM rrf_score r
     JOIN semantic_memory m USING (id)
     ORDER BY r.score DESC
-    LIMIT $4;
+    LIMIT $5;
     ";
 
     let stmt = Statement::from_sql_and_values(
       DbBackend::Postgres,
       sql,
       vec![
-        query.to_owned().into(),
-        100.into(), // candidate limit
-        query_embedding.into(),
-        (limit as i64).into(),
+        query.to_owned().into(),      // $1
+        conversation_id.into(),       // $2
+        100.into(),                   // $3: candidate limit
+        query_embedding.into(),       // $4
+        (limit as i64).into(),        // $5
       ],
     );
 
@@ -233,18 +237,21 @@ const DEDUPE_THRESHOLD: f64 = 0.95;
 
 /// Find existing active facts similar to the given embedding.
 /// Returns all facts above the similarity threshold, ordered by similarity (highest first).
+/// Only searches within the specified conversation.
 async fn find_similar_facts<C: ConnectionTrait>(
   embedding: &PgVector,
   threshold: f64,
+  conversation_id: Uuid,
   db: &C,
 ) -> Result<Vec<semantic_memory::Model>, AppError> {
   let sql = r"
   SELECT
-    id, subject, predicate, object, fact, source_episodic_ids,
+    id, conversation_id, subject, predicate, object, fact, source_episodic_ids,
     valid_at, invalid_at, embedding, created_at,
     -(embedding <#> $1) AS similarity
   FROM semantic_memory
-  WHERE invalid_at IS NULL
+  WHERE conversation_id = $3
+    AND invalid_at IS NULL
     AND -(embedding <#> $1) > $2
   ORDER BY similarity DESC
   LIMIT 5;
@@ -253,7 +260,7 @@ async fn find_similar_facts<C: ConnectionTrait>(
   let stmt = Statement::from_sql_and_values(
     DbBackend::Postgres,
     sql,
-    vec![embedding.clone().into(), threshold.into()],
+    vec![embedding.clone().into(), threshold.into(), conversation_id.into()],
   );
 
   let rows = db.query_all_raw(stmt).await?;
@@ -323,9 +330,11 @@ async fn invalidate_fact<C: ConnectionTrait>(fact_id: Uuid, db: &C) -> Result<()
 
 /// Retrieve existing active facts related to the given episodes.
 /// Uses episode summaries as embedding queries to find relevant facts.
+/// Only searches within the specified conversation.
 async fn load_related_facts(
   episodes: &[EpisodicMemory],
   limit: u64,
+  conversation_id: Uuid,
   db: &DatabaseConnection,
 ) -> Result<Vec<SemanticMemory>, AppError> {
   // Combine all episode summaries into a single query
@@ -335,7 +344,7 @@ async fn load_related_facts(
     .collect::<Vec<_>>()
     .join("\n");
 
-  let results = SemanticMemory::retrieve(&combined_summary, limit, db).await?;
+  let results = SemanticMemory::retrieve(&combined_summary, limit, conversation_id, db).await?;
 
   Ok(results.into_iter().map(|(fact, _)| fact).collect())
 }
@@ -351,6 +360,7 @@ async fn process_fact_action<C: ConnectionTrait>(
   embedding: PgVector,
   episode_ids: &[Uuid],
   valid_existing_ids: &[Uuid],
+  conversation_id: Uuid,
   db: &C,
 ) -> Result<(), AppError> {
   // Validate existing_fact_id if provided
@@ -369,7 +379,7 @@ async fn process_fact_action<C: ConnectionTrait>(
   match fact.action {
     FactAction::New => {
       // Check for embedding-based duplicates before inserting
-      let similar = find_similar_facts(&embedding, DEDUPE_THRESHOLD, db).await?;
+      let similar = find_similar_facts(&embedding, DEDUPE_THRESHOLD, conversation_id, db).await?;
 
       if let Some(existing) = similar.first() {
         tracing::debug!(
@@ -390,6 +400,7 @@ async fn process_fact_action<C: ConnectionTrait>(
         let now = Utc::now();
         let model = semantic_memory::Model {
           id,
+          conversation_id,
           subject: fact.subject.clone(),
           predicate: fact.predicate.clone(),
           object: fact.object.clone(),
@@ -445,6 +456,7 @@ async fn process_fact_action<C: ConnectionTrait>(
         let now = Utc::now();
         let model = semantic_memory::Model {
           id,
+          conversation_id,
           subject: fact.subject.clone(),
           predicate: fact.predicate.clone(),
           object: fact.object.clone(),
@@ -516,8 +528,11 @@ pub async fn process_consolidation(
 
   let episode_ids: Vec<Uuid> = episodes.iter().map(|ep| ep.id).collect();
 
+  // All episodes should belong to the same conversation
+  let conversation_id = episodes[0].conversation_id;
+
   // 1. Load related existing facts (the "predict" step)
-  let existing_facts = load_related_facts(episodes, 20, db).await?;
+  let existing_facts = load_related_facts(episodes, 20, conversation_id, db).await?;
   let valid_fact_ids = extract_valid_fact_ids(&existing_facts);
 
   // 2. Build the consolidation prompt
@@ -586,7 +601,7 @@ pub async fn process_consolidation(
 
   // Process each consolidated fact within the transaction
   for (fact, embedding) in output.facts.iter().zip(embeddings.into_iter()) {
-    process_fact_action(fact, embedding, &episode_ids, &valid_fact_ids, &txn).await?;
+    process_fact_action(fact, embedding, &episode_ids, &valid_fact_ids, conversation_id, &txn).await?;
   }
 
   // Mark episodes as consolidated

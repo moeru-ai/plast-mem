@@ -97,7 +97,12 @@ pub async fn retrieve_memory_raw(
   }
 
   let (semantic_results, episodic_results) = tokio::try_join!(
-    SemanticMemory::retrieve(&payload.query, payload.semantic_limit, &state.db),
+    SemanticMemory::retrieve(
+      &payload.query,
+      payload.semantic_limit,
+      payload.conversation_id,
+      &state.db
+    ),
     EpisodicMemory::retrieve(
       &payload.query,
       payload.episodic_limit,
@@ -148,7 +153,12 @@ pub async fn retrieve_memory(
   }
 
   let (semantic_results, episodic_results) = tokio::try_join!(
-    SemanticMemory::retrieve(&payload.query, payload.semantic_limit, &state.db),
+    SemanticMemory::retrieve(
+      &payload.query,
+      payload.semantic_limit,
+      payload.conversation_id,
+      &state.db
+    ),
     EpisodicMemory::retrieve(
       &payload.query,
       payload.episodic_limit,
