@@ -6,12 +6,19 @@
   "scripts": {
     "build": "pnpm -r build",
     "client:gen": "pnpm dlx @hey-api/openapi-ts -i http://localhost:3000/openapi.json -o packages/plastmem/src",
-    "dev": "pnpm -rF @plastmem/haru dev"
+    "dev": "pnpm -rF @plastmem/haru dev",
+    "lint": "eslint examples"
   },
   "devDependencies": {
+    "@antfu/eslint-config": "^7.4.3",
+    "@eslint-react/eslint-plugin": "^2.12.4",
+    "@moeru/eslint-config": "0.1.0-beta.16",
     "@moeru/tsconfig": "0.1.0-beta.16",
     "@types/node": "^25.3.0",
     "@vitejs/plugin-react": "^5.1.4",
+    "eslint": "^9.39.2",
+    "eslint-plugin-react-hooks": "^7.0.1",
+    "eslint-plugin-react-refresh": "^0.5.0",
     "pkgroll": "^2.26.2",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
