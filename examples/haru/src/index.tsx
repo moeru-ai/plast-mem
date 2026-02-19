@@ -11,8 +11,10 @@ const main = async () => {
 
   try {
     loadEnvFile(join(workspace!, '.env'))
-  } catch { }
+  }
+  catch { }
 
+  // eslint-disable-next-line no-console
   console.clear()
 
   render(<ChatApp />)
@@ -21,4 +23,5 @@ const main = async () => {
 // if (import.meta.main) {
 //   await main()
 // }
-main()
+// eslint-disable-next-line antfu/no-top-level-await
+await main()

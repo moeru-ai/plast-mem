@@ -1,12 +1,13 @@
-import { stdout } from 'node:process';
-import { useEffect } from 'react';
+import { stdout } from 'node:process'
 
-export function useTerminalTitle(title: string) {
+import { useEffect } from 'react'
+
+export const useTerminalTitle = (title: string) => {
   useEffect(() => {
-    stdout.write(`\x1b]0;${title}\x07`);
+    stdout.write(`\x1B]0;${title}\x07`)
 
     return () => {
-      stdout.write(`\x1b]0;\x07`);
-    };
+      stdout.write('\u001B]0;\u0007')
+    }
   }, [title])
 }
