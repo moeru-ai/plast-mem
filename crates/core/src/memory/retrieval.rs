@@ -35,15 +35,16 @@ impl DetailLevel {
 
 #[must_use]
 pub fn format_tool_result(
-  facts: &[(SemanticMemory, f64)],
-  results: &[(EpisodicMemory, f64)],
+  semantic_results: &[(SemanticMemory, f64)],
+  episodic_results: &[(EpisodicMemory, f64)],
   detail: &DetailLevel,
 ) -> String {
   let mut out = String::new();
 
   // ── Known Facts & Behavioral Guidelines ──
-  let (known, behavioral): (Vec<_>, Vec<_>) =
-    facts.iter().partition(|(f, _)| !f.is_behavioral());
+  let (known, behavioral): (Vec<_>, Vec<_>) = semantic_results
+    .iter()
+    .partition(|(f, _)| !f.is_behavioral());
 
   if !known.is_empty() {
     let _ = writeln!(out, "## Known Facts");
@@ -76,13 +77,13 @@ pub fn format_tool_result(
   }
 
   // ── Episodic Memories ──
-  if !results.is_empty() {
+  if !episodic_results.is_empty() {
     let _ = writeln!(out, "## Episodic Memories");
   }
 
   let now = Utc::now();
 
-  for (rank, (mem, score)) in results.iter().enumerate() {
+  for (rank, (mem, score)) in episodic_results.iter().enumerate() {
     let rank = rank + 1; // 1-indexed
 
     // Header
