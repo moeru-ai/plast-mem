@@ -11,11 +11,11 @@ use crate::utils::AppState;
 
 // --- Shared ---
 
-const fn default_limit() -> u64 {
+const fn default_episodic_limit() -> u64 {
   5
 }
 
-const fn default_facts_limit() -> u64 {
+const fn default_semantic_limit() -> u64 {
   20
 }
 
@@ -26,11 +26,11 @@ pub struct RetrieveMemory {
   /// Search query text
   pub query: String,
   /// Maximum episodic memories to return (1-100)
-  #[serde(default = "default_limit")]
-  pub limit: u64,
-  /// Maximum semantic facts to return
-  #[serde(default = "default_facts_limit")]
-  pub facts_limit: u64,
+  #[serde(default = "default_episodic_limit")]
+  pub episodic_limit: u64,
+  /// Maximum semantic memories to return
+  #[serde(default = "default_semantic_limit")]
+  pub semantic_limit: u64,
   /// Detail level: "auto", "none", "low", "high"
   #[serde(default)]
   pub detail: DetailLevel,
@@ -57,23 +57,23 @@ async fn record_pending_review(
 pub struct SemanticMemoryResult {
   #[serde(flatten)]
   pub memory: SemanticMemory,
-  /// Cosine similarity score
+  /// RRF score
   pub score: f64,
 }
 
 #[derive(Serialize, ToSchema)]
 pub struct RetrieveMemoryRawResponse {
   /// Semantic memories (known facts + behavioral guidelines)
-  pub facts: Vec<SemanticMemoryResult>,
+  pub semantic: Vec<SemanticMemoryResult>,
   /// Episodic memories with scores
-  pub memories: Vec<RetrieveMemoryRawResult>,
+  pub episodic: Vec<EpisodicMemoryResult>,
 }
 
 #[derive(Serialize, ToSchema)]
-pub struct RetrieveMemoryRawResult {
+pub struct EpisodicMemoryResult {
   #[serde(flatten)]
   pub memory: EpisodicMemory,
-  /// Final score (RRF score × retrievability)
+  /// Final score (RRF score × FSRS retrievability)
   pub score: f64,
 }
 
@@ -96,11 +96,11 @@ pub async fn retrieve_memory_raw(
     return Err(AppError::new(anyhow::anyhow!("Query cannot be empty")));
   }
 
-  let (facts_results, episodic_results) = tokio::try_join!(
-    SemanticMemory::retrieve(&payload.query, payload.facts_limit, &state.db),
+  let (semantic_results, episodic_results) = tokio::try_join!(
+    SemanticMemory::retrieve(&payload.query, payload.semantic_limit, &state.db),
     EpisodicMemory::retrieve(
       &payload.query,
-      payload.limit,
+      payload.episodic_limit,
       payload.conversation_id,
       &state.db
     ),
@@ -115,13 +115,13 @@ pub async fn retrieve_memory_raw(
   .await?;
 
   let response = RetrieveMemoryRawResponse {
-    facts: facts_results
+    semantic: semantic_results
       .into_iter()
       .map(|(memory, score)| SemanticMemoryResult { memory, score })
       .collect(),
-    memories: episodic_results
+    episodic: episodic_results
       .into_iter()
-      .map(|(memory, score)| RetrieveMemoryRawResult { memory, score })
+      .map(|(memory, score)| EpisodicMemoryResult { memory, score })
       .collect(),
   };
 
@@ -149,11 +149,11 @@ pub async fn retrieve_memory(
     return Err(AppError::new(anyhow::anyhow!("Query cannot be empty")));
   }
 
-  let (facts_results, episodic_results) = tokio::try_join!(
-    SemanticMemory::retrieve(&payload.query, payload.facts_limit, &state.db),
+  let (semantic_results, episodic_results) = tokio::try_join!(
+    SemanticMemory::retrieve(&payload.query, payload.semantic_limit, &state.db),
     EpisodicMemory::retrieve(
       &payload.query,
-      payload.limit,
+      payload.episodic_limit,
       payload.conversation_id,
       &state.db
     ),
@@ -168,7 +168,7 @@ pub async fn retrieve_memory(
   .await?;
 
   Ok(format_tool_result(
-    &facts_results,
+    &semantic_results,
     &episodic_results,
     &payload.detail,
   ))
