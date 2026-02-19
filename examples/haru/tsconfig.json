@@ -1,0 +1,6 @@
+{
+  "extends": "@moeru/tsconfig",
+  "compilerOptions": {
+    "jsx": "react-jsx"
+  }
+}

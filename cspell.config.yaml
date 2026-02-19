@@ -10,6 +10,7 @@ words:
   - direnv
   - dotenv
   - fsrs
+  - haru
   - hnsw
   - iden
   - kwaa
@@ -39,5 +40,6 @@ words:
   - uuidv
   - vchord
   - waifu
+  - xsai
 ignoreWords: []
 import: []
