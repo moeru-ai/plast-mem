@@ -41,7 +41,7 @@ export const ChatApp = () => {
 
       <Box backgroundColor="grey" padding={1}>
         <Box marginRight={1}>
-          <Text>❯</Text>
+          <Text>›</Text>
         </Box>
         {/* TODO: fix grey placeholder */}
         <TextInput
