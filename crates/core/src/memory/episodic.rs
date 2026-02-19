@@ -131,37 +131,29 @@ impl EpisodicMemory {
 
   /// Retrieve episodic memories using hybrid BM25 + vector search with FSRS re-ranking.
   ///
-  /// When `scope` is `Some(conversation_id)`, only memories from that conversation are searched.
-  /// When `scope` is `None`, all memories are searched globally.
+  /// Only memories from the specified conversation are searched.
   pub async fn retrieve(
     query: &str,
     limit: u64,
-    scope: Option<Uuid>,
+    conversation_id: Uuid,
     db: &DatabaseConnection,
   ) -> Result<Vec<(Self, f64)>, AppError> {
     let query_embedding = embed(query).await?;
     let fsrs = FSRS::new(Some(&DEFAULT_PARAMETERS))?;
 
-    let scope_filter = if scope.is_some() {
-      "AND conversation_id = $5"
-    } else {
-      ""
-    };
-
-    let retrieve_sql = format!(
-      r"
+    let retrieve_sql = r"
     WITH
     fulltext AS (
       SELECT id, ROW_NUMBER() OVER (ORDER BY pdb.score(id) DESC) AS r
       FROM episodic_memory
-      WHERE summary ||| $1 {scope_filter}
-      LIMIT $2
+      WHERE summary ||| $1 AND conversation_id = $2
+      LIMIT $3
     ),
     semantic AS (
-      SELECT id, ROW_NUMBER() OVER (ORDER BY embedding <#> $3) AS r
+      SELECT id, ROW_NUMBER() OVER (ORDER BY embedding <#> $4) AS r
       FROM episodic_memory
-      WHERE 1=1 {scope_filter}
-      LIMIT $2
+      WHERE conversation_id = $2
+      LIMIT $3
     ),
     rrf AS (
       SELECT id, 1.0 / (60 + r) AS s FROM fulltext
@@ -191,21 +183,18 @@ impl EpisodicMemory {
     FROM rrf_score r
     JOIN episodic_memory m USING (id)
     ORDER BY r.score DESC
-    LIMIT $4;
-    "
-    );
+    LIMIT $5;
+    ";
 
-    let mut params: Vec<sea_orm::Value> = vec![
-      query.to_owned().into(),
-      100.into(), // candidate limit
-      query_embedding.clone().into(),
-      100.into(), // candidate limit
+    let params: Vec<sea_orm::Value> = vec![
+      query.to_owned().into(),      // $1
+      conversation_id.into(),       // $2
+      100.into(),                   // $3: candidate limit
+      query_embedding.into(),       // $4
+      100.into(),                   // $5: final limit
     ];
-    if let Some(cid) = scope {
-      params.push(cid.into());
-    }
 
-    let retrieve_stmt = Statement::from_sql_and_values(DbBackend::Postgres, &retrieve_sql, params);
+    let retrieve_stmt = Statement::from_sql_and_values(DbBackend::Postgres, retrieve_sql, params);
 
     let rows = db.query_all_raw(retrieve_stmt).await?;
     let mut results = Vec::with_capacity(rows.len());

@@ -1,5 +1,7 @@
 use axum::{Json, extract::State};
-use plastmem_core::{DetailLevel, EpisodicMemory, MessageQueue, SemanticMemory, format_tool_result};
+use plastmem_core::{
+  DetailLevel, EpisodicMemory, MessageQueue, SemanticMemory, format_tool_result,
+};
 use plastmem_shared::AppError;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -19,7 +21,7 @@ const fn default_facts_limit() -> u64 {
 
 #[derive(Deserialize, ToSchema)]
 pub struct RetrieveMemory {
-  /// Conversation ID to associate pending review with
+  /// Conversation ID to filter memories by and associate pending review with
   pub conversation_id: Uuid,
   /// Search query text
   pub query: String,
@@ -32,9 +34,6 @@ pub struct RetrieveMemory {
   /// Detail level: "auto", "none", "low", "high"
   #[serde(default)]
   pub detail: DetailLevel,
-  /// Optional scope: when set, only retrieve memories from this conversation.
-  /// When omitted, searches all conversations (cross-conversation recall).
-  pub scope: Option<Uuid>,
 }
 
 /// Record retrieved memory IDs as pending review in the message queue.
@@ -99,11 +98,21 @@ pub async fn retrieve_memory_raw(
 
   let (facts_results, episodic_results) = tokio::try_join!(
     SemanticMemory::retrieve(&payload.query, payload.facts_limit, &state.db),
-    EpisodicMemory::retrieve(&payload.query, payload.limit, payload.scope, &state.db),
+    EpisodicMemory::retrieve(
+      &payload.query,
+      payload.limit,
+      payload.conversation_id,
+      &state.db
+    ),
   )?;
 
-  record_pending_review(&state, payload.conversation_id, &payload.query, &episodic_results)
-    .await?;
+  record_pending_review(
+    &state,
+    payload.conversation_id,
+    &payload.query,
+    &episodic_results,
+  )
+  .await?;
 
   let response = RetrieveMemoryRawResponse {
     facts: facts_results
@@ -142,11 +151,25 @@ pub async fn retrieve_memory(
 
   let (facts_results, episodic_results) = tokio::try_join!(
     SemanticMemory::retrieve(&payload.query, payload.facts_limit, &state.db),
-    EpisodicMemory::retrieve(&payload.query, payload.limit, payload.scope, &state.db),
+    EpisodicMemory::retrieve(
+      &payload.query,
+      payload.limit,
+      payload.conversation_id,
+      &state.db
+    ),
   )?;
 
-  record_pending_review(&state, payload.conversation_id, &payload.query, &episodic_results)
-    .await?;
+  record_pending_review(
+    &state,
+    payload.conversation_id,
+    &payload.query,
+    &episodic_results,
+  )
+  .await?;
 
-  Ok(format_tool_result(&facts_results, &episodic_results, &payload.detail))
+  Ok(format_tool_result(
+    &facts_results,
+    &episodic_results,
+    &payload.detail,
+  ))
 }
