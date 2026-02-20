@@ -2,7 +2,7 @@
 
 import type { Client, Options as Options2, TDataShape } from './client';
 import { client } from './client.gen';
-import type { AddMessageData, AddMessageErrors, AddMessageResponses, RetrieveMemoryData, RetrieveMemoryErrors, RetrieveMemoryRawData, RetrieveMemoryRawErrors, RetrieveMemoryRawResponses, RetrieveMemoryResponses } from './types.gen';
+import type { AddMessageData, AddMessageErrors, AddMessageResponses, RecentMemoryData, RecentMemoryRawData, RecentMemoryRawResponses, RecentMemoryResponses, RetrieveMemoryData, RetrieveMemoryErrors, RetrieveMemoryRawData, RetrieveMemoryRawErrors, RetrieveMemoryRawResponses, RetrieveMemoryResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean> = Options2<TData, ThrowOnError> & {
     /**
@@ -23,6 +23,31 @@ export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends 
  */
 export const addMessage = <ThrowOnError extends boolean = false>(options: Options<AddMessageData, ThrowOnError>) => (options.client ?? client).post<AddMessageResponses, AddMessageErrors, ThrowOnError>({
     url: '/api/v0/add_message',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * Retrieve recent memories formatted as markdown for LLM consumption.
+ * Returns only summaries, no full message details.
+ */
+export const recentMemory = <ThrowOnError extends boolean = false>(options: Options<RecentMemoryData, ThrowOnError>) => (options.client ?? client).post<RecentMemoryResponses, unknown, ThrowOnError>({
+    url: '/api/v0/recent_memory',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * Retrieve recent memories in raw JSON format (newest first)
+ */
+export const recentMemoryRaw = <ThrowOnError extends boolean = false>(options: Options<RecentMemoryRawData, ThrowOnError>) => (options.client ?? client).post<RecentMemoryRawResponses, unknown, ThrowOnError>({
+    url: '/api/v0/recent_memory/raw',
     ...options,
     headers: {
         'Content-Type': 'application/json',

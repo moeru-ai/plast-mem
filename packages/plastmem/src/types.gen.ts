@@ -48,6 +48,22 @@ export type Message = {
 
 export type MessageRole = 'user' | 'assistant';
 
+export type RecentMemory = {
+    /**
+     * Conversation ID to filter memories by
+     */
+    conversation_id: string;
+    /**
+     * Limit to memories from the last N days (optional)
+     * If not provided, returns the most recent memories up to `limit`
+     */
+    days_limit?: number | null;
+    /**
+     * Maximum memories to return (default: 10, max: 100)
+     */
+    limit?: number;
+};
+
 export type RetrieveMemory = {
     /**
      * Conversation ID to filter memories by and associate pending review with
@@ -121,6 +137,38 @@ export type AddMessageResponses = {
      */
     200: unknown;
 };
+
+export type RecentMemoryData = {
+    body: RecentMemory;
+    path?: never;
+    query?: never;
+    url: '/api/v0/recent_memory';
+};
+
+export type RecentMemoryResponses = {
+    /**
+     * Markdown formatted recent memories
+     */
+    200: string;
+};
+
+export type RecentMemoryResponse = RecentMemoryResponses[keyof RecentMemoryResponses];
+
+export type RecentMemoryRawData = {
+    body: RecentMemory;
+    path?: never;
+    query?: never;
+    url: '/api/v0/recent_memory/raw';
+};
+
+export type RecentMemoryRawResponses = {
+    /**
+     * Recent episodic memories
+     */
+    200: Array<EpisodicMemory>;
+};
+
+export type RecentMemoryRawResponse = RecentMemoryRawResponses[keyof RecentMemoryRawResponses];
 
 export type RetrieveMemoryData = {
     body: RetrieveMemory;

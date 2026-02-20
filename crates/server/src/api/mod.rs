@@ -6,9 +6,11 @@ use utoipa_scalar::{Scalar, Servable};
 use crate::utils::AppState;
 
 mod add_message;
+mod recent_memory;
 mod retrieve_memory;
 
 pub use add_message::{AddMessage, AddMessageMessage};
+pub use recent_memory::RecentMemory;
 pub use retrieve_memory::{
   EpisodicMemoryResult, RetrieveMemory, RetrieveMemoryRawResult, SemanticMemoryResult,
 };
@@ -16,6 +18,8 @@ pub use retrieve_memory::{
 pub fn app() -> Router<AppState> {
   let (router, openapi) = OpenApiRouter::with_openapi(ApiDoc::openapi())
     .routes(routes!(add_message::add_message))
+    .routes(routes!(recent_memory::recent_memory))
+    .routes(routes!(recent_memory::recent_memory_raw))
     .routes(routes!(retrieve_memory::retrieve_memory))
     .routes(routes!(retrieve_memory::retrieve_memory_raw))
     .split_for_parts();
@@ -36,6 +40,7 @@ pub fn app() -> Router<AppState> {
   components(schemas(
     AddMessage,
     AddMessageMessage,
+    RecentMemory,
     RetrieveMemory,
     RetrieveMemoryRawResult,
     EpisodicMemoryResult,
