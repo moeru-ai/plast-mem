@@ -174,7 +174,6 @@ Don't second-guess the ranking; do surface the mismatch.
 
 Current time: {time}
 Session started: {session_start_time} ({elapsed_time} ago)
-Conversation turn: {turn_count} turns in
 
 ---
 
