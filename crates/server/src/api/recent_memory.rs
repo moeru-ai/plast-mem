@@ -30,7 +30,7 @@ const fn default_limit() -> u64 {
 }
 
 fn sanitize_limit(value: u64) -> u64 {
-  if value > 0 && value <= 100 { value } else { 10 }
+  value.clamp(1, 100)
 }
 
 /// Retrieve recent memories in raw JSON format (newest first)
