@@ -8,7 +8,7 @@ import { version } from '../../package.json'
 
 export const Header = () => (
   <Box flexDirection="row" gap={2} padding={1}>
-    <Text>
+    <Text color="blue">
       {figlet.textSync('Haru', {
         font: 'Catwalk',
       })}
