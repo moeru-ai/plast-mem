@@ -1,6 +1,6 @@
 use std::fmt::Write;
 
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use plastmem_ai::{
   ChatCompletionRequestMessage, ChatCompletionRequestSystemMessage,
   ChatCompletionRequestUserMessage, embed_many, generate_object,
@@ -14,130 +14,12 @@ use sea_orm::{
   prelude::{Expr, PgVector},
   sea_query::{ArrayType, Value},
 };
-use serde::{Deserialize, Serialize};
-use utoipa::ToSchema;
+use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::EpisodicMemory;
 
-// ──────────────────────────────────────────────────
-// Domain model
-// ──────────────────────────────────────────────────
-
-#[derive(Debug, Serialize, Clone, ToSchema)]
-pub struct SemanticMemory {
-  pub id: Uuid,
-  pub conversation_id: Uuid,
-  pub subject: String,
-  pub predicate: String,
-  pub object: String,
-  pub fact: String,
-  pub source_episodic_ids: Vec<Uuid>,
-  pub valid_at: DateTime<Utc>,
-  pub invalid_at: Option<DateTime<Utc>>,
-  #[serde(skip)]
-  pub embedding: PgVector,
-  #[serde(skip)]
-  pub created_at: DateTime<Utc>,
-}
-
-impl SemanticMemory {
-  #[must_use] 
-  pub fn from_model(model: semantic_memory::Model) -> Self {
-    Self {
-      id: model.id,
-      conversation_id: model.conversation_id,
-      subject: model.subject,
-      predicate: model.predicate,
-      object: model.object,
-      fact: model.fact,
-      source_episodic_ids: model.source_episodic_ids,
-      valid_at: model.valid_at.with_timezone(&Utc),
-      invalid_at: model.invalid_at.map(|dt| dt.with_timezone(&Utc)),
-      embedding: model.embedding,
-      created_at: model.created_at.with_timezone(&Utc),
-    }
-  }
-
-  /// Check if this fact is a procedural / behavioral guideline.
-  #[must_use] 
-  pub fn is_behavioral(&self) -> bool {
-    self.subject == "assistant"
-      && (self.predicate == "should"
-        || self.predicate == "should_not"
-        || self.predicate.starts_with("should_when_")
-        || self.predicate.starts_with("responds_to_"))
-  }
-
-  /// Retrieve semantic facts using hybrid BM25 + vector search with RRF.
-  /// Only active facts (`invalid_at IS NULL`) from the specified conversation are returned.
-  pub async fn retrieve(
-    query: &str,
-    limit: i64,
-    conversation_id: Uuid,
-    db: &DatabaseConnection,
-  ) -> Result<Vec<(Self, f64)>, AppError> {
-    let query_embedding = plastmem_ai::embed(query).await?;
-
-    let sql = r"
-    WITH
-    fulltext AS (
-      SELECT id, ROW_NUMBER() OVER (ORDER BY pdb.score(id) DESC) AS r
-      FROM semantic_memory
-      WHERE fact ||| $1 AND conversation_id = $2 AND invalid_at IS NULL
-      LIMIT $3
-    ),
-    semantic AS (
-      SELECT id, ROW_NUMBER() OVER (ORDER BY embedding <#> $4) AS r
-      FROM semantic_memory
-      WHERE conversation_id = $2 AND invalid_at IS NULL
-      LIMIT $3
-    ),
-    rrf AS (
-      SELECT id, 1.0 / (60 + r) AS s FROM fulltext
-      UNION ALL
-      SELECT id, 1.0 / (60 + r) AS s FROM semantic
-    ),
-    rrf_score AS (
-      SELECT id, SUM(s) AS score
-      FROM rrf
-      GROUP BY id
-    )
-    SELECT
-      m.id, m.conversation_id, m.subject, m.predicate, m.object, m.fact, m.source_episodic_ids,
-      m.valid_at, m.invalid_at, m.embedding, m.created_at,
-      r.score AS score
-    FROM rrf_score r
-    JOIN semantic_memory m USING (id)
-    ORDER BY r.score DESC
-    LIMIT $5;
-    ";
-
-    let stmt = Statement::from_sql_and_values(
-      DbBackend::Postgres,
-      sql,
-      vec![
-        query.to_owned().into(),      // $1
-        conversation_id.into(),       // $2
-        100.into(),                   // $3: candidate limit
-        query_embedding.into(),       // $4
-        limit.into(),        // $5
-      ],
-    );
-
-    let rows = db.query_all_raw(stmt).await?;
-    let mut results = Vec::with_capacity(rows.len());
-
-    for row in rows {
-      let model = semantic_memory::Model::from_query_result(&row, "")?;
-      let score: f64 = row.try_get("", "score")?;
-      let fact = Self::from_model(model);
-      results.push((fact, score));
-    }
-
-    Ok(results)
-  }
-}
+use super::SemanticMemory;
 
 // ──────────────────────────────────────────────────
 // LLM consolidation types
@@ -333,7 +215,8 @@ async fn invalidate_fact<C: ConnectionTrait>(fact_id: Uuid, db: &C) -> Result<()
 // ──────────────────────────────────────────────────
 
 /// Retrieve existing active facts related to the given episodes.
-/// Uses episode summaries as embedding queries to find relevant facts.
+/// Batches all episode embeddings in one API call, then searches per-episode to avoid
+/// cross-episode semantic dilution. Results are deduplicated by fact ID.
 /// Only searches within the specified conversation.
 async fn load_related_facts(
   episodes: &[EpisodicMemory],
@@ -341,16 +224,28 @@ async fn load_related_facts(
   conversation_id: Uuid,
   db: &DatabaseConnection,
 ) -> Result<Vec<SemanticMemory>, AppError> {
-  // Combine all episode summaries into a single query
-  let combined_summary: String = episodes
-    .iter()
-    .map(|ep| ep.summary.as_str())
-    .collect::<Vec<_>>()
-    .join("\n");
+  if episodes.is_empty() {
+    return Ok(Vec::new());
+  }
 
-  let results = SemanticMemory::retrieve(&combined_summary, limit, conversation_id, db).await?;
+  let summaries: Vec<String> = episodes.iter().map(|ep| ep.summary.clone()).collect();
+  let embeddings = embed_many(&summaries).await?;
 
-  Ok(results.into_iter().map(|(fact, _)| fact).collect())
+  let mut seen_ids = std::collections::HashSet::new();
+  let mut facts = Vec::new();
+
+  for (ep, embedding) in episodes.iter().zip(embeddings.into_iter()) {
+    let results =
+      SemanticMemory::retrieve_by_vector(&ep.summary, embedding, limit, conversation_id, db)
+        .await?;
+    for (fact, _) in results {
+      if seen_ids.insert(fact.id) {
+        facts.push(fact);
+      }
+    }
+  }
+
+  Ok(facts)
 }
 
 // ──────────────────────────────────────────────────
@@ -590,19 +485,20 @@ pub async fn process_consolidation(
     "Semantic consolidation completed"
   );
 
-  // 4-6. All database mutations in a transaction
-  let txn = db.begin().await?;
-
   if output.facts.is_empty() {
     // No facts to process, just mark episodes as consolidated
+    let txn = db.begin().await?;
     EpisodicMemory::mark_consolidated(&episode_ids, &txn).await?;
     txn.commit().await?;
     return Ok(());
   }
 
-  // Batch embed all fact sentences (for new/update facts)
+  // Batch embed all fact sentences before opening a transaction
   let fact_texts: Vec<String> = output.facts.iter().map(|f| f.fact.clone()).collect();
   let embeddings = embed_many(&fact_texts).await?;
+
+  // 4-6. All database mutations in a transaction (opened after embedding to keep it short)
+  let txn = db.begin().await?;
 
   // Process each consolidated fact within the transaction
   for (fact, embedding) in output.facts.iter().zip(embeddings.into_iter()) {

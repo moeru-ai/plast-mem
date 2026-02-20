@@ -1,7 +1,7 @@
 mod memory;
 pub use memory::EpisodicMemory;
 pub use memory::SemanticMemory;
-pub use memory::creation::{CreatedEpisode, create_episode};
+pub use memory::{CreatedEpisode, create_episode};
 pub use memory::semantic::{
   CONSOLIDATION_EPISODE_THRESHOLD, FLASHBULB_SURPRISE_THRESHOLD, process_consolidation,
 };

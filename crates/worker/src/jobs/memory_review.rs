@@ -147,6 +147,12 @@ pub async fn process_memory_review(
       continue;
     }
 
+    // Same-day skip: FSRS with days_elapsed=0 produces near-initial states
+    let days_elapsed = (job.reviewed_at - last_reviewed_at).num_days();
+    if days_elapsed < 1 {
+      continue;
+    }
+
     memories_for_review.push((*memory_id, model.summary.clone(), queries.clone()));
   }
 
