@@ -22,6 +22,8 @@ export const Header = () => (
         <Text dimColor>model:</Text>
         {' '}
         {env.OPENAI_CHAT_MODEL}
+        {' '}
+        <Text dimColor>/model to change</Text>
       </Text>
       <Text>
         <Text dimColor>baseURL:</Text>

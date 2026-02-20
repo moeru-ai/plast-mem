@@ -12,6 +12,7 @@ import { useTerminalTitle } from './hooks/use-terminal-title'
 
 const COMMANDS = [
   { cmd: '/model', desc: 'choose what model to use' },
+  { cmd: '/clear', desc: 'clear working memory' },
   { cmd: '/reset', desc: 'reset Haru (dangeriously)' },
   { cmd: '/exit', desc: 'exit Haru' },
 ]
