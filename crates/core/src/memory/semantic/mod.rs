@@ -15,6 +15,9 @@ use serde::Serialize;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
+/// Number of candidates fetched per search leg (BM25 and vector) before RRF merging.
+const RETRIEVAL_CANDIDATE_LIMIT: i64 = 100;
+
 // ──────────────────────────────────────────────────
 // Domain model
 // ──────────────────────────────────────────────────
@@ -124,7 +127,7 @@ impl SemanticMemory {
       vec![
         query.to_owned().into(),      // $1
         conversation_id.into(),       // $2
-        100.into(),                   // $3: candidate limit
+        RETRIEVAL_CANDIDATE_LIMIT.into(), // $3: candidate limit
         query_embedding.into(),       // $4
         limit.into(),                 // $5
       ],

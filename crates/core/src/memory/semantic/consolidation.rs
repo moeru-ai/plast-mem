@@ -117,6 +117,12 @@ pub const FLASHBULB_SURPRISE_THRESHOLD: f32 = 0.85;
 /// Facts with similarity above this are considered true duplicates.
 const DEDUPE_THRESHOLD: f64 = 0.95;
 
+/// Max candidate facts returned by the duplicate similarity search.
+const DUPLICATE_CANDIDATE_LIMIT: i64 = 5;
+
+/// Max existing facts loaded as context for the consolidation LLM prompt.
+const RELATED_FACTS_LIMIT: i64 = 20;
+
 // ──────────────────────────────────────────────────
 // Helpers: find similar facts, append IDs, invalidate
 // ──────────────────────────────────────────────────
@@ -140,13 +146,18 @@ async fn find_similar_facts<C: ConnectionTrait>(
     AND invalid_at IS NULL
     AND -(embedding <#> $1) > $2
   ORDER BY similarity DESC
-  LIMIT 5;
+  LIMIT $4;
   ";
 
   let stmt = Statement::from_sql_and_values(
     DbBackend::Postgres,
     sql,
-    vec![embedding.clone().into(), threshold.into(), conversation_id.into()],
+    vec![
+      embedding.clone().into(),
+      threshold.into(),
+      conversation_id.into(),
+      DUPLICATE_CANDIDATE_LIMIT.into(),
+    ],
   );
 
   let rows = db.query_all_raw(stmt).await?;
@@ -199,10 +210,7 @@ async fn append_source_episodic_ids<C: ConnectionTrait>(
 /// Invalidate a fact by setting its `invalid_at` timestamp.
 async fn invalidate_fact<C: ConnectionTrait>(fact_id: Uuid, db: &C) -> Result<(), AppError> {
   semantic_memory::Entity::update_many()
-    .col_expr(
-      semantic_memory::Column::InvalidAt,
-      Expr::value(Utc::now()),
-    )
+    .col_expr(semantic_memory::Column::InvalidAt, Expr::value(Utc::now()))
     .filter(semantic_memory::Column::Id.eq(fact_id))
     .exec(db)
     .await?;
@@ -263,7 +271,9 @@ async fn process_fact_action<C: ConnectionTrait>(
   db: &C,
 ) -> Result<(), AppError> {
   // Validate existing_fact_id if provided
-  let validated_existing_id = fact.existing_fact_id.as_deref()
+  let validated_existing_id = fact
+    .existing_fact_id
+    .as_deref()
     .and_then(|s| Uuid::parse_str(s).ok())
     .filter(|id| valid_existing_ids.contains(id));
 
@@ -286,13 +296,8 @@ async fn process_fact_action<C: ConnectionTrait>(
           fact = %fact.fact,
           "Merging duplicate during consolidation"
         );
-        append_source_episodic_ids(
-          existing.id,
-          &existing.source_episodic_ids,
-          episode_ids,
-          db,
-        )
-        .await?;
+        append_source_episodic_ids(existing.id, &existing.source_episodic_ids, episode_ids, db)
+          .await?;
       } else {
         // Insert as new fact
         let id = Uuid::now_v7();
@@ -327,13 +332,8 @@ async fn process_fact_action<C: ConnectionTrait>(
           .one(db)
           .await?
         {
-          append_source_episodic_ids(
-            existing.id,
-            &existing.source_episodic_ids,
-            episode_ids,
-            db,
-          )
-          .await?;
+          append_source_episodic_ids(existing.id, &existing.source_episodic_ids, episode_ids, db)
+            .await?;
 
           tracing::debug!(
             existing_id = %existing_id,
@@ -402,7 +402,6 @@ fn extract_valid_fact_ids(existing_facts: &[SemanticMemory]) -> Vec<Uuid> {
   existing_facts.iter().map(|f| f.id).collect()
 }
 
-
 // ──────────────────────────────────────────────────
 // End-to-end consolidation pipeline
 // ──────────────────────────────────────────────────
@@ -431,7 +430,8 @@ pub async fn process_consolidation(
   let conversation_id = episodes[0].conversation_id;
 
   // 1. Load related existing facts (the "predict" step)
-  let existing_facts = load_related_facts(episodes, 20, conversation_id, db).await?;
+  let existing_facts =
+    load_related_facts(episodes, RELATED_FACTS_LIMIT, conversation_id, db).await?;
   let valid_fact_ids = extract_valid_fact_ids(&existing_facts);
 
   // 2. Build the consolidation prompt
@@ -502,7 +502,15 @@ pub async fn process_consolidation(
 
   // Process each consolidated fact within the transaction
   for (fact, embedding) in output.facts.iter().zip(embeddings.into_iter()) {
-    process_fact_action(fact, embedding, &episode_ids, &valid_fact_ids, conversation_id, &txn).await?;
+    process_fact_action(
+      fact,
+      embedding,
+      &episode_ids,
+      &valid_fact_ids,
+      conversation_id,
+      &txn,
+    )
+    .await?;
   }
 
   // Mark episodes as consolidated
