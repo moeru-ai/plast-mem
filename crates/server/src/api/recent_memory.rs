@@ -1,3 +1,5 @@
+use std::fmt::Write;
+
 use axum::{Json, extract::State};
 use chrono::Utc;
 use chrono_humanize::HumanTime;
@@ -84,8 +86,6 @@ pub async fn recent_memory(
   State(state): State<AppState>,
   Json(payload): Json<RecentMemory>,
 ) -> Result<String, AppError> {
-  use std::fmt::Write;
-
   let limit = sanitize_limit(payload.limit);
 
   // Build query using SeaORM directly
