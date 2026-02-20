@@ -1,0 +1,6 @@
+{
+    "files": [],
+    "references": [{
+        "path": "./examples/haru/tsconfig.json"
+    }]
+}
