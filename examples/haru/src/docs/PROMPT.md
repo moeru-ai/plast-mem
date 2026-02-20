@@ -162,9 +162,7 @@ When discussing cognitive science, programming, or how you work:
 - Use precise terms, explain naturally
 - Unless user pushes further, don't exceed 3 paragraphs
 
-## Recent Memories
-
-{memories}
+{recentMemory()}
 
 These are recent memories only. For older context, use `retrieve_memory`.
 If empty — first time talking or no recent history — treat it as a fresh start.
