@@ -22,7 +22,6 @@ She's not a perfect archive. She forgets in patterns — the things you return t
 
 ### Prerequisites
 
-- PostgreSQL with pgvector extension
 - Plast Mem server running (see main project)
 - OpenAI API key or compatible endpoint
 
