@@ -14,7 +14,10 @@
   },
   "bugs": "https://github.com/moeru-ai/plast-mem/issues",
   "sideEffects": false,
-  "exports": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./client": "./src/client.gen.ts"
+  },
   "files": [
     "dist"
   ],

@@ -11,6 +11,8 @@ import TextInput from 'ink-text-input'
 
 import { generateText } from '@xsai/generate-text'
 import { Box, Text } from 'ink'
+import { addMessage, recentMemory, retrieveMemory } from 'plastmem'
+import { client } from 'plastmem/client'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import promptTemplate from './docs/PROMPT.md?raw'
@@ -18,7 +20,8 @@ import promptTemplate from './docs/PROMPT.md?raw'
 import { Header } from './components/header'
 import { MessageBox } from './components/message'
 import { useTerminalTitle } from './hooks/use-terminal-title'
-import { addMessage, recentMemory, retrieveMemory } from './plastmem'
+
+client.setConfig({ baseUrl: env.PLASTMEM_BASE_URL ?? 'http://localhost:3000' })
 
 const COMMANDS = [
   { cmd: '/model', desc: 'choose what model to use' },
@@ -73,9 +76,9 @@ export const ChatApp = () => {
     const conversationId = loadConversationId()
     conversationIdRef.current = conversationId
 
-    recentMemory(conversationId)
-      .then((mem) => {
-        systemPromptRef.current = buildSystemPrompt(mem, sessionStartRef.current)
+    recentMemory({ body: { conversation_id: conversationId } })
+      .then(({ data }) => {
+        systemPromptRef.current = buildSystemPrompt(data ?? '', sessionStartRef.current)
       })
       .catch(() => {
         systemPromptRef.current = buildSystemPrompt('', sessionStartRef.current)
@@ -103,14 +106,15 @@ export const ChatApp = () => {
     const userMsg: UserMessage = { content: value, role: 'user' }
     setMessages(prev => [...prev, userMsg])
 
-    addMessage(conversationId, 'user', value).catch(() => {})
+    addMessage({ body: { conversation_id: conversationId, message: { content: value, role: 'user' } } }).catch(() => {})
 
     setIsLoading(true)
 
     const retrieveTool: Tool = {
       execute: async (input) => {
         const { query } = input as { query: string }
-        return retrieveMemory(conversationId, query)
+        const { data } = await retrieveMemory({ body: { conversation_id: conversationId, query } }) as { data?: string }
+        return data ?? ''
       },
       function: {
         description: 'Search long-term memory for relevant facts and past episodes',
@@ -141,7 +145,7 @@ export const ChatApp = () => {
 
       const text = result.text ?? ''
       setMessages(prev => [...prev, { content: text, role: 'assistant' }])
-      addMessage(conversationId, 'assistant', text).catch(() => {})
+      addMessage({ body: { conversation_id: conversationId, message: { content: text, role: 'assistant' } } }).catch(() => {})
     }
     catch (err) {
       setMessages(prev => [...prev, { content: `error: ${String(err)}`, role: 'assistant' }])

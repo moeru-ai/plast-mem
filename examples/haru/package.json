@@ -8,6 +8,7 @@
     "dev": "vite-node -w src/index.tsx"
   },
   "dependencies": {
+    "plastmem": "workspace:*",
     "@pnpm/find-workspace-dir": "^1000.1.4",
     "@xsai/generate-text": "^0.4.3",
     "@xsai/shared-chat": "^0.4.3",
