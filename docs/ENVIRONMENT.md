@@ -35,6 +35,14 @@ OPENAI_CHAT_MODEL=gpt-oss
 OPENAI_EMBEDDING_MODEL=qwen3-embedding:0.6b
 ```
 
+## Client Configuration
+
+Variables used by client applications (e.g. `examples/haru`), not the server itself:
+
+| Variable              | Description               | Default                 |
+|-----------------------|---------------------------|-------------------------|
+| `PLASTMEM_BASE_URL`   | Plast Mem server endpoint | `http://localhost:3000` |
+
 ## Troubleshooting
 
 - **Missing env var panic**: Ensure all variables are set in `.env` or environment

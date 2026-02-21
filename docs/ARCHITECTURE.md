@@ -89,6 +89,15 @@ HTTP server and API handlers
   - `shutdown_signal.rs`: Graceful shutdown handling
 - `server.rs`: Axum HTTP server setup
 
+## Examples
+
+### Haru (`examples/haru/`)
+
+A terminal chat client demonstrating Plast Mem integration. Key files:
+
+- `src/plastmem.ts`: thin API client (`addMessage`, `recentMemory`, `retrieveMemory`)
+- `src/chat.tsx`: Ink/React UI — loads conversation ID, injects recent memory into system prompt, exposes `retrieve_memory` as LLM tool, auto-persists messages
+
 ## Further Reading
 
 - [Episodic Memory](architecture/episodic_memory.md) - Core memory type for conversation storage

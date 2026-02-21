@@ -25,6 +25,17 @@ She's not a perfect archive. She forgets in patterns — the things you return t
 - Plast Mem server running (see main project)
 - OpenAI API key or compatible endpoint
 
+### Environment
+
+The following variables are read from the root `.env`:
+
+|Variable|Description|
+|---|---|
+|`OPENAI_BASE_URL`|OpenAI-compatible API endpoint|
+|`OPENAI_API_KEY`|API key|
+|`OPENAI_CHAT_MODEL`|Chat model name|
+|`PLASTMEM_BASE_URL`|Plast Mem server URL (default: `http://localhost:3000`)|
+
 ### Run
 
 ```bash
@@ -33,6 +44,13 @@ pnpm dev
 ```
 
 The app will connect to your local Plast Mem instance and start chatting.
+
+## How It Works
+
+- **Persistent identity**: conversation ID is stored at `~/.config/haru/id` and reused across sessions
+- **Session start**: fetches `recent_memory` and injects it into the system prompt
+- **Each turn**: auto-calls `add_message` for both user and assistant messages
+- **Memory retrieval**: `retrieve_memory` is exposed as an LLM tool — Haru calls it when she needs to look something up
 
 ## Design Philosophy
 
