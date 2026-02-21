@@ -13,7 +13,7 @@ import { addMessage, recentMemoryRaw, retrieveMemory } from 'plastmem'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Temporal } from 'temporal-polyfill'
 
-import promptTemplate from '../docs/PROMPT.md?raw'
+import { prompt } from '../core/prompt'
 
 const durationFormat = new Intl.DurationFormat('en', { style: 'narrow' })
 
@@ -71,7 +71,7 @@ export const useHaru = (conversation_id: string) => {
         ]
       }).join('\n\n') ?? ''
 
-      const content = promptTemplate
+      const content = prompt
         .replace('{recent_memory}', recentMemory)
         .replace('{time}', now.toLocaleString())
         .replace('{session_start_time}', initialAt.toLocaleString())
