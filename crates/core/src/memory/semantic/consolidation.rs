@@ -228,7 +228,6 @@ async fn invalidate_fact<C: ConnectionTrait>(fact_id: Uuid, db: &C) -> Result<()
 /// Only searches within the specified conversation.
 async fn load_related_facts(
   episodes: &[EpisodicMemory],
-  let summaries: Vec<&str> = episodes.iter().map(|ep| ep.summary.as_str()).collect();
   conversation_id: Uuid,
   db: &DatabaseConnection,
 ) -> Result<Vec<SemanticMemory>, AppError> {
@@ -244,7 +243,7 @@ async fn load_related_facts(
 
   for (ep, embedding) in episodes.iter().zip(embeddings.into_iter()) {
     let results =
-      SemanticMemory::retrieve_by_vector(&ep.summary, embedding, limit, conversation_id, db)
+      SemanticMemory::retrieve_by_vector(&ep.summary, embedding, RELATED_FACTS_LIMIT, conversation_id, db)
         .await?;
     for (fact, _) in results {
       if seen_ids.insert(fact.id) {
@@ -431,7 +430,7 @@ pub async fn process_consolidation(
 
   // 1. Load related existing facts (the "predict" step)
   let existing_facts =
-    load_related_facts(episodes, RELATED_FACTS_LIMIT, conversation_id, db).await?;
+    load_related_facts(episodes, conversation_id, db).await?;
   let valid_fact_ids = extract_valid_fact_ids(&existing_facts);
 
   // 2. Build the consolidation prompt
@@ -494,7 +493,7 @@ pub async fn process_consolidation(
   }
 
   // Batch embed all fact sentences before opening a transaction
-  let fact_texts: Vec<&str> = output.facts.iter().map(|f| f.fact.as_str()).collect();
+  let fact_texts: Vec<String> = output.facts.iter().map(|f| f.fact.clone()).collect();
   let embeddings = embed_many(&fact_texts).await?;
 
   // 4-6. All database mutations in a transaction (opened after embedding to keep it short)
