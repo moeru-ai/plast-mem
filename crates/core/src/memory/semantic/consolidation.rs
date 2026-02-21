@@ -228,7 +228,7 @@ async fn invalidate_fact<C: ConnectionTrait>(fact_id: Uuid, db: &C) -> Result<()
 /// Only searches within the specified conversation.
 async fn load_related_facts(
   episodes: &[EpisodicMemory],
-  limit: i64,
+  let summaries: Vec<&str> = episodes.iter().map(|ep| ep.summary.as_str()).collect();
   conversation_id: Uuid,
   db: &DatabaseConnection,
 ) -> Result<Vec<SemanticMemory>, AppError> {
