@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { env } from 'node:process'
 
 import { workspaceDir } from './workspace-dir'
 
@@ -31,7 +32,7 @@ const envUtils = {
 
 export const dotenvStorage: Storage = {
   clear: () => writeFileSync(envPath, ''),
-  getItem: key => envUtils.parse().get(key) ?? null,
+  getItem: key => env[key] ?? envUtils.parse().get(key) ?? null,
   key: index => Array.from(envUtils.parse().keys())[index] ?? null,
   length: 0,
   removeItem: (key) => {
