@@ -12,12 +12,14 @@ Conversation Messages → Event Segmentation → EpisodicMemory (with FSRS state
                         Surprise Detection
                               ↓
                    Stability Boost (1.0 + surprise × 0.5)
+                              ↓
+                   (if threshold/flashbulb) → SemanticConsolidation
 ```
 
 ## Schema
 
-- **Core struct**: `crates/core/src/memory/episodic.rs`
-- **Episode creation**: `crates/core/src/memory/creation.rs`
+- **Core struct**: `crates/core/src/memory/episodic/mod.rs`
+- **Episode creation**: `crates/core/src/memory/episodic/creation.rs`
 - **Database entity**: `crates/entities/src/episodic_memory.rs`
 
 ### Field Semantics
@@ -27,14 +29,16 @@ Conversation Messages → Event Segmentation → EpisodicMemory (with FSRS state
 | `id` | Primary key | No |
 | `conversation_id` | Grouping key for multi-conversation isolation | No |
 | `messages` | Source conversation (preserved for detail views) | No |
-| `content` | Searchable summary text | No |
-| `embedding` | Vector for semantic search | No |
+| `title` | Short episode title (5-15 words, LLM-generated) | No |
+| `summary` | Searchable narrative summary (LLM-generated) | No |
+| `embedding` | Vector of `summary` text for semantic search | No |
 | `stability` | FSRS decay parameter | Yes (reviews update) |
 | `difficulty` | FSRS difficulty parameter | Yes (reviews update) |
 | `surprise` | Creation-time significance score | No |
-| `start_at` / `end_at` | Temporal boundaries | No |
+| `start_at` / `end_at` | Temporal boundaries of the episode | No |
 | `created_at` | Record creation | No |
 | `last_reviewed_at` | Last retrieval / review | Yes |
+| `consolidated_at` | When processed into semantic memory; `NULL` = pending consolidation | Yes |
 
 ## Lifecycle
 
@@ -57,7 +61,7 @@ let boosted_stability = base_stability * (1.0 + surprise * 0.5);
 ### 2. Storage
 
 Stored in PostgreSQL with `pgvector` extension:
-- BM25 index on `content` for full-text search
+- BM25 index on `summary` for full-text search
 - HNSW index on `embedding` for vector similarity
 
 ### 3. Retrieval
@@ -77,6 +81,12 @@ Each retrieval records pending reviews; when event segmentation triggers, a `Mem
 - Updates `stability`, `difficulty`, `last_reviewed_at`
 
 See [Memory Review](memory_review.md) and [FSRS](fsrs.md) for details.
+
+### 5. Semantic Consolidation
+
+After creation, if `consolidated_at IS NULL` and the unconsolidated episode count reaches the threshold (or surprise triggers a flashbulb), a `SemanticConsolidationJob` extracts long-term facts. On completion, `consolidated_at` is set.
+
+See [Semantic Memory](semantic_memory.md) for details.
 
 ## Surprise Detection
 
@@ -114,23 +124,25 @@ High-surprise memories are labeled "key moment" in tool results and may include 
 See [retrieve_memory](retrieve_memory.md) for endpoint details.
 
 | Endpoint | Location |
-|----------|----------|
+| -------- | -------- |
 | `POST /api/v0/retrieve_memory` | `crates/server/src/api/retrieve_memory.rs` |
 | `POST /api/v0/retrieve_memory/raw` | `crates/server/src/api/retrieve_memory.rs` |
+| `POST /api/v0/recent_memory` | `crates/server/src/api/recent_memory.rs` |
+| `POST /api/v0/recent_memory/raw` | `crates/server/src/api/recent_memory.rs` |
 
 ### Programmatic
 
 | Operation | Location |
 |-----------|----------|
-| `EpisodicMemory::retrieve()` | `crates/core/src/memory/episodic.rs` |
-| `EpisodicMemory::from_model()` | `crates/core/src/memory/episodic.rs` |
-| `EpisodicMemory::to_model()` | `crates/core/src/memory/episodic.rs` |
+| `EpisodicMemory::retrieve()` | `crates/core/src/memory/episodic/mod.rs` |
+| `EpisodicMemory::from_model()` | `crates/core/src/memory/episodic/mod.rs` |
+| `EpisodicMemory::to_model()` | `crates/core/src/memory/episodic/mod.rs` |
 
 ## Design Decisions
 
 ### Why Store Full Messages?
 
-While `content` (summary) is used for search, `messages` preserves the original conversation for detail views. This supports:
+While `summary` is used for search, `messages` preserves the original conversation for detail views. This supports:
 - Audit/debugging (see what actually happened)
 - High-detail tool results for key moments
 - Potential future re-summarization
@@ -165,12 +177,13 @@ FSRS models retrievability—how likely you are to recall something given when y
 │  (pending)      │     │ (LLM analysis)   │     │ (stored)        │
 └─────────────────┘     └──────────────────┘     └─────────────────┘
                                                            │
-                           ┌───────────────────────────────┘
-                           ▼
-                    ┌─────────────────┐
-                    │ retrieve_memory │◀── Query
-                    │ (hybrid search) │
-                    └─────────────────┘
+                           ┌───────────────────────────────┤
+                           │                               │ (threshold/flashbulb)
+                           ▼                               ▼
+                    ┌─────────────────┐     ┌──────────────────────┐
+                    │ retrieve_memory │◀─── │ SemanticConsolidation│
+                    │ (hybrid search) │     │ (facts extraction)   │
+                    └─────────────────┘     └──────────────────────┘
                            │
                            ▼
                     ┌─────────────────┐
@@ -182,5 +195,6 @@ FSRS models retrievability—how likely you are to recall something given when y
 ## See Also
 
 - [Segmentation](segmentation.md) — How conversations become memories
+- [Semantic Memory](semantic_memory.md) — Long-term facts extracted from episodes
 - [FSRS](fsrs.md) — Spaced repetition mechanics
 - [Retrieve Memory](retrieve_memory.md) — API for memory access

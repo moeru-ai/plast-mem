@@ -37,22 +37,33 @@ API endpoint → Server handler → Core service → Entity/DB
 
 - **plastmem**: Entry program - initializes tracing, DB, migrations, job storage, spawns worker and server
 - **plastmem_core**: Core domain logic
-  - `memory/episodic.rs` - hybrid retrieval with FSRS re-ranking
-  - `memory/creation.rs` - episode generation and FSRS initialization
+  - `memory/episodic/mod.rs` - hybrid retrieval with FSRS re-ranking
+  - `memory/episodic/creation.rs` - episode generation and FSRS initialization
+  - `memory/semantic/mod.rs` - semantic fact retrieval (BM25 + vector, no FSRS)
+  - `memory/semantic/consolidation.rs` - CLS consolidation pipeline (episodes → long-term facts)
+  - `memory/retrieval.rs` - shared markdown formatting (`format_tool_result`, `DetailLevel`)
   - `message_queue/` - queue operations, segmentation rules, boundary detection, pending reviews
 - **plastmem_migration**: Database table migrations
 - **plastmem_entities**: Database table entities (Sea-ORM)
+  - `episodic_memory.rs` - episodic memory entity
+  - `semantic_memory.rs` - semantic memory entity
+  - `message_queue.rs` - message queue entity
 - **plastmem_ai**: AI SDK wrapper - embeddings, cosine similarity, text generation, structured output
 - **plastmem_shared**: Reusable utilities (env, error)
 - **plastmem_worker**: Background tasks worker
-  - `event_segmentation.rs` - job dispatch
+  - `event_segmentation.rs` - job dispatch, consolidation trigger
   - `memory_review.rs` - LLM-based review and FSRS update
+  - `semantic_consolidation.rs` - runs CLS consolidation pipeline
 - **plastmem_server**: HTTP server and API handlers
+  - `api/add_message.rs` - message ingestion
+  - `api/recent_memory.rs` - recent memories (raw JSON and markdown)
+  - `api/retrieve_memory.rs` - semantic + episodic retrieval (raw JSON and markdown)
 
 ## Key Runtime Flows
 
 - **Memory creation**: `crates/server/src/api/add_message.rs` → `MessageQueue::push` → `EventSegmentationJob` → dual-channel boundary detection → episode generation (LLM structured output: title + summary) → `EpisodicMemory` with surprise-based FSRS stability boost
-- **Memory retrieval**: `crates/server/src/api/retrieve_memory.rs` → `EpisodicMemory::retrieve` (BM25 + vector RRF × FSRS retrievability) → records pending review in `MessageQueue`
+- **Semantic consolidation**: after episode creation → `enqueue_semantic_consolidation` (if ≥3 unconsolidated episodes or flashbulb surprise ≥0.85) → `SemanticConsolidationJob` → load related facts → LLM consolidation call → new/reinforce/update/invalidate facts → mark episodes consolidated
+- **Memory retrieval**: `crates/server/src/api/retrieve_memory.rs` → parallel: `SemanticMemory::retrieve` (BM25 + vector RRF) + `EpisodicMemory::retrieve` (BM25 + vector RRF × FSRS retrievability) → records pending review in `MessageQueue`
 - **FSRS review update**: segmentation triggers `MemoryReviewJob` when pending reviews exist → LLM evaluates relevance (Again/Hard/Good/Easy) → FSRS parameter update in `crates/worker/src/jobs/memory_review.rs`
 
 ## Context Files
@@ -63,6 +74,7 @@ Load these additional context files when working on specific areas:
 - `docs/ENVIRONMENT.md` - Environment variables and configuration
 - `docs/CHANGE_GUIDE.md` - Step-by-step guides for common changes
 - `docs/architecture/fsrs.md` - FSRS algorithm, parameters, and memory scheduling
+- `docs/architecture/semantic_memory.md` - Semantic memory schema, consolidation pipeline, retrieval
 - `crates/core/README.md` - Core domain logic and memory operations
 - `crates/ai/README.md` - AI/LLM integration, embeddings, and structured output
 - `crates/server/README.md` - HTTP API and handlers
@@ -88,24 +100,31 @@ When implementing new features:
 
 ## Development Notes
 
-- **FSRS is central**: Most memory operations involve FSRS parameters (stability, difficulty, retrievability)
+- **Two memory layers**: Episodic (events, FSRS-decayed) and Semantic (facts, no decay). Most features touch both.
+- **FSRS applies to episodic only**: Semantic facts use temporal validity (`valid_at`/`invalid_at`) instead of decay.
 - **Dual-channel detection**: Event segmentation uses both statistical and LLM-based boundary detection
 - **Queue-based architecture**: Messages flow through queues; operations are often async
 - **LLM costs matter**: AI calls are expensive; the system uses embeddings for first-stage retrieval
+- **Consolidation is offline**: Semantic facts are extracted in background jobs, not during the hot add_message path
 
 ## File Reference
 
 | File | Purpose |
-|------|---------|
+| ---- | ------- |
 | `docs/ARCHITECTURE.md` | System-wide architecture and design principles |
 | `docs/architecture/fsrs.md` | FSRS algorithm and memory scheduling |
-| `crates/core/src/memory/episodic.rs` | Memory retrieval with hybrid ranking |
-| `crates/core/src/memory/creation.rs` | Episode generation logic |
+| `docs/architecture/semantic_memory.md` | Semantic memory schema, consolidation pipeline, retrieval |
+| `crates/core/src/memory/episodic/mod.rs` | Episodic memory retrieval with hybrid ranking |
+| `crates/core/src/memory/episodic/creation.rs` | Episode generation logic |
+| `crates/core/src/memory/semantic/mod.rs` | Semantic memory retrieval |
+| `crates/core/src/memory/semantic/consolidation.rs` | CLS consolidation pipeline |
 | `crates/core/src/message_queue/` | Queue operations and segmentation |
 | `crates/worker/src/jobs/memory_review.rs` | LLM review and FSRS updates |
-| `crates/worker/src/jobs/event_segmentation.rs` | Event segmentation job dispatch |
+| `crates/worker/src/jobs/event_segmentation.rs` | Event segmentation job dispatch + consolidation trigger |
+| `crates/worker/src/jobs/semantic_consolidation.rs` | Semantic consolidation job |
 | `crates/server/src/api/add_message.rs` | Message ingestion API |
-| `crates/server/src/api/retrieve_memory.rs` | Memory retrieval API |
+| `crates/server/src/api/retrieve_memory.rs` | Memory retrieval API (semantic + episodic) |
+| `crates/server/src/api/recent_memory.rs` | Recent episodic memories API |
 
 ## Build and Test Commands
 
@@ -126,6 +145,7 @@ RUST_LOG=debug cargo run
 ## Remember
 
 - The codebase follows predictable patterns. Most changes follow the same flow: API → Handler → Core → DB
-- When in doubt about FSRS, check `docs/architecture/fsrs.md` and `crates/core/src/memory/episodic.rs`
-- Memory operations are either: creation (with segmentation), retrieval (with review queue), or review (FSRS update)
+- When in doubt about FSRS, check `docs/architecture/fsrs.md` and `crates/core/src/memory/episodic/mod.rs`
+- When in doubt about semantic memory, check `docs/architecture/semantic_memory.md` and `crates/core/src/memory/semantic/`
+- Memory operations are: creation (segmentation → episode), consolidation (episodes → semantic facts), retrieval (semantic + episodic), or review (FSRS update)
 - Prefer reading existing implementations over guessing patterns
