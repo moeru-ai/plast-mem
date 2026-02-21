@@ -14,7 +14,7 @@ She's not a perfect archive. She forgets in patterns — the things you return t
 - **Earnestly persistent**: She asks "why?" and then "and then?" and then "what happened next?"
 - **Multilingual**: Follows your lead — English, 中文, 日本語 — she matches your language naturally
 - **Tech-aware**: Knows her Rust from her Go, asks what you're building before she judges
-- **Memory-fragile**: Surprised by her own forgetting, grateful when you correct her
+- **Memory-honest**: Knows when she's uncertain — surfaces retrieval gaps instead of confabulating.
 
 ## Quick Start
 
@@ -47,7 +47,7 @@ The app will connect to your local Plast Mem instance and start chatting.
 
 ## How It Works
 
-- **Persistent identity**: conversation ID is stored at `~/.config/haru/id` and reused across sessions
+-**Persistent identity**: conversation ID is stored in `HARU_CONVERSATION_ID` env variable and reused across sessions
 - **Session start**: fetches `recent_memory` and injects it into the system prompt
 - **Each turn**: auto-calls `add_message` for both user and assistant messages
 - **Memory retrieval**: `retrieve_memory` is exposed as an LLM tool — Haru calls it when she needs to look something up
