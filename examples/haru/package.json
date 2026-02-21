@@ -12,12 +12,16 @@
     "@pnpm/find-workspace-dir": "^1000.1.4",
     "@xsai/generate-text": "^0.4.3",
     "@xsai/shared-chat": "^0.4.3",
+    "@xsai/tool": "^0.4.3",
     "figlet": "^1.10.0",
     "ink": "^6.8.0",
     "ink-ascii": "^0.0.4",
     "ink-text-input": "^6.0.0",
     "plastmem": "workspace:*",
-    "react": "^19.2.4"
+    "react": "^19.2.4",
+    "swr": "^2.4.0",
+    "temporal-polyfill": "^0.3.0",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@types/react": "^19.2.14"

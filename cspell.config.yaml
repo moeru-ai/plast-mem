@@ -36,6 +36,7 @@ words:
   - schemars
   - seaql
   - serde
+  - sonarjs
   - sqlx
   - utoipa
   - uuidv
