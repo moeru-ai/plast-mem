@@ -7,6 +7,7 @@
     "build": "pnpm -r build",
     "client:gen": "pnpm dlx @hey-api/openapi-ts -i http://localhost:3000/openapi.json -o packages/plastmem/src",
     "dev": "pnpm -rF @plastmem/haru dev",
+    "dev:hmr": "pnpm -rF @plastmem/haru dev:hmr",
     "lint": "eslint examples"
   },
   "devDependencies": {

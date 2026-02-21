@@ -5,7 +5,8 @@
   "private": true,
   "packageManager": "pnpm@10.30.0",
   "scripts": {
-    "dev": "vite-node -w src/index.tsx"
+    "dev": "tsx src/index.tsx",
+    "dev:hmr": "vite-node -w src/index.tsx"
   },
   "dependencies": {
     "@insel-null/uuid": "^0.0.1",
