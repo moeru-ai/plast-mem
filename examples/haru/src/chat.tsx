@@ -2,6 +2,7 @@
 import { exit } from 'node:process'
 
 import uuid from '@insel-null/uuid'
+import Spinner from 'ink-spinner'
 import TextInput from 'ink-text-input'
 
 import { Box, Text } from 'ink'
@@ -65,7 +66,14 @@ export const ChatApp = () => {
 
       {isLoading && (
         <Box padding={1}>
-          <Text dimColor>...</Text>
+          <Box marginRight={1}>
+            <Spinner type="binary" />
+            <Spinner type="binary" />
+            <Spinner type="binary" />
+          </Box>
+          <Text dimColor>
+            Loading...
+          </Text>
         </Box>
       )}
 
