@@ -494,7 +494,7 @@ pub async fn process_consolidation(
   }
 
   // Batch embed all fact sentences before opening a transaction
-  let fact_texts: Vec<String> = output.facts.iter().map(|f| f.fact.clone()).collect();
+  let fact_texts: Vec<&str> = output.facts.iter().map(|f| f.fact.as_str()).collect();
   let embeddings = embed_many(&fact_texts).await?;
 
   // 4-6. All database mutations in a transaction (opened after embedding to keep it short)
