@@ -85,13 +85,17 @@ export const useHaru = (conversation_id: string) => {
       const { text } = await generateText({
         apiKey: env.OPENAI_API_KEY,
         baseURL: env.OPENAI_BASE_URL!,
+        frequencyPenalty: 0.3,
         maxSteps: 10,
         messages: [
           { content, role: 'system' },
           ...messagesRef.current,
         ],
         model: env.OPENAI_CHAT_MODEL!,
+        presencePenalty: 0.3,
+        temperature: 0.85,
         tools,
+        topP: 0.9,
       })
 
       if (text != null && text.trim().length !== 0)
