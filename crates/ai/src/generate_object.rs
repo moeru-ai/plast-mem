@@ -70,11 +70,12 @@ fn fix_schema_for_strict(schema: &mut serde_json::Value) {
     let non_null: Vec<&serde_json::Value> =
       any_of.iter().filter(|v| v.get("type").and_then(|t| t.as_str()) != Some("null")).collect();
     if non_null.len() == 1 {
-      let inner = non_null[0].clone();
-      obj.clear();
-      obj.extend(inner.as_object().cloned().unwrap_or_default());
-      fix_schema_for_strict(schema);
-      return;
+      if let Some(inner_map) = non_null[0].as_object().cloned() {
+        obj.clear();
+        obj.extend(inner_map);
+        fix_schema_for_strict(schema);
+        return;
+      }
     }
   }
 
