@@ -17,6 +17,28 @@ import { prompt } from '../core/prompt'
 
 const durationFormat = new Intl.DurationFormat('en', { style: 'narrow' })
 
+const DEFAULT_TOKEN_BUDGET = 8192
+const CONTEXT_WINDOW_RATIO = 0.2
+
+/** Approximate token count: 4 chars ≈ 1 token */
+function approxTokens(text: string): number {
+  return Math.ceil(text.length / 4)
+}
+
+/** Truncate messages from the front to fit within token budget */
+function truncateMessages(messages: Message[], budget: number): Message[] {
+  let total = 0
+  const result: Message[] = []
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const tokens = approxTokens((messages[i] as { content: string }).content)
+    if (total + tokens > budget)
+      break
+    result.unshift(messages[i])
+    total += tokens
+  }
+  return result
+}
+
 export const useHaru = (conversation_id: string) => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const initialAt = useMemo(() => Temporal.Now.instant(), [conversation_id])
@@ -31,6 +53,20 @@ export const useHaru = (conversation_id: string) => {
   }, [])
 
   useEffect(() => clear(), [clear, conversation_id])
+
+  const { data: tokenBudget } = useSWR('haru/tokenBudget', async () => {
+    try {
+      const res = await fetch(`${env.OPENAI_BASE_URL}/models`, {
+        headers: { Authorization: `Bearer ${env.OPENAI_API_KEY}` },
+      })
+      const json = await res.json() as { data: { id: string, context_length?: number }[] }
+      const model = json.data.find(m => m.id === env.OPENAI_CHAT_MODEL)
+      if (model?.context_length)
+        return Math.floor(model.context_length * CONTEXT_WINDOW_RATIO)
+    }
+    catch {}
+    return DEFAULT_TOKEN_BUDGET
+  }, { revalidateOnFocus: false })
 
   const { data: tools, isLoading: isToolsLoading } = useSWR(['haru/tools', conversation_id], async () => {
     const retrieveMemoryTool = await tool({
@@ -82,6 +118,9 @@ export const useHaru = (conversation_id: string) => {
         .replace('{session_start_time}', initialAt.toLocaleString())
         .replace('{elapsed_time}', `${durationFormat.format(elapsed)} ago`)
 
+      const budget = tokenBudget ?? DEFAULT_TOKEN_BUDGET
+      const trimmedMessages = truncateMessages(messagesRef.current, budget)
+
       const { text } = await generateText({
         apiKey: env.OPENAI_API_KEY,
         baseURL: env.OPENAI_BASE_URL!,
@@ -89,7 +128,7 @@ export const useHaru = (conversation_id: string) => {
         maxSteps: 10,
         messages: [
           { content, role: 'system' },
-          ...messagesRef.current,
+          ...trimmedMessages,
         ],
         model: env.OPENAI_CHAT_MODEL!,
         presencePenalty: 0.3,
@@ -113,3 +152,4 @@ export const useHaru = (conversation_id: string) => {
     send,
   }
 }
+

@@ -193,7 +193,7 @@ async fn append_source_episodic_ids<C: ConnectionTrait>(
     .col_expr(
       semantic_memory::Column::SourceEpisodicIds,
       Expr::cust_with_values(
-        "source_episodic_ids || ?::uuid[]",
+        "source_episodic_ids || CAST(? AS uuid[])",
         [Value::Array(
           ArrayType::Uuid,
           Some(Box::new(ids_to_add.into_iter().map(Into::into).collect())),

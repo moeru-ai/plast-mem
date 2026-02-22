@@ -122,12 +122,14 @@ pub async fn create_episode(
   let initial_state = initial_states.good.memory;
   let boosted_stability = initial_state.stability * (1.0 + surprise * SURPRISE_BOOST_FACTOR);
 
+  let title = episode_output.title;
+
   // Create EpisodicMemory with title from Two-Step Alignment
   let episodic_memory = EpisodicMemory {
     id,
     conversation_id,
     messages: episode_messages.clone(),
-    title: episode_output.title,
+    title: title.clone(),
     summary: episode_output.summary.clone(),
     embedding,
     stability: boosted_stability,
@@ -146,6 +148,14 @@ pub async fn create_episode(
   episodic_memory::Entity::insert(active_model)
     .exec(db)
     .await?;
+  tracing::info!(
+    episode_id = %id,
+    conversation_id = %conversation_id,
+    title = %title,
+    messages = drain_count,
+    surprise,
+    "Episode created"
+  );
 
   // Drain processed messages from MessageQueue
   MessageQueue::drain(conversation_id, drain_count, db).await?;

@@ -6,7 +6,7 @@ use uuid::Uuid;
 use super::{MessageQueue, SegmentationAction, SegmentationCheck};
 
 /// Minimum number of messages before segmentation is considered.
-const MIN_MESSAGES: usize = 3;
+const MIN_MESSAGES: usize = 5;
 
 /// Maximum buffer size before forcing a split.
 const MAX_BUFFER_SIZE: usize = 50;
@@ -15,7 +15,7 @@ const MAX_BUFFER_SIZE: usize = 50;
 const TIME_GAP_MINUTES: i64 = 15;
 
 /// Minimum total character count across all buffered messages.
-const MIN_TOTAL_CHARS: usize = 100;
+const MIN_TOTAL_CHARS: usize = 300;
 
 /// Minimum character length of the latest message to trigger boundary evaluation.
 const MIN_MESSAGE_LENGTH: usize = 5;
@@ -63,11 +63,9 @@ impl MessageQueue {
       SegmentationAction::NeedsBoundaryDetection
     };
 
-    // Append the triggering message so downstream workers have the full picture.
-    // The last element is always the new message (edge message for the next event).
-    let mut messages = messages;
-    messages.push(message.clone());
-
-    Ok(Some(SegmentationCheck { messages, action }))
+    Ok(Some(SegmentationCheck {
+      trigger: message.clone(),
+      action,
+    }))
   }
 }

@@ -41,6 +41,34 @@ use serde::de::DeserializeOwned;
 ///     None,
 /// ).await?;
 /// ```
+/// Recursively fix a JSON schema for OpenAI strict mode:
+/// - additionalProperties: false on all objects
+/// - required must include all property keys
+fn fix_schema_for_strict(schema: &mut serde_json::Value) {
+  let Some(obj) = schema.as_object_mut() else { return };
+
+  if obj.contains_key("properties") {
+    let keys: Vec<serde_json::Value> = obj["properties"]
+      .as_object()
+      .map(|p| p.keys().map(|k| serde_json::Value::String(k.clone())).collect())
+      .unwrap_or_default();
+    obj.insert("required".to_owned(), serde_json::Value::Array(keys));
+    obj.insert("additionalProperties".to_owned(), serde_json::Value::Bool(false));
+
+    // Recurse into property schemas
+    if let Some(props) = obj.get_mut("properties").and_then(|p| p.as_object_mut()) {
+      for v in props.values_mut() {
+        fix_schema_for_strict(v);
+      }
+    }
+  }
+
+  // Recurse into array items
+  if let Some(items) = obj.get_mut("items") {
+    fix_schema_for_strict(items);
+  }
+}
+
 pub async fn generate_object<T>(
   messages: Vec<ChatCompletionRequestMessage>,
   schema_name: String,
@@ -57,7 +85,9 @@ where
 
   // Generate JSON schema from type
   let schema = schemars::schema_for!(T);
-  let schema = serde_json::to_value(&schema)?;
+  let mut schema = serde_json::to_value(&schema)?;
+  // OpenAI strict mode requires additionalProperties: false and all properties in required
+  fix_schema_for_strict(&mut schema);
 
   let request = CreateChatCompletionRequestArgs::default()
     .model(&APP_ENV.openai_chat_model)

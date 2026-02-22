@@ -29,7 +29,7 @@ impl MessageQueue {
       .col_expr(
         message_queue::Column::PendingReviews,
         Expr::cust_with_values(
-          "COALESCE(pending_reviews, '[]'::jsonb) || ?::jsonb",
+          "COALESCE(pending_reviews, '[]'::jsonb) || CAST(? AS jsonb)",
           [review_value],
         ),
       )

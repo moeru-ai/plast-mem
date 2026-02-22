@@ -18,7 +18,7 @@ const TOPIC_SIMILARITY_THRESHOLD: f32 = 0.5;
 /// Surprise channel: surprise signal threshold.
 /// Surprise = 1 - `cosine_similarity(event_model`, `new_message`).
 /// Above this threshold (high prediction error), a boundary is triggered directly without LLM.
-const SURPRISE_THRESHOLD: f32 = 0.65;
+const SURPRISE_THRESHOLD: f32 = 0.7;
 
 /// Weight for new embeddings in the rolling average update.
 /// `(1 - alpha) * current + alpha * new`
