@@ -64,7 +64,7 @@ export const useHaru = (conversation_id: string) => {
       if (model?.context_length)
         return Math.floor(model.context_length * CONTEXT_WINDOW_RATIO)
     }
-    catch {}
+    catch (error) { console.error('Failed to fetch model context length, falling back to default.', error) }
     return DEFAULT_TOKEN_BUDGET
   }, { revalidateOnFocus: false })
 
