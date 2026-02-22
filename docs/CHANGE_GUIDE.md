@@ -181,3 +181,5 @@ plastmem_server → plastmem_core ← plastmem_worker
 3. **Missing migrations** - Entity changes need corresponding migrations
 4. **Synchronous AI calls** - AI operations should be async and handle timeouts
 5. **Not handling job failures** - Jobs can retry; make handlers idempotent
+6. **sea-orm `cust_with_values` CAST syntax** - PostgreSQL rejects `CAST(? AS type)` in parameterized queries. Use `execute_raw` with `$1::type` cast syntax instead, or embed literals directly in the SQL string (safe for fixed-format values like UUIDs)
+7. **OpenAI strict mode schema** - schemars 1.x emits `$defs`, `oneOf`, `anyOf`, and `$ref` with siblings — all rejected by strict mode. `fix_schema_for_strict` in `crates/ai/src/generate_object.rs` handles these automatically; do not bypass it

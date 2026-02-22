@@ -20,16 +20,17 @@ Triggered when new messages are added to a conversation:
 ```rust
 pub struct EventSegmentationJob {
     pub conversation_id: Uuid,
-    pub messages: Vec<Message>,
+    pub trigger: Message,
     pub action: SegmentationAction,
 }
 ```
 
 Processing flow:
-1. Load `MessageQueue` for the conversation
-2. Run segmentation rules and boundary detection
-3. If boundary detected: create episode, drain messages
-4. Enqueue pending reviews for `MemoryReviewJob`
+1. Fetch current `MessageQueue` from DB; find `trigger` message's position
+2. If trigger not found, skip (stale job)
+3. Process messages up to and including trigger; drain all but trigger (edge message stays for next event)
+4. Run boundary detection or force-create episode
+5. Enqueue pending reviews for `MemoryReviewJob`
 
 ### MemoryReviewJob
 
