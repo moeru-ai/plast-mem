@@ -12,7 +12,6 @@ use sea_orm::{
   ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, DbBackend, EntityTrait,
   FromQueryResult, IntoActiveModel, QueryFilter, Statement, TransactionTrait,
   prelude::{Expr, PgVector},
-  sea_query::{ArrayType, Value},
 };
 use serde::Deserialize;
 use uuid::Uuid;
@@ -189,20 +188,22 @@ async fn append_source_episodic_ids<C: ConnectionTrait>(
     return Ok(());
   }
 
-  semantic_memory::Entity::update_many()
-    .col_expr(
-      semantic_memory::Column::SourceEpisodicIds,
-      Expr::cust_with_values(
-        "source_episodic_ids || CAST(? AS uuid[])",
-        [Value::Array(
-          ArrayType::Uuid,
-          Some(Box::new(ids_to_add.into_iter().map(Into::into).collect())),
-        )],
-      ),
-    )
-    .filter(semantic_memory::Column::Id.eq(fact_id))
-    .exec(db)
-    .await?;
+  // Format UUIDs as a PostgreSQL array literal embedded in SQL.
+  // UUIDs are fixed hex format — no injection risk.
+  let uuid_list = ids_to_add
+    .iter()
+    .map(|id| format!("'{id}'"))
+    .collect::<Vec<_>>()
+    .join(",");
+  let sql = format!(
+    "UPDATE semantic_memory SET source_episodic_ids = source_episodic_ids || ARRAY[{uuid_list}]::uuid[] WHERE id = $1"
+  );
+  db.execute_raw(Statement::from_sql_and_values(
+    DbBackend::Postgres,
+    &sql,
+    [fact_id.into()],
+  ))
+  .await?;
 
   Ok(())
 }

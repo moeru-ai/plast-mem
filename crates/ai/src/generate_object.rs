@@ -47,6 +47,37 @@ use serde::de::DeserializeOwned;
 fn fix_schema_for_strict(schema: &mut serde_json::Value) {
   let Some(obj) = schema.as_object_mut() else { return };
 
+  // OpenAI strict mode (draft 7): $ref must be the only key — strip siblings
+  if obj.contains_key("$ref") {
+    obj.retain(|k, _| k == "$ref");
+    return;
+  }
+
+  // Convert oneOf of const strings → enum (OpenAI strict mode forbids oneOf)
+  if let Some(one_of) = obj.get("oneOf").and_then(|v| v.as_array()).cloned() {
+    let consts: Option<Vec<serde_json::Value>> =
+      one_of.iter().map(|v| v.get("const").cloned()).collect();
+    if let Some(values) = consts {
+      obj.clear();
+      obj.insert("type".to_owned(), serde_json::Value::String("string".to_owned()));
+      obj.insert("enum".to_owned(), serde_json::Value::Array(values));
+      return;
+    }
+  }
+
+  // Unwrap anyOf [T, null] → T (OpenAI strict mode forbids anyOf; Option<T> uses this pattern)
+  if let Some(any_of) = obj.get("anyOf").and_then(|v| v.as_array()).cloned() {
+    let non_null: Vec<&serde_json::Value> =
+      any_of.iter().filter(|v| v.get("type").and_then(|t| t.as_str()) != Some("null")).collect();
+    if non_null.len() == 1 {
+      let inner = non_null[0].clone();
+      obj.clear();
+      obj.extend(inner.as_object().cloned().unwrap_or_default());
+      fix_schema_for_strict(schema);
+      return;
+    }
+  }
+
   if obj.contains_key("properties") {
     let keys: Vec<serde_json::Value> = obj["properties"]
       .as_object()
@@ -66,6 +97,20 @@ fn fix_schema_for_strict(schema: &mut serde_json::Value) {
   // Recurse into array items
   if let Some(items) = obj.get_mut("items") {
     fix_schema_for_strict(items);
+  }
+
+  // Recurse into definitions (schemars 0.x uses "definitions")
+  if let Some(defs) = obj.get_mut("definitions").and_then(|d| d.as_object_mut()) {
+    for v in defs.values_mut() {
+      fix_schema_for_strict(v);
+    }
+  }
+
+  // Recurse into $defs (schemars 1.x uses "$defs")
+  if let Some(defs) = obj.get_mut("$defs").and_then(|d| d.as_object_mut()) {
+    for v in defs.values_mut() {
+      fix_schema_for_strict(v);
+    }
   }
 }
 
