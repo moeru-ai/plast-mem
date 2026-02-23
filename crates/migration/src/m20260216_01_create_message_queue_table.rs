@@ -1,6 +1,6 @@
 use sea_orm_migration::{
   prelude::*,
-  schema::{custom, json_binary, text, uuid},
+  schema::{boolean, integer, json_binary, text, timestamp_with_time_zone, uuid},
 };
 
 #[derive(DeriveMigrationName)]
@@ -17,9 +17,10 @@ impl MigrationTrait for Migration {
           .col(uuid(MessageQueue::Id).primary_key())
           .col(json_binary(MessageQueue::Messages))
           .col(json_binary(MessageQueue::PendingReviews).null())
-          .col(text(MessageQueue::EventModel).null())
-          .col(custom(MessageQueue::LastEmbedding, "vector(1024)").null())
-          .col(custom(MessageQueue::EventModelEmbedding, "vector(1024)").null())
+          .col(integer(MessageQueue::InProgressFence).null())
+          .col(timestamp_with_time_zone(MessageQueue::InProgressSince).null())
+          .col(boolean(MessageQueue::WindowDoubled).default(false).not_null())
+          .col(text(MessageQueue::PrevEpisodeSummary).null())
           .to_owned(),
       )
       .await
@@ -35,16 +36,11 @@ impl MigrationTrait for Migration {
 #[derive(Iden)]
 pub enum MessageQueue {
   Table,
-  // uuid v7, conversation_id
   Id,
-  // json messages
   Messages,
-  // json array of pending reviews
   PendingReviews,
-  // last event model content
-  EventModel,
-  // last embedding vector
-  LastEmbedding,
-  // event model embedding vector
-  EventModelEmbedding,
+  InProgressFence,
+  InProgressSince,
+  WindowDoubled,
+  PrevEpisodeSummary,
 }

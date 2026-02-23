@@ -1,137 +1,119 @@
 # Event Segmentation
 
-Plast Mem implements an event segmentation system aligned with **Event Segmentation Theory (EST)** and the **Two-Step Alignment Principle** (from the Nemori paper). The dual-channel boundary detection design (topic shift + surprise) is inspired by [HiMem](https://arxiv.org/abs/2601.06377).
+Plast Mem implements a **batch event segmentation** system aligned with **Event Segmentation Theory (EST)**. The dual-channel boundary detection design (topic shift + surprise) is inspired by [HiMem](https://arxiv.org/abs/2601.06377).
 
-The system continuously monitors the conversation stream to detect event boundaries—moments where the "current event model" (what is happening now) no longer predicts the incoming information efficiently.
+The system accumulates messages in a per-conversation queue and periodically runs a single LLM call to segment the batch into coherent episodes.
 
 ## Architecture
 
-The segmentation process follows a layered filtering approach to minimize latency and LLM costs while maintaining high accuracy.
-
-```mermaid
-flowchart TB
-  A[New Message] --> B{Rule Layer}
-  B -->|"Too short / Trivial"| S[Skip]
-  B -->|Buffer Full| F["ForceCreate (Drain All)"]
-  B -->|Time Gap| T["TimeBoundary (Keep Last)"]
-  B -->|Check Needed| DC["Dual-Channel Boundary Detection"]
-  DC --> SC["Surprise Channel"]
-  DC --> TC["Topic Channel"]
-  SC -->|"surprise > 0.7"| E2["Boundary (Direct)"]
-  SC -->|"surprise ≤ 0.7"| TC
-  TC -->|"sim ≥ 0.5"| S2[Skip (Update Rolling Avg)]
-  TC -->|"sim < 0.5"| L3["LLM Topic Shift Detection"]
-  L3 -->|"is_boundary = true"| E["Boundary Detected (Keep Last)"]
-  L3 -->|"is_boundary = false"| U["Update Event Model, Continue"]
-  F --> G["Episode Generation"]
-  T --> G
-  E --> G
-  E2 --> G
-  G --> H["Create EpisodicMemory"]
-  H --> I["Init Next Event Context"]
+```text
+New Message → MessageQueue::push()
+                    ↓
+             RETURNING jsonb_array_length(messages) → trigger_count
+                    ↓
+             MessageQueue::check(trigger_count)
+                    ↓ (count trigger OR time trigger)
+             try_set_fence (CAS) → EventSegmentationJob enqueued
+                    ↓
+             batch_segment(messages[0..fence_count])  ← single LLM call
+                    ↓
+        ┌───────────┴────────────┐
+        │ 1 segment, not doubled │  → double window, clear fence
+        │ 1 segment, doubled     │  → drain + finalize, create 1 episode
+        │ N segments             │  → drain N-1, finalize, create N-1 episodes in parallel
+        └────────────────────────┘
 ```
 
-## 1. Rule Layer
+## Trigger Conditions
 
-Fast, zero-cost checks to handle obvious cases:
+**Code**: `crates/core/src/message_queue/check.rs`
 
-| Rule | Condition | Action |
-|------|-----------|--------|
-| Buffer too small | messages < 5 | Skip |
-| Buffer full | messages ≥ 50 | ForceCreate (drain all) |
-| Time gap | > 15 minutes since last message | TimeBoundary (keep last) |
-| Content too short | total chars < 300 | Skip |
-| Message too short | latest message < 5 chars | Skip |
+A segmentation job is triggered when **either** condition is met:
+
+| Condition | Threshold |
+| --------- | --------- |
+| Count trigger | `trigger_count ≥ WINDOW_BASE` (20) or `WINDOW_MAX` (40) if doubled |
+| Time trigger | Oldest message in queue is > 2 hours old |
+| Minimum floor | Always skip if `trigger_count < 5` |
+
+### Fence Mechanism (TOCTOU prevention)
+
+`push()` uses `RETURNING jsonb_array_length(messages)` to capture the exact post-push message count. This `trigger_count` is passed directly to `check()` and then to `try_set_fence()`, so the fence boundary is pinned to the triggering message's position — not a re-read that could include later arrivals.
+
+`try_set_fence()` is a CAS operation:
+
+```sql
+UPDATE message_queue
+SET in_progress_fence = $2, in_progress_since = NOW()
+WHERE id = $1 AND in_progress_fence IS NULL
+RETURNING id
+```
+
+Only one concurrent caller wins; others get 0 rows and bail out.
+
+Stale fences (> 120 minutes) are cleared automatically before trigger evaluation.
+
+## Batch Segmentation (LLM)
 
 **Code**: `crates/core/src/message_queue/segmentation.rs`
 
-## 2. Dual-Channel Boundary Detection
+A single LLM call (`batch_segment`) receives all messages in the window and returns a list of segments. Each segment includes:
 
-When the rule layer determines `NeedsBoundaryDetection`, the system runs two independent channels. Either channel triggering results in a boundary (OR relationship).
+- `start_message_index` / `end_message_index` / `num_messages` — slice boundaries
+- `title` — 5–15 word theme description
+- `summary` — ≤50 word third-person narrative
+- `surprise_level` — `low` | `high` | `extremely_high`
 
-**Code**: `crates/core/src/message_queue/boundary.rs`
+### Boundary Criteria (OR relationship)
 
-### Surprise Channel
+1. **Topic shift** — subject, activity, or intent changes; discourse markers ("by the way", "换个话题") and intent reversals (chatting→deciding) count
+2. **Surprise** — emotional reversal, domain jump, tone change, or notable time gap
 
-Detects when incoming information diverges significantly from the current event model—a direct measure of prediction error.
+### Surprise Level → FSRS Signal
 
-- Computes `surprise = 1 - cosine_sim(event_model_embedding, new_message_embedding)`
-- **surprise > 0.7**: High prediction error → boundary triggered **directly** (no LLM needed)
-- **surprise ≤ 0.7**: No surprise boundary
+| Level | Signal |
+| ----- | ------ |
+| `low` | 0.2 |
+| `high` | 0.6 |
+| `extremely_high` | 0.9 |
 
-The surprise signal (`1 - cosine_sim`) is also recorded on the created episode for FSRS stability boosting.
-
-For `ForceCreate` and `TimeBoundary` paths, surprise is set to 0.0 (event model may be stale, calculation would be meaningless).
-
-### Topic Channel
-
-Detects gradual topic shifts through a two-stage process:
-
-#### Stage 1: Embedding Pre-filter
-
-- Computes `cosine_sim(last_embedding, new_message_embedding)`
-- **sim ≥ 0.5**: Same topic. Update `last_embedding` via rolling average (alpha=0.2). No boundary.
-- **sim < 0.5**: Potential shift. Proceed to LLM.
-
-#### Stage 2: LLM Topic Shift Detection
-
-The LLM evaluates multiple dimensions:
-- **Topic Coherence**: Did the topic shift significantly?
-- **Intent Change**: Did the speaker's goal change (e.g., discussion → decision)?
-- **Temporal/Discourse Markers**: Are there phrases like "by the way", "anyway"?
-
-**Input**:
-- Current **Event Model** (description of "what is happening now")
-- Recent conversation history
-
-**Output**:
-- `is_boundary`: Boolean — whether a meaningful event boundary has been crossed
-- `updated_event_model`: Updated description of the event (if NOT a boundary; null if IS a boundary)
-
-**Code**: `llm_topic_shift_detect()` in `crates/core/src/message_queue/boundary.rs`
-
-## 3. Episode Generation
-
-Once a segment is finalized (via Force, Time, or Boundary Detection), we generate a structured **Episodic Memory**.
-
-**Input**: The segmented messages
-
-**Output**:
-- **Title**: A concise 5-15 word title
-- **Summary**: A third-person narrative of the event
-
-**Code**: `crates/core/src/memory/creation.rs`
-
-## Event Model & Context Maintenance
-
-- **Event Model**: A textual description of the *current* situation. It helps the LLM detect when the situation changes. It is reset after an episode is created.
-- **Event Model Embedding**: Vector representation of the event model, used by the surprise channel. Updated whenever the LLM updates the event model. Reset after episode creation.
-- **Last Embedding**: A vector representation of the current event's context.
-  - Updated via rolling average during the event.
-  - When a boundary occurs, the **Edge Message** (the message that triggered the boundary) is used to initialize the `last_embedding` for the *next* event, ensuring immediate context for the new segment.
-
-## Edge Message Handling
-
-For **Time Boundaries** and **LLM Boundaries**, the message that *triggered* the boundary (e.g., the "By the way..." message) is considered the **start of the next event**.
-
-- The system drains `messages[0..N-1]` to create the memory.
-- `messages[N]` (the edge message) remains in the buffer to start the new event context.
-
-## Surprise-Based FSRS Boost
-
-Surprising events result in stronger initial memories (higher stability):
+Surprise signal feeds into FSRS stability boost on episode creation:
 
 ```rust
-boosted_stability = initial_stability * (1.0 + surprise * 0.5)
+boosted_stability = initial_stability * (1.0 + surprise * SURPRISE_BOOST_FACTOR)
 ```
+
+`extremely_high` (≥ 0.85) also triggers immediate semantic consolidation (flashbulb memory path).
+
+## Window Doubling
+
+If the LLM returns exactly 1 segment (no split detected):
+
+- **First time**: set `window_doubled = true`, clear fence, wait for more messages (window grows to 40)
+- **After doubling**: force drain all messages as a single episode
+
+## Drain Order (crash safety)
+
+To prevent duplicate episodes on job retry, the drain order is:
+
+```text
+drain + finalize_job  ←── committed first (fence released)
+enqueue_pending_reviews
+create episodes in parallel  ←── if crash here, messages already gone (acceptable loss)
+enqueue semantic consolidation
+```
+
+## Edge Message
+
+The **last segment** from a multi-segment result is never drained — it stays in the queue as the start of the next event context. Only `segments[0..N-1]` are drained and converted to episodes.
 
 ## Code Locations
 
 | Component | Location |
-|-----------|----------|
-| Rule-based segmentation | `crates/core/src/message_queue/segmentation.rs` |
-| Dual-channel boundary detection | `crates/core/src/message_queue/boundary.rs` |
-| Episode generation + creation | `crates/core/src/memory/creation.rs` |
-| Queue state management | `crates/core/src/message_queue/state.rs` |
-| Pending reviews | `crates/core/src/message_queue/pending_reviews.rs` |
-| Job scheduling (thin shell) | `crates/worker/src/jobs/event_segmentation.rs` |
+| --------- | -------- |
+| Trigger check + fence | `crates/core/src/message_queue/check.rs` |
+| Batch LLM segmentation | `crates/core/src/message_queue/segmentation.rs` |
+| Queue push + drain | `crates/core/src/message_queue/mod.rs` |
+| Fence + pending reviews state | `crates/core/src/message_queue/state.rs` |
+| Job dispatch | `crates/worker/src/jobs/event_segmentation.rs` |
+| Episode creation | `crates/core/src/memory/episodic/creation.rs` |

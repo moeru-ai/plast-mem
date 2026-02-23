@@ -25,11 +25,10 @@ Core domain logic
   - `semantic/consolidation.rs`: CLS-inspired consolidation pipeline (LLM → facts)
   - `retrieval.rs`: `format_tool_result()`, `DetailLevel` — shared markdown formatting
 - `message_queue/`: Message queue and segmentation
-  - `mod.rs`: MessageQueue struct and core queue operations
-  - `segmentation.rs`: Rule-based segmentation triggers
-  - `boundary.rs`: Dual-channel boundary detection (topic shift + surprise)
-  - `pending_reviews.rs`: Pending review tracking
-  - `state.rs`: Event model and embedding state management
+  - `mod.rs`: MessageQueue struct, push/drain/get, PendingReview type
+  - `check.rs`: Trigger check (count/time), fence acquisition, SegmentationCheck
+  - `segmentation.rs`: Batch LLM segmentation (batch_segment, BatchSegment, SurpriseLevel)
+  - `state.rs`: Fence state management, pending reviews
 
 ### 3. plastmem_migration
 
@@ -83,7 +82,7 @@ HTTP server and API handlers
 - `api/`: Public HTTP API
   - `add_message.rs`: Message ingestion endpoint
   - `recent_memory.rs`: Recent memory endpoints (raw JSON and formatted markdown)
-  - `retrieve_memory.rs`: Memory retrieval endpoints (raw JSON and formatted markdown)
+  - `retrieve_memory.rs`: Memory retrieval endpoints (semantic-only pre-retrieval, raw JSON and formatted markdown)
 - `utils/`: Server-specific utilities
   - `state.rs`: AppState (database + job storage)
   - `shutdown_signal.rs`: Graceful shutdown handling
@@ -95,8 +94,8 @@ HTTP server and API handlers
 
 A terminal chat client demonstrating Plast Mem integration. Key files:
 
-- `src/plastmem.ts`: thin API client (`addMessage`, `recentMemory`, `retrieveMemory`)
-- `src/chat.tsx`: Ink/React UI — loads conversation ID, injects recent memory into system prompt, exposes `retrieve_memory` as LLM tool, auto-persists messages
+- `src/hooks/use-haru.ts`: core hook — calls `contextPreRetrieve` before each LLM request for semantic context injection, exposes `retrieve_memory` as LLM tool, auto-persists messages
+- `src/core/prompt-builder.ts`: builds system prompt with recent episodic memory + semantic context
 
 ## Further Reading
 

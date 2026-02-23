@@ -11,20 +11,11 @@ use crate::utils::AppState;
 
 // --- Shared ---
 
-const fn default_episodic_limit() -> u64 {
-  5
-}
-
-const fn default_semantic_limit() -> u64 {
-  20
-}
+const fn default_episodic_limit() -> u64 { 5 }
+const fn default_semantic_limit() -> u64 { 20 }
 
 const fn sanitize_limit(value: u64) -> i64 {
-  if value > 0 && value <= 1000 {
-    value.cast_signed()
-  } else {
-    100
-  }
+  if value > 0 && value <= 1000 { value.cast_signed() } else { 100 }
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -44,19 +35,67 @@ pub struct RetrieveMemory {
   pub detail: DetailLevel,
 }
 
-/// Record retrieved memory IDs as pending review in the message queue.
-async fn record_pending_review(
+/// Fetch both memory types and record a pending review for episodic results.
+async fn fetch_memory(
   state: &AppState,
   conversation_id: Uuid,
   query: &str,
-  results: &[(EpisodicMemory, f64)],
-) -> Result<(), AppError> {
-  if !results.is_empty() {
-    let memory_ids = results.iter().map(|(m, _)| m.id).collect();
+  episodic_limit: u64,
+  semantic_limit: u64,
+) -> Result<(Vec<(SemanticMemory, f64)>, Vec<(EpisodicMemory, f64)>), AppError> {
+  let (semantic, episodic) = tokio::try_join!(
+    SemanticMemory::retrieve(query, sanitize_limit(semantic_limit), conversation_id, &state.db),
+    EpisodicMemory::retrieve(query, episodic_limit, conversation_id, &state.db),
+  )?;
+  if !episodic.is_empty() {
+    let memory_ids = episodic.iter().map(|(m, _)| m.id).collect();
     MessageQueue::add_pending_review(conversation_id, memory_ids, query.to_owned(), &state.db)
       .await?;
   }
-  Ok(())
+  Ok((semantic, episodic))
+}
+
+// --- Pre-retrieval context endpoint (no pending review) ---
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct ContextPreRetrieve {
+  pub conversation_id: Uuid,
+  pub query: String,
+  #[serde(default = "default_semantic_limit")]
+  pub semantic_limit: u64,
+  #[serde(default)]
+  pub detail: DetailLevel,
+}
+
+/// Retrieve semantic memories as markdown for pre-retrieval context injection.
+/// Semantic-only (facts + behavioral guidelines); episodic retrieval is left to LLM tool calls.
+/// Does NOT record a pending review (no FSRS update triggered).
+#[utoipa::path(
+  post,
+  path = "/api/v0/context_pre_retrieve",
+  request_body = ContextPreRetrieve,
+  responses(
+    (status = 200, description = "Markdown context for system prompt injection", body = String),
+    (status = 400, description = "Query cannot be empty")
+  )
+)]
+#[axum::debug_handler]
+#[tracing::instrument(skip(state), fields(conversation_id = %payload.conversation_id))]
+pub async fn context_pre_retrieve(
+  State(state): State<AppState>,
+  Json(payload): Json<ContextPreRetrieve>,
+) -> Result<String, AppError> {
+  if payload.query.is_empty() {
+    return Err(AppError::new(anyhow::anyhow!("Query cannot be empty")));
+  }
+  let semantic = SemanticMemory::retrieve(
+    &payload.query,
+    sanitize_limit(payload.semantic_limit),
+    payload.conversation_id,
+    &state.db,
+  )
+  .await?;
+  Ok(format_tool_result(&semantic, &[], &payload.detail))
 }
 
 // --- Raw JSON endpoint ---
@@ -104,39 +143,17 @@ pub async fn retrieve_memory_raw(
   if payload.query.is_empty() {
     return Err(AppError::new(anyhow::anyhow!("Query cannot be empty")));
   }
-
-  let (semantic_results, episodic_results) = tokio::try_join!(
-    SemanticMemory::retrieve(
-      &payload.query,
-      sanitize_limit(payload.semantic_limit),
-      payload.conversation_id,
-      &state.db
-    ),
-    EpisodicMemory::retrieve(
-      &payload.query,
-      payload.episodic_limit,
-      payload.conversation_id,
-      &state.db
-    ),
-  )?;
-
-  record_pending_review(
+  let (semantic, episodic) = fetch_memory(
     &state,
     payload.conversation_id,
     &payload.query,
-    &episodic_results,
+    payload.episodic_limit,
+    payload.semantic_limit,
   )
   .await?;
-
   Ok(Json(RetrieveMemoryRawResult {
-    semantic: semantic_results
-      .into_iter()
-      .map(|(memory, score)| SemanticMemoryResult { memory, score })
-      .collect(),
-    episodic: episodic_results
-      .into_iter()
-      .map(|(memory, score)| EpisodicMemoryResult { memory, score })
-      .collect(),
+    semantic: semantic.into_iter().map(|(memory, score)| SemanticMemoryResult { memory, score }).collect(),
+    episodic: episodic.into_iter().map(|(memory, score)| EpisodicMemoryResult { memory, score }).collect(),
   }))
 }
 
@@ -161,33 +178,13 @@ pub async fn retrieve_memory(
   if payload.query.is_empty() {
     return Err(AppError::new(anyhow::anyhow!("Query cannot be empty")));
   }
-
-  let (semantic_results, episodic_results) = tokio::try_join!(
-    SemanticMemory::retrieve(
-      &payload.query,
-      sanitize_limit(payload.semantic_limit),
-      payload.conversation_id,
-      &state.db
-    ),
-    EpisodicMemory::retrieve(
-      &payload.query,
-      payload.episodic_limit,
-      payload.conversation_id,
-      &state.db
-    ),
-  )?;
-
-  record_pending_review(
+  let (semantic, episodic) = fetch_memory(
     &state,
     payload.conversation_id,
     &payload.query,
-    &episodic_results,
+    payload.episodic_limit,
+    payload.semantic_limit,
   )
   .await?;
-
-  Ok(format_tool_result(
-    &semantic_results,
-    &episodic_results,
-    &payload.detail,
-  ))
+  Ok(format_tool_result(&semantic, &episodic, &payload.detail))
 }

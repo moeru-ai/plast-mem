@@ -1,17 +1,17 @@
-pub mod boundary;
-mod pending_reviews;
 mod segmentation;
 mod state;
+mod check;
+
+pub use check::SegmentationCheck;
+pub use segmentation::{BatchSegment, SurpriseLevel, batch_segment};
 
 use anyhow::anyhow;
 use plastmem_entities::message_queue;
 use plastmem_shared::{AppError, Message};
 
 use sea_orm::{
-  ColumnTrait, ConnectionTrait, DatabaseConnection, DbBackend, EntityTrait, ExprTrait,
-  QueryFilter, Set, Statement,
-  prelude::Expr,
-  sea_query::{BinOper, OnConflict, extension::postgres::PgBinOper},
+  ConnectionTrait, DatabaseConnection, DbBackend, EntityTrait, FromQueryResult, Set, Statement,
+  sea_query::OnConflict,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -29,28 +29,23 @@ pub struct PendingReview {
   pub memory_ids: Vec<Uuid>,
 }
 
-/// What kind of segmentation action the rules determined.
+/// What kind of segmentation action was determined.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SegmentationAction {
-  /// Buffer is full — force-create an episode, drain all messages.
+  /// Window threshold or 2-hour soft trigger reached — run batch LLM segmentation.
+  BatchProcess,
+  /// Window was already doubled and LLM still returned 1 segment — force drain as single episode.
   ForceCreate,
-  /// Time gap exceeded — create episode, but the triggering message belongs to the next event.
-  TimeBoundary,
-  /// Rules passed — needs LLM boundary detection (with embedding pre-filter).
-  NeedsBoundaryDetection,
 }
 
-/// Result of checking if event segmentation is needed.
-#[derive(Debug, Clone)]
-pub struct SegmentationCheck {
-  pub trigger: Message,
-  pub action: SegmentationAction,
+#[derive(Debug, FromQueryResult)]
+struct PushResult {
+  msg_count: i32,
 }
 
 impl MessageQueue {
   pub async fn get(id: Uuid, db: &DatabaseConnection) -> Result<Self, AppError> {
     let model = Self::get_or_create_model(id, db).await?;
-
     Self::from_model(model)
   }
 
@@ -66,9 +61,10 @@ impl MessageQueue {
       id: Set(id),
       messages: Set(serde_json::to_value(Vec::<Message>::new())?),
       pending_reviews: Set(None),
-      event_model: Set(None),
-      last_embedding: Set(None),
-      event_model_embedding: Set(None),
+      in_progress_fence: Set(None),
+      in_progress_since: Set(None),
+      window_doubled: Set(false),
+      prev_episode_summary: Set(None),
     };
 
     message_queue::Entity::insert(active_model)
@@ -93,34 +89,42 @@ impl MessageQueue {
     })
   }
 
-  /// Push a message to the queue and check if segmentation is needed.
+  /// Push a message to the queue, then check if batch segmentation should be triggered.
+  ///
+  /// Uses a single atomic SQL UPDATE + RETURNING to append the message and capture the exact
+  /// message count at push time. This count is passed directly to `check()` as the trigger
+  /// boundary, preventing later-arriving messages from being included in this batch's fence.
+  ///
   /// Returns `Ok(Some(SegmentationCheck))` if a segmentation job should be created.
   pub async fn push(
     id: Uuid,
     message: Message,
     db: &DatabaseConnection,
   ) -> Result<Option<SegmentationCheck>, AppError> {
-    let check = Self::check(id, &message, db).await?;
+    // Ensure queue exists before pushing
+    Self::get_or_create_model(id, db).await?;
 
-    let message_value = serde_json::to_value(vec![message])?;
+    // Append message and capture the exact count after this push.
+    // Wrapping message in an array matches the JSONB concat operator expectation.
+    let message_json = serde_json::to_value(vec![&message])?;
+    let sql = "UPDATE message_queue \
+               SET messages = messages || $1::jsonb \
+               WHERE id = $2 \
+               RETURNING jsonb_array_length(messages) AS msg_count";
 
-    let res = message_queue::Entity::update_many()
-      .col_expr(
-        message_queue::Column::Messages,
-        Expr::col(message_queue::Column::Messages).binary(
-          BinOper::PgOperator(PgBinOper::Concatenate),
-          Expr::val(message_value),
-        ),
-      )
-      .filter(message_queue::Column::Id.eq(id))
-      .exec(db)
-      .await?;
+    let result = PushResult::find_by_statement(Statement::from_sql_and_values(
+      DbBackend::Postgres,
+      sql,
+      [message_json.into(), id.into()],
+    ))
+    .one(db)
+    .await?;
 
-    if res.rows_affected == 0 {
-      return Err(anyhow!("Queue not found").into());
-    }
+    let trigger_count = result
+      .ok_or_else(|| AppError::from(anyhow!("Queue not found after push")))?
+      .msg_count;
 
-    Ok(check)
+    Self::check(id, trigger_count, db).await
   }
 
   /// Atomically removes the first `count` messages from the queue,

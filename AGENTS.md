@@ -42,7 +42,10 @@ API endpoint → Server handler → Core service → Entity/DB
   - `memory/semantic/mod.rs` - semantic fact retrieval (BM25 + vector, no FSRS)
   - `memory/semantic/consolidation.rs` - CLS consolidation pipeline (episodes → long-term facts)
   - `memory/retrieval.rs` - shared markdown formatting (`format_tool_result`, `DetailLevel`)
-  - `message_queue/` - queue operations, segmentation rules, boundary detection, pending reviews
+  - `message_queue/mod.rs` - MessageQueue struct, push/drain/get, PendingReview type
+  - `message_queue/check.rs` - trigger check (count/time), fence acquisition, SegmentationCheck
+  - `message_queue/segmentation.rs` - batch LLM segmentation (batch_segment, BatchSegment, SurpriseLevel)
+  - `message_queue/state.rs` - fence state management, pending reviews
 - **plastmem_migration**: Database table migrations
 - **plastmem_entities**: Database table entities (Sea-ORM)
   - `episodic_memory.rs` - episodic memory entity
@@ -57,13 +60,14 @@ API endpoint → Server handler → Core service → Entity/DB
 - **plastmem_server**: HTTP server and API handlers
   - `api/add_message.rs` - message ingestion
   - `api/recent_memory.rs` - recent memories (raw JSON and markdown)
-  - `api/retrieve_memory.rs` - semantic + episodic retrieval (raw JSON and markdown)
+  - `api/retrieve_memory.rs` - semantic + episodic retrieval (raw JSON and markdown); `context_pre_retrieve` for semantic-only pre-LLM injection
 
 ## Key Runtime Flows
 
-- **Memory creation**: `crates/server/src/api/add_message.rs` → `MessageQueue::push` → `EventSegmentationJob` → dual-channel boundary detection → episode generation (LLM structured output: title + summary) → `EpisodicMemory` with surprise-based FSRS stability boost
+- **Memory creation**: `crates/server/src/api/add_message.rs` → `MessageQueue::push` (RETURNING trigger_count) → `check()` (count/time trigger + CAS fence) → `EventSegmentationJob` → `batch_segment()` (single LLM call: title + summary + surprise_level per segment) → drain + finalize → `create_episode_from_segment` (parallel, embed + FSRS init) → `EpisodicMemory` with surprise-based FSRS stability boost
 - **Semantic consolidation**: after episode creation → `enqueue_semantic_consolidation` (if ≥3 unconsolidated episodes or flashbulb surprise ≥0.85) → `SemanticConsolidationJob` → load related facts → LLM consolidation call → new/reinforce/update/invalidate facts → mark episodes consolidated
 - **Memory retrieval**: `crates/server/src/api/retrieve_memory.rs` → parallel: `SemanticMemory::retrieve` (BM25 + vector RRF) + `EpisodicMemory::retrieve` (BM25 + vector RRF × FSRS retrievability) → records pending review in `MessageQueue`
+- **Pre-retrieval context**: `POST /api/v0/context_pre_retrieve` → `SemanticMemory::retrieve` only → returns markdown for system prompt injection; no pending review recorded
 - **FSRS review update**: segmentation triggers `MemoryReviewJob` when pending reviews exist → LLM evaluates relevance (Again/Hard/Good/Easy) → FSRS parameter update in `crates/worker/src/jobs/memory_review.rs`
 
 ## Context Files
@@ -102,7 +106,7 @@ When implementing new features:
 
 - **Two memory layers**: Episodic (events, FSRS-decayed) and Semantic (facts, no decay). Most features touch both.
 - **FSRS applies to episodic only**: Semantic facts use temporal validity (`valid_at`/`invalid_at`) instead of decay.
-- **Dual-channel detection**: Event segmentation uses both statistical and LLM-based boundary detection
+- **Dual-channel detection**: Event segmentation uses a single batch LLM call with dual-channel criteria (topic shift + surprise)
 - **Queue-based architecture**: Messages flow through queues; operations are often async
 - **LLM costs matter**: AI calls are expensive; the system uses embeddings for first-stage retrieval
 - **Consolidation is offline**: Semantic facts are extracted in background jobs, not during the hot add_message path
@@ -118,12 +122,15 @@ When implementing new features:
 | `crates/core/src/memory/episodic/creation.rs` | Episode generation logic |
 | `crates/core/src/memory/semantic/mod.rs` | Semantic memory retrieval |
 | `crates/core/src/memory/semantic/consolidation.rs` | CLS consolidation pipeline |
-| `crates/core/src/message_queue/` | Queue operations and segmentation |
+| `crates/core/src/message_queue/mod.rs` | Queue push/drain/get, PendingReview type |
+| `crates/core/src/message_queue/check.rs` | Trigger check, fence acquisition |
+| `crates/core/src/message_queue/segmentation.rs` | Batch LLM segmentation, BatchSegment, SurpriseLevel |
+| `crates/core/src/message_queue/state.rs` | Fence state management, pending reviews |
 | `crates/worker/src/jobs/memory_review.rs` | LLM review and FSRS updates |
 | `crates/worker/src/jobs/event_segmentation.rs` | Event segmentation job dispatch + consolidation trigger |
 | `crates/worker/src/jobs/semantic_consolidation.rs` | Semantic consolidation job |
 | `crates/server/src/api/add_message.rs` | Message ingestion API |
-| `crates/server/src/api/retrieve_memory.rs` | Memory retrieval API (semantic + episodic) |
+| `crates/server/src/api/retrieve_memory.rs` | Memory retrieval API (semantic + episodic); `context_pre_retrieve` for semantic-only pre-LLM injection |
 | `crates/server/src/api/recent_memory.rs` | Recent episodic memories API |
 
 ## Build and Test Commands

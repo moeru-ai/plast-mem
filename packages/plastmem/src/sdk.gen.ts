@@ -2,7 +2,7 @@
 
 import type { Client, Options as Options2, TDataShape } from './client';
 import { client } from './client.gen';
-import type { AddMessageData, AddMessageErrors, AddMessageResponses, RecentMemoryData, RecentMemoryRawData, RecentMemoryRawResponses, RecentMemoryResponses, RetrieveMemoryData, RetrieveMemoryErrors, RetrieveMemoryRawData, RetrieveMemoryRawErrors, RetrieveMemoryRawResponses, RetrieveMemoryResponses } from './types.gen';
+import type { AddMessageData, AddMessageErrors, AddMessageResponses, ContextPreRetrieveData, ContextPreRetrieveErrors, ContextPreRetrieveResponses, RecentMemoryData, RecentMemoryRawData, RecentMemoryRawResponses, RecentMemoryResponses, RetrieveMemoryData, RetrieveMemoryErrors, RetrieveMemoryRawData, RetrieveMemoryRawErrors, RetrieveMemoryRawResponses, RetrieveMemoryResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean> = Options2<TData, ThrowOnError> & {
     /**
@@ -23,6 +23,20 @@ export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends 
  */
 export const addMessage = <ThrowOnError extends boolean = false>(options: Options<AddMessageData, ThrowOnError>) => (options.client ?? client).post<AddMessageResponses, AddMessageErrors, ThrowOnError>({
     url: '/api/v0/add_message',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * Retrieve semantic memories as markdown for pre-retrieval context injection.
+ * Semantic-only (facts + behavioral guidelines); episodic retrieval is left to LLM tool calls.
+ * Does NOT record a pending review (no FSRS update triggered).
+ */
+export const contextPreRetrieve = <ThrowOnError extends boolean = false>(options: Options<ContextPreRetrieveData, ThrowOnError>) => (options.client ?? client).post<ContextPreRetrieveResponses, ContextPreRetrieveErrors, ThrowOnError>({
+    url: '/api/v0/context_pre_retrieve',
     ...options,
     headers: {
         'Content-Type': 'application/json',

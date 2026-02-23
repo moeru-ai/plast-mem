@@ -12,7 +12,8 @@ mod retrieve_memory;
 pub use add_message::{AddMessage, AddMessageMessage};
 pub use recent_memory::RecentMemory;
 pub use retrieve_memory::{
-  EpisodicMemoryResult, RetrieveMemory, RetrieveMemoryRawResult, SemanticMemoryResult,
+  ContextPreRetrieve, EpisodicMemoryResult, RetrieveMemory, RetrieveMemoryRawResult,
+  SemanticMemoryResult,
 };
 
 pub fn app() -> Router<AppState> {
@@ -22,6 +23,7 @@ pub fn app() -> Router<AppState> {
     .routes(routes!(recent_memory::recent_memory_raw))
     .routes(routes!(retrieve_memory::retrieve_memory))
     .routes(routes!(retrieve_memory::retrieve_memory_raw))
+    .routes(routes!(retrieve_memory::context_pre_retrieve))
     .split_for_parts();
 
   let openapi_json = openapi.clone();
@@ -42,6 +44,7 @@ pub fn app() -> Router<AppState> {
     AddMessageMessage,
     RecentMemory,
     RetrieveMemory,
+    ContextPreRetrieve,
     RetrieveMemoryRawResult,
     EpisodicMemoryResult,
     SemanticMemoryResult,

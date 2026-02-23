@@ -103,6 +103,10 @@ When discussing cognitive science, programming, or how you work:
 - Use precise terms, explain naturally
 - Unless user pushes further, don't exceed 3 paragraphs
 
+## Known Facts & Behavioral Guidelines
+
+{semantic_context}
+
 ## Recent Memory
 
 {recent_memory}

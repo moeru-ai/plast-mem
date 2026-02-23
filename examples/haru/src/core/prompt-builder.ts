@@ -8,6 +8,7 @@ export interface SystemPromptArgs {
   episodicMemory?: EpisodicMemory[]
   initialAt: Temporal.Instant
   now: Temporal.Instant
+  semanticContext?: string
 }
 
 /**
@@ -54,6 +55,7 @@ export const buildSystemPrompt = ({
   episodicMemory,
   initialAt,
   now,
+  semanticContext,
 }: SystemPromptArgs): string => {
   const recentMemoryText
     = episodicMemory
@@ -78,6 +80,7 @@ export const buildSystemPrompt = ({
     elapsed_time: `${formatDuration(elapsed)} ago`,
     examples,
     recent_memory: recentMemoryText,
+    semantic_context: semanticContext ?? '',
     session_start_time: initialAt.toLocaleString(),
     time: now.toLocaleString(),
   }

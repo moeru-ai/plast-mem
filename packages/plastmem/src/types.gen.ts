@@ -15,6 +15,13 @@ export type AddMessageMessage = {
     timestamp?: string | null;
 };
 
+export type ContextPreRetrieve = {
+    conversation_id: string;
+    detail?: DetailLevel;
+    query: string;
+    semantic_limit?: number;
+};
+
 export type DetailLevel = 'auto' | 'none' | 'low' | 'high';
 
 export type EpisodicMemory = {
@@ -137,6 +144,29 @@ export type AddMessageResponses = {
      */
     200: unknown;
 };
+
+export type ContextPreRetrieveData = {
+    body: ContextPreRetrieve;
+    path?: never;
+    query?: never;
+    url: '/api/v0/context_pre_retrieve';
+};
+
+export type ContextPreRetrieveErrors = {
+    /**
+     * Query cannot be empty
+     */
+    400: unknown;
+};
+
+export type ContextPreRetrieveResponses = {
+    /**
+     * Markdown context for system prompt injection
+     */
+    200: string;
+};
+
+export type ContextPreRetrieveResponse = ContextPreRetrieveResponses[keyof ContextPreRetrieveResponses];
 
 export type RecentMemoryData = {
     body: RecentMemory;

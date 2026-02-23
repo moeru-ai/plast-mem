@@ -9,7 +9,7 @@ import z from 'zod'
 
 import { generateText } from '@xsai/generate-text'
 import { tool } from '@xsai/tool'
-import { addMessage, recentMemoryRaw, retrieveMemory } from 'plastmem'
+import { addMessage, contextPreRetrieve, recentMemoryRaw, retrieveMemory } from 'plastmem'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Temporal } from 'temporal-polyfill'
 
@@ -126,10 +126,15 @@ export const useHaru = (conversation_id: string) => {
 
       const now = Temporal.Now.instant()
 
+      const [semanticContext] = await Promise.allSettled([
+        contextPreRetrieve({ body: { conversation_id, query: input } }).then(res => res.data ?? ''),
+      ])
+
       const content = buildSystemPrompt({
         episodicMemory,
         initialAt,
         now,
+        semanticContext: semanticContext.status === 'fulfilled' ? semanticContext.value : '',
       })
 
       const debugPayload = {
