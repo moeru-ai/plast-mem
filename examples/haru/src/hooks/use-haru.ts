@@ -13,9 +13,7 @@ import { addMessage, recentMemoryRaw, retrieveMemory } from 'plastmem'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Temporal } from 'temporal-polyfill'
 
-import { prompt } from '../core/prompt'
-
-const durationFormat = new Intl.DurationFormat('en', { style: 'narrow' })
+import { buildSystemPrompt } from '../core/prompt-builder'
 
 const DEFAULT_TOKEN_BUDGET = 8192
 const CONTEXT_WINDOW_RATIO = 0.2
@@ -45,21 +43,30 @@ export const useHaru = (conversation_id: string) => {
 
   const [messages, setMessages] = useState<Message[]>([])
   const messagesRef = useRef<Message[]>([])
+  const [requestHistory, setRequestHistory] = useState<object[]>([])
+
+  const isFirstMountRef = useRef(true)
 
   const clear = useCallback(() => {
     messagesRef.current = []
-    // eslint-disable-next-line react-hooks-extra/no-direct-set-state-in-use-effect
     setMessages([])
+    setRequestHistory([])
   }, [])
 
-  useEffect(() => clear(), [clear, conversation_id])
+  useEffect(() => {
+    if (isFirstMountRef.current) {
+      isFirstMountRef.current = false
+      return
+    }
+    clear()
+  }, [clear, conversation_id])
 
   const { data: tokenBudget } = useSWR('haru/tokenBudget', async () => {
     try {
       const res = await fetch(`${env.OPENAI_BASE_URL}/models`, {
         headers: { Authorization: `Bearer ${env.OPENAI_API_KEY}` },
       })
-      const json = await res.json() as { data: { id: string, context_length?: number }[] }
+      const json = await res.json() as { data: { context_length?: number, id: string }[] }
       const model = json.data.find(m => m.id === env.OPENAI_CHAT_MODEL)
       if (model?.context_length)
         return Math.floor(model.context_length * CONTEXT_WINDOW_RATIO)
@@ -68,30 +75,48 @@ export const useHaru = (conversation_id: string) => {
     return DEFAULT_TOKEN_BUDGET
   }, { revalidateOnFocus: false })
 
-  const { data: tools, isLoading: isToolsLoading } = useSWR(['haru/tools', conversation_id], async () => {
-    const retrieveMemoryTool = await tool({
-      description: 'Search long-term memory for relevant facts and past episodes',
-      execute: async ({ query }) => retrieveMemory({ body: { conversation_id, query } }).then(res => res.data ?? String(res.error)),
-      name: 'retrieve_memory',
-      parameters: z.object({
-        query: z.string().describe('Search query'),
-      }),
-    })
-    return [retrieveMemoryTool]
-  }, { revalidateOnFocus: false })
+  const { data: tools, isLoading: isToolsLoading } = useSWR(
+    ['haru/tools', conversation_id],
+    async () => {
+      const retrieveMemoryTool = await tool({
+        description: 'Search long-term memory for relevant facts and past episodes',
+        execute: async ({ query }) =>
+          retrieveMemory({ body: { conversation_id, query } }).then(
+            res => res.data ?? String(res.error),
+          ),
+        name: 'retrieve_memory',
+        parameters: z.object({
+          query: z.string().describe('Search query'),
+        }),
+      })
+      return [retrieveMemoryTool]
+    },
+    { revalidateOnFocus: false },
+  )
 
   const { data: episodicMemory, isLoading: isMemoryLoading } = useSWR(
     ['haru/recentMemory', conversation_id],
-    async () => recentMemoryRaw({ body: { conversation_id } }).then(res => res.data),
+    async () =>
+      recentMemoryRaw({ body: { conversation_id } }).then(res => res.data),
   )
 
-  const pushMessage = useCallback(async (message: AssistantMessage | UserMessage) => {
-    messagesRef.current = [...messagesRef.current, message]
-    setMessages(prev => [...prev, message])
-    await addMessage({ body: { conversation_id, message: message as AddMessageMessage } })
-  }, [conversation_id])
+  const pushMessage = useCallback(
+    async (message: AssistantMessage | UserMessage) => {
+      messagesRef.current = [...messagesRef.current, message]
+      setMessages(prev => [...prev, message])
+      await addMessage({
+        body: { conversation_id, message: message as AddMessageMessage },
+      })
+    },
+    [conversation_id],
+  )
 
-  const { error, isMutating, trigger: send } = useSWRMutation<void, Error, [string, string], string>(
+  const { error, isMutating, trigger: send } = useSWRMutation<
+    void,
+    Error,
+    [string, string],
+    string
+  >(
     ['haru/send', conversation_id],
     async (_, { arg: input }) => {
       if (input.trim().length === 0)
@@ -100,23 +125,19 @@ export const useHaru = (conversation_id: string) => {
       await pushMessage({ content: input, role: 'user' })
 
       const now = Temporal.Now.instant()
-      const elapsed = now.since(initialAt, { largestUnit: 'hours', smallestUnit: 'seconds' })
 
-      const recentMemory = episodicMemory?.flatMap((mem) => {
-        const createdAt = Temporal.Instant.from(mem.created_at)
-        const duration = now.since(createdAt, { largestUnit: 'hours', smallestUnit: 'seconds' })
+      const content = buildSystemPrompt({
+        episodicMemory,
+        initialAt,
+        now,
+      })
 
-        return [
-          `### ${mem.title} (${durationFormat.format(duration)} ago)`,
-          mem.summary,
-        ]
-      }).join('\n\n') ?? ''
-
-      const content = prompt
-        .replace('{recent_memory}', recentMemory)
-        .replace('{time}', now.toLocaleString())
-        .replace('{session_start_time}', initialAt.toLocaleString())
-        .replace('{elapsed_time}', `${durationFormat.format(elapsed)} ago`)
+      const debugPayload = {
+        history: messagesRef.current,
+        system_prompt: content,
+        timestamp: now.toLocaleString(),
+      }
+      setRequestHistory(prev => [debugPayload, ...prev].slice(0, 5))
 
       const budget = tokenBudget ?? DEFAULT_TOKEN_BUDGET
       const trimmedMessages = truncateMessages(messagesRef.current, budget)
@@ -149,7 +170,7 @@ export const useHaru = (conversation_id: string) => {
     error,
     isLoading,
     messages,
+    requestHistory,
     send,
   }
 }
-

@@ -8,7 +8,8 @@
     "client:gen": "pnpm dlx @hey-api/openapi-ts -i http://localhost:3000/openapi.json -o packages/plastmem/src",
     "dev": "pnpm -rF @plastmem/haru dev",
     "dev:hmr": "pnpm -rF @plastmem/haru dev:hmr",
-    "lint": "eslint examples"
+    "lint": "eslint examples",
+    "test": "vitest"
   },
   "devDependencies": {
     "@antfu/eslint-config": "^7.4.3",
@@ -24,6 +25,7 @@
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
     "vite": "^7.3.1",
-    "vite-node": "^5.3.0"
+    "vite-node": "^5.3.0",
+    "vitest": "^4.0.18"
   }
 }

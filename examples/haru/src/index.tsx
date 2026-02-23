@@ -18,8 +18,5 @@ const main = async () => {
   render(<ChatApp />)
 }
 
-// if (import.meta.main) {
-//   await main()
-// }
 // eslint-disable-next-line antfu/no-top-level-await
 await main()
