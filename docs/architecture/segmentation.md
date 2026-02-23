@@ -17,8 +17,8 @@ flowchart TB
   B -->|Check Needed| DC["Dual-Channel Boundary Detection"]
   DC --> SC["Surprise Channel"]
   DC --> TC["Topic Channel"]
-  SC -->|"surprise > 0.65"| E2["Boundary (Direct)"]
-  SC -->|"surprise ≤ 0.65"| TC
+  SC -->|"surprise > 0.7"| E2["Boundary (Direct)"]
+  SC -->|"surprise ≤ 0.7"| TC
   TC -->|"sim ≥ 0.5"| S2[Skip (Update Rolling Avg)]
   TC -->|"sim < 0.5"| L3["LLM Topic Shift Detection"]
   L3 -->|"is_boundary = true"| E["Boundary Detected (Keep Last)"]
@@ -37,10 +37,10 @@ Fast, zero-cost checks to handle obvious cases:
 
 | Rule | Condition | Action |
 |------|-----------|--------|
-| Buffer too small | messages < 3 | Skip |
+| Buffer too small | messages < 5 | Skip |
 | Buffer full | messages ≥ 50 | ForceCreate (drain all) |
 | Time gap | > 15 minutes since last message | TimeBoundary (keep last) |
-| Content too short | total chars < 100 | Skip |
+| Content too short | total chars < 300 | Skip |
 | Message too short | latest message < 5 chars | Skip |
 
 **Code**: `crates/core/src/message_queue/segmentation.rs`
@@ -56,8 +56,8 @@ When the rule layer determines `NeedsBoundaryDetection`, the system runs two ind
 Detects when incoming information diverges significantly from the current event model—a direct measure of prediction error.
 
 - Computes `surprise = 1 - cosine_sim(event_model_embedding, new_message_embedding)`
-- **surprise > 0.65**: High prediction error → boundary triggered **directly** (no LLM needed)
-- **surprise ≤ 0.65**: No surprise boundary
+- **surprise > 0.7**: High prediction error → boundary triggered **directly** (no LLM needed)
+- **surprise ≤ 0.7**: No surprise boundary
 
 The surprise signal (`1 - cosine_sim`) is also recorded on the created episode for FSRS stability boosting.
 

@@ -19,7 +19,7 @@ use super::{MemoryReviewJob, SemanticConsolidationJob};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EventSegmentationJob {
   pub conversation_id: Uuid,
-  pub messages: Vec<Message>,
+  pub trigger: Message,
   pub action: SegmentationAction,
 }
 
@@ -35,29 +35,29 @@ pub async fn process_event_segmentation(
 ) -> Result<(), AppError> {
   let db = &*db;
 
-  // Verify that the job is not stale. The message queue in the database should
-  // still contain the messages that this job was created with.
+  // Fetch current queue state. The job snapshot may be stale if messages arrived
+  // while this job was queued. Find the trigger message's position in the current queue.
   let current_messages = MessageQueue::get(job.conversation_id, db).await?.messages;
-  let job_context_messages = &job.messages[..job.messages.len().saturating_sub(1)];
-  if !current_messages.starts_with(job_context_messages) {
+  let Some(trigger_idx) = current_messages.iter().position(|m| m == &job.trigger) else {
     tracing::debug!(
       conversation_id = %job.conversation_id,
       "Skipping stale event segmentation job."
     );
     return Ok(());
-  }
+  };
+
+  // Only process messages up to and including the trigger message.
+  // drain_count = trigger_idx: drain [0, trigger_idx-1], keep trigger as next event's start.
+  let messages = &current_messages[..=trigger_idx];
+  let drain_count = trigger_idx;
   let review_storage = &*review_storage;
   let semantic_storage = &*semantic_storage;
   tracing::debug!(
     conversation_id = %job.conversation_id,
     action = ?job.action,
-    messages = job.messages.len(),
+    messages = messages.len(),
     "Processing event segmentation"
   );
-
-  // The last element in job.messages is always the triggering (edge) message.
-  // drain_count = len - 1 ensures the edge message stays in the queue for the next event.
-  let drain_count = job.messages.len().saturating_sub(1);
 
   match job.action {
     // Force-create and Time-boundary both skip boundary detection, go straight to episode generation.
@@ -69,16 +69,16 @@ pub async fn process_event_segmentation(
       };
       tracing::info!(
         conversation_id = %job.conversation_id,
-        messages = job.messages.len(),
+        messages = messages.len(),
         drain_count,
         "{}",
         log_msg
       );
       if drain_count > 0 {
-        enqueue_pending_reviews(job.conversation_id, &job.messages, db, review_storage).await?;
+        enqueue_pending_reviews(job.conversation_id, messages, db, review_storage).await?;
         if let Some(episode) = create_episode(
           job.conversation_id,
-          &job.messages,
+          messages,
           drain_count,
           None,
           0.0,
@@ -94,21 +94,21 @@ pub async fn process_event_segmentation(
 
     // Needs boundary detection with dual-channel: topic shift + surprise.
     SegmentationAction::NeedsBoundaryDetection => {
-      let result = detect_boundary(job.conversation_id, &job.messages, db).await?;
+      let result = detect_boundary(job.conversation_id, messages, db).await?;
 
       if result.is_boundary {
         tracing::info!(
           conversation_id = %job.conversation_id,
-          messages = job.messages.len(),
+          messages = messages.len(),
           drain_count,
           surprise = result.surprise_signal,
           "Creating episode (boundary detected)"
         );
         if drain_count > 0 {
-          enqueue_pending_reviews(job.conversation_id, &job.messages, db, review_storage).await?;
+          enqueue_pending_reviews(job.conversation_id, messages, db, review_storage).await?;
           if let Some(episode) = create_episode(
             job.conversation_id,
-            &job.messages,
+            messages,
             drain_count,
             result.latest_embedding,
             result.surprise_signal,
@@ -122,7 +122,7 @@ pub async fn process_event_segmentation(
         }
       } else {
         // No boundary — just process pending reviews, don't drain.
-        enqueue_pending_reviews(job.conversation_id, &job.messages, db, review_storage).await?;
+        enqueue_pending_reviews(job.conversation_id, messages, db, review_storage).await?;
       }
     }
   }

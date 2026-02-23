@@ -3,8 +3,8 @@ use plastmem_entities::message_queue;
 use plastmem_shared::AppError;
 
 use sea_orm::{
-  ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QuerySelect, TransactionTrait,
-  prelude::Expr,
+  ColumnTrait, ConnectionTrait, DatabaseConnection, DbBackend, EntityTrait, QueryFilter,
+  QuerySelect, Statement, TransactionTrait, prelude::Expr,
 };
 use uuid::Uuid;
 
@@ -25,19 +25,15 @@ impl MessageQueue {
     let review = PendingReview { query, memory_ids };
     let review_value = serde_json::to_value(vec![review])?;
 
-    let res = message_queue::Entity::update_many()
-      .col_expr(
-        message_queue::Column::PendingReviews,
-        Expr::cust_with_values(
-          "COALESCE(pending_reviews, '[]'::jsonb) || ?::jsonb",
-          [review_value],
-        ),
-      )
-      .filter(message_queue::Column::Id.eq(id))
-      .exec(db)
+    let res = db
+      .execute_raw(Statement::from_sql_and_values(
+        DbBackend::Postgres,
+        "UPDATE message_queue SET pending_reviews = COALESCE(pending_reviews, '[]'::jsonb) || $1::jsonb WHERE id = $2",
+        [review_value.into(), id.into()],
+      ))
       .await?;
 
-    if res.rows_affected == 0 {
+    if res.rows_affected() == 0 {
       return Err(anyhow!("Queue not found").into());
     }
 

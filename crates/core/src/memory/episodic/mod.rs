@@ -154,7 +154,7 @@ impl EpisodicMemory {
       SELECT id, 1.0 / (60 + r) AS s FROM semantic
     ),
     rrf_score AS (
-      SELECT id, SUM(s) AS score
+      SELECT id, SUM(s)::float8 AS score
       FROM rrf
       GROUP BY id
     )

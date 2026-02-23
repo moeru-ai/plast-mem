@@ -62,6 +62,12 @@ let result: SummaryOutput = generate_object(
 ).await?;
 ```
 
+The schema is automatically fixed for OpenAI strict mode compatibility:
+- `additionalProperties: false` and `required` added to all objects
+- `$ref` sibling keys stripped (draft 7 requirement)
+- `oneOf` of const strings converted to `enum`
+- `anyOf: [T, null]` (`Option<T>`) unwrapped to `T`
+
 ### Cosine Similarity
 
 ```rust

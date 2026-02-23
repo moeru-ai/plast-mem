@@ -32,6 +32,7 @@ pub async fn worker(
       move |_run_id| {
         WorkerBuilder::new("event-segmentation")
           .backend(segmentation_backend.clone())
+          .concurrency(1)
           .enable_tracing()
           .data(db.clone())
           .data(review_backend.clone())

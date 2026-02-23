@@ -63,7 +63,7 @@ pub async fn add_message(
     job_storage
       .push(EventSegmentationJob {
         conversation_id: payload.conversation_id,
-        messages: check.messages,
+        trigger: check.trigger,
         action: check.action,
       })
       .await?;

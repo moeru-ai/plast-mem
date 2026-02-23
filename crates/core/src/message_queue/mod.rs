@@ -8,7 +8,8 @@ use plastmem_entities::message_queue;
 use plastmem_shared::{AppError, Message};
 
 use sea_orm::{
-  ColumnTrait, DatabaseConnection, EntityTrait, ExprTrait, QueryFilter, Set,
+  ColumnTrait, ConnectionTrait, DatabaseConnection, DbBackend, EntityTrait, ExprTrait,
+  QueryFilter, Set, Statement,
   prelude::Expr,
   sea_query::{BinOper, OnConflict, extension::postgres::PgBinOper},
 };
@@ -42,7 +43,7 @@ pub enum SegmentationAction {
 /// Result of checking if event segmentation is needed.
 #[derive(Debug, Clone)]
 pub struct SegmentationCheck {
-  pub messages: Vec<Message>,
+  pub trigger: Message,
   pub action: SegmentationAction,
 }
 
@@ -125,19 +126,18 @@ impl MessageQueue {
   /// Atomically removes the first `count` messages from the queue,
   /// preserving any messages appended after the read.
   pub async fn drain(id: Uuid, count: usize, db: &DatabaseConnection) -> Result<(), AppError> {
-    let res = message_queue::Entity::update_many()
-      .col_expr(
-        message_queue::Column::Messages,
-        Expr::cust_with_values(
-          "jsonb_path_query_array(messages, ?::jsonpath)",
-          [&format!("$[{count} to last]")],
-        ),
-      )
-      .filter(message_queue::Column::Id.eq(id))
-      .exec(db)
+    let sql = format!(
+      "UPDATE message_queue SET messages = jsonb_path_query_array(messages, '$[{count} to last]'::jsonpath) WHERE id = $1"
+    );
+    let res = db
+      .execute_raw(Statement::from_sql_and_values(
+        DbBackend::Postgres,
+        &sql,
+        [id.into()],
+      ))
       .await?;
 
-    if res.rows_affected == 0 {
+    if res.rows_affected() == 0 {
       return Err(anyhow!("Queue not found").into());
     }
 
