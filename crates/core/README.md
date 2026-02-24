@@ -7,9 +7,9 @@ Core domain logic for Plast Mem.
 This crate implements the central business logic:
 
 - **Episodic Memory** - Storage and retrieval of conversation segments
-- **Message Queue** - Buffering and event segmentation
-- **Boundary Detection** - Dual-channel (surprise + topic) event boundary detection
-- **Episode Creation** - LLM-based title/summary generation with FSRS initialization
+- **Semantic Memory** - Long-term fact storage and consolidation
+- **Message Queue** - Buffering, trigger detection, and batch segmentation
+- **Episode Creation** - Embedding + FSRS initialization from batch segment output
 
 ## Key Types
 
@@ -22,8 +22,8 @@ pub struct EpisodicMemory {
     pub id: Uuid,
     pub conversation_id: Uuid,
     pub messages: Vec<Message>,     // Original conversation
-    pub title: String,              // LLM-generated title
-    pub summary: String,            // LLM-generated summary
+    pub title: String,              // From batch segmentation LLM
+    pub summary: String,            // From batch segmentation LLM
     pub stability: f32,             // FSRS stability
     pub difficulty: f32,            // FSRS difficulty
     pub surprise: f32,              // 0.0-1.0 significance score
@@ -38,24 +38,34 @@ pub struct EpisodicMemory {
 Per-conversation message buffer:
 
 ```rust
-// Load or create queue for a conversation
-let queue = MessageQueue::get(conversation_id, db).await?;
+// Push a message; returns Some(SegmentationCheck) if a job should be enqueued
+let check = MessageQueue::push(conversation_id, message, db).await?;
 
-// Push a message
-queue.push(message, db).await?;
-
-// Check segmentation rules
-let check = queue.check_segmentation(db).await?;
+// Drain the first N messages after a job completes
+MessageQueue::drain(conversation_id, count, db).await?;
 ```
 
 ### PendingReview
 
-Tracks memories retrieved for later review:
+Tracks memories retrieved for later FSRS review:
 
 ```rust
 pub struct PendingReview {
     pub query: String,              // The search query
     pub memory_ids: Vec<Uuid>,      // Retrieved memory IDs
+}
+```
+
+### BatchSegment / SurpriseLevel
+
+Output types from `batch_segment()`:
+
+```rust
+pub struct BatchSegment {
+    pub messages: Vec<Message>,     // Sliced from queue
+    pub title: String,
+    pub summary: String,
+    pub surprise_level: SurpriseLevel,  // Low / High / ExtremelyHigh
 }
 ```
 
@@ -66,7 +76,6 @@ pub struct PendingReview {
 ```rust
 use plastmem_core::{EpisodicMemory, DetailLevel};
 
-// Hybrid search with FSRS re-ranking
 let results = EpisodicMemory::retrieve(
     "user query",
     5,                              // limit
@@ -75,50 +84,44 @@ let results = EpisodicMemory::retrieve(
 ).await?;
 ```
 
+### Batch Segmentation
+
+```rust
+use plastmem_core::batch_segment;
+
+// Single LLM call; returns segments with title, summary, surprise_level
+let segments = batch_segment(&messages, prev_episode_summary).await?;
+```
+
 ### Episode Creation
 
 ```rust
-use plastmem_core::create_episode;
+use plastmem_core::create_episode_from_segment;
 
-// Create episode from buffered messages
-let created = create_episode(
+let created = create_episode_from_segment(
     conversation_id,
-    &messages,
-    drain_count,                   // How many messages to drain
-    next_event_embedding,          // Embedding for next event context
-    surprise_signal,               // 0.0-1.0 surprise score
+    &segment.messages,
+    &segment.title,
+    &segment.summary,
+    segment.surprise_level.to_signal(),
     db,
 ).await?;
 ```
 
-### Boundary Detection
-
-```rust
-use plastmem_core::detect_boundary;
-
-let result = detect_boundary(
-    &messages,
-    event_model,
-    last_embedding,
-    event_model_embedding,
-).await?;
-
-// result.is_boundary indicates if a boundary was detected
-```
-
 ## Modules
 
-- `memory/episodic.rs` - `EpisodicMemory` struct and retrieval
-- `memory/creation.rs` - Episode generation and FSRS initialization
-- `memory/mod.rs` - Tool result formatting, `DetailLevel` enum
-- `message_queue/mod.rs` - `MessageQueue` and `PendingReview`
-- `message_queue/boundary.rs` - Dual-channel boundary detection
-- `message_queue/segmentation.rs` - Rule-based segmentation triggers
-- `message_queue/state.rs` - Queue state management
-- `message_queue/pending_reviews.rs` - Review tracking helpers
+- `memory/episodic/mod.rs` - `EpisodicMemory` struct and hybrid retrieval
+- `memory/episodic/creation.rs` - Episode creation and FSRS initialization
+- `memory/semantic/mod.rs` - Semantic memory retrieval
+- `memory/semantic/consolidation.rs` - CLS consolidation pipeline
+- `memory/retrieval.rs` - Shared markdown formatting (`format_tool_result`, `DetailLevel`)
+- `message_queue/mod.rs` - `MessageQueue`, `PendingReview`, push/drain
+- `message_queue/check.rs` - Trigger check, fence acquisition, `SegmentationCheck`
+- `message_queue/segmentation.rs` - `batch_segment`, `BatchSegment`, `SurpriseLevel`
+- `message_queue/state.rs` - Fence state management, pending reviews
 
 ## Architecture Notes
 
-- Core logic is pure domain code - no HTTP or job queue specifics
+- Core logic is pure domain code — no HTTP or job queue specifics
 - Database operations use Sea-ORM
 - LLM calls go through `plastmem_ai`

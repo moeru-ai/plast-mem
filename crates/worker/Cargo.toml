@@ -18,6 +18,7 @@ path = "src/lib.rs"
 [dependencies]
 anyhow.workspace = true
 apalis.workspace = true
+futures.workspace = true
 apalis-postgres.workspace = true
 chrono.workspace = true
 fsrs.workspace = true

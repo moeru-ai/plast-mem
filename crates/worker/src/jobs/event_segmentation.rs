@@ -1,9 +1,10 @@
 use apalis::prelude::{Data, TaskSink};
 use apalis_postgres::PostgresStorage;
 use chrono::Utc;
+use futures::future::try_join_all;
 use plastmem_core::{
   CONSOLIDATION_EPISODE_THRESHOLD, EpisodicMemory, FLASHBULB_SURPRISE_THRESHOLD, MessageQueue,
-  SegmentationAction, create_episode, detect_boundary,
+  batch_segment, create_episode_from_segment,
 };
 use plastmem_shared::{AppError, Message};
 use sea_orm::DatabaseConnection;
@@ -19,8 +20,9 @@ use super::{MemoryReviewJob, SemanticConsolidationJob};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EventSegmentationJob {
   pub conversation_id: Uuid,
-  pub trigger: Message,
-  pub action: SegmentationAction,
+  /// Number of messages in the queue when this job was triggered.
+  /// The job processes messages[0..fence_count].
+  pub fence_count: i32,
 }
 
 // ──────────────────────────────────────────────────
@@ -34,96 +36,133 @@ pub async fn process_event_segmentation(
   semantic_storage: Data<PostgresStorage<SemanticConsolidationJob>>,
 ) -> Result<(), AppError> {
   let db = &*db;
-
-  // Fetch current queue state. The job snapshot may be stale if messages arrived
-  // while this job was queued. Find the trigger message's position in the current queue.
-  let current_messages = MessageQueue::get(job.conversation_id, db).await?.messages;
-  let Some(trigger_idx) = current_messages.iter().position(|m| m == &job.trigger) else {
-    tracing::debug!(
-      conversation_id = %job.conversation_id,
-      "Skipping stale event segmentation job."
-    );
-    return Ok(());
-  };
-
-  // Only process messages up to and including the trigger message.
-  // drain_count = trigger_idx: drain [0, trigger_idx-1], keep trigger as next event's start.
-  let messages = &current_messages[..=trigger_idx];
-  let drain_count = trigger_idx;
   let review_storage = &*review_storage;
   let semantic_storage = &*semantic_storage;
+  let conversation_id = job.conversation_id;
+  let fence_count = job.fence_count as usize;
+
+  // Fetch current queue state
+  let current_messages = MessageQueue::get(conversation_id, db).await?.messages;
+  let window_doubled = MessageQueue::get_or_create_model(conversation_id, db)
+    .await?
+    .window_doubled;
+
+  // Validate fence: if queue has fewer messages than fence_count the job is stale
+  if current_messages.len() < fence_count {
+    tracing::debug!(
+      conversation_id = %conversation_id,
+      fence_count,
+      actual = current_messages.len(),
+      "Stale event segmentation job — clearing fence"
+    );
+    MessageQueue::finalize_job(conversation_id, None, db).await?;
+    return Ok(());
+  }
+
+  let batch_messages = &current_messages[..fence_count];
+
   tracing::debug!(
-    conversation_id = %job.conversation_id,
-    action = ?job.action,
-    messages = messages.len(),
-    "Processing event segmentation"
+    conversation_id = %conversation_id,
+    fence_count,
+    window_doubled,
+    "Processing batch segmentation"
   );
 
-  match job.action {
-    // Force-create and Time-boundary both skip boundary detection, go straight to episode generation.
-    SegmentationAction::ForceCreate | SegmentationAction::TimeBoundary => {
-      let log_msg = if matches!(job.action, SegmentationAction::ForceCreate) {
-        "Force-creating episode (buffer full)"
-      } else {
-        "Creating episode (time boundary)"
-      };
+  // Fetch previous episode summary for first-segment surprise context
+  let prev_summary = MessageQueue::get_prev_episode_summary(conversation_id, db).await?;
+
+  // Run batch LLM segmentation
+  let segments =
+    batch_segment(batch_messages, prev_summary.as_deref()).await?;
+
+  match segments.len() {
+    // ── No split ──────────────────────────────────────────────────────────
+    1 if !window_doubled => {
+      // First time returning 1 segment: double the window and wait for more messages
       tracing::info!(
-        conversation_id = %job.conversation_id,
-        messages = messages.len(),
-        drain_count,
-        "{}",
-        log_msg
+        conversation_id = %conversation_id,
+        "No split detected — doubling window"
       );
-      if drain_count > 0 {
-        enqueue_pending_reviews(job.conversation_id, messages, db, review_storage).await?;
-        if let Some(episode) = create_episode(
-          job.conversation_id,
-          messages,
-          drain_count,
-          None,
-          0.0,
-          db,
-        )
-        .await?
-        {
-          enqueue_semantic_consolidation(job.conversation_id, episode, db, semantic_storage)
-            .await?;
-        }
+      MessageQueue::set_doubled_and_clear_fence(conversation_id, db).await?;
+    }
+
+    // ── No split after doubling: force drain ──────────────────────────────
+    1 => {
+      tracing::info!(
+        conversation_id = %conversation_id,
+        messages = fence_count,
+        "No split after doubled window — force draining as single episode"
+      );
+      let seg = &segments[0];
+
+      // Drain and finalize BEFORE episode creation.
+      // If creation fails or crashes afterward, messages are already gone — acceptable data loss.
+      MessageQueue::drain(conversation_id, fence_count, db).await?;
+      MessageQueue::finalize_job(conversation_id, None, db).await?;
+
+      enqueue_pending_reviews(conversation_id, batch_messages, db, review_storage).await?;
+
+      if let Some(episode) = create_episode_from_segment(
+        conversation_id,
+        &seg.messages,
+        &seg.title,
+        &seg.summary,
+        seg.surprise_level.to_signal(),
+        db,
+      )
+      .await?
+      {
+        enqueue_semantic_consolidation(conversation_id, episode, db, semantic_storage).await?;
       }
     }
 
-    // Needs boundary detection with dual-channel: topic shift + surprise.
-    SegmentationAction::NeedsBoundaryDetection => {
-      let result = detect_boundary(job.conversation_id, messages, db).await?;
+    // ── Multiple segments: drain all but last ─────────────────────────────
+    _ => {
+      let drain_segments = &segments[..segments.len() - 1];
+      let last_segment = segments.last().expect("segments non-empty");
 
-      if result.is_boundary {
-        tracing::info!(
-          conversation_id = %job.conversation_id,
-          messages = messages.len(),
-          drain_count,
-          surprise = result.surprise_signal,
-          "Creating episode (boundary detected)"
-        );
-        if drain_count > 0 {
-          enqueue_pending_reviews(job.conversation_id, messages, db, review_storage).await?;
-          if let Some(episode) = create_episode(
-            job.conversation_id,
-            messages,
-            drain_count,
-            result.latest_embedding,
-            result.surprise_signal,
+      tracing::info!(
+        conversation_id = %conversation_id,
+        total_segments = segments.len(),
+        draining = drain_segments.len(),
+        "Batch segmentation complete"
+      );
+
+      // Drain and finalize BEFORE episode creation.
+      // If creation fails or crashes afterward, messages are already gone — acceptable data loss.
+      let drain_count: usize = drain_segments.iter().map(|s| s.messages.len()).sum();
+      let new_prev_summary = Some(drain_segments.last().expect("non-empty").summary.clone());
+      MessageQueue::drain(conversation_id, drain_count, db).await?;
+      MessageQueue::finalize_job(conversation_id, new_prev_summary, db).await?;
+
+      enqueue_pending_reviews(conversation_id, batch_messages, db, review_storage).await?;
+
+      // Create episodes for all drained segments in parallel
+      let episode_futures: Vec<_> = drain_segments
+        .iter()
+        .map(|seg| {
+          create_episode_from_segment(
+            conversation_id,
+            &seg.messages,
+            &seg.title,
+            &seg.summary,
+            seg.surprise_level.to_signal(),
             db,
           )
-          .await?
-          {
-            enqueue_semantic_consolidation(job.conversation_id, episode, db, semantic_storage)
-              .await?;
-          }
-        }
-      } else {
-        // No boundary — just process pending reviews, don't drain.
-        enqueue_pending_reviews(job.conversation_id, messages, db, review_storage).await?;
+        })
+        .collect();
+
+      let created_episodes: Vec<plastmem_core::CreatedEpisode> = try_join_all(episode_futures)
+        .await?
+        .into_iter()
+        .flatten()
+        .collect();
+
+      for episode in created_episodes {
+        enqueue_semantic_consolidation(conversation_id, episode, db, semantic_storage).await?;
       }
+
+      let _ = last_segment; // last segment stays in queue
     }
   }
 
@@ -131,10 +170,9 @@ pub async fn process_event_segmentation(
 }
 
 // ──────────────────────────────────────────────────
-// Pending review enqueueing (apalis-dependent)
+// Helpers
 // ──────────────────────────────────────────────────
 
-/// Take pending reviews from the queue and enqueue a `MemoryReviewJob` if any exist.
 async fn enqueue_pending_reviews(
   conversation_id: Uuid,
   context_messages: &[Message],
@@ -147,23 +185,18 @@ async fn enqueue_pending_reviews(
       context_messages: context_messages.to_vec(),
       reviewed_at: Utc::now(),
     };
-    let mut review_job_storage = review_storage.clone();
-    review_job_storage.push(review_job).await?;
+    let mut storage = review_storage.clone();
+    storage.push(review_job).await?;
   }
   Ok(())
 }
 
-/// Enqueue a `SemanticConsolidationJob` if threshold is met or it's a flashbulb memory.
 async fn enqueue_semantic_consolidation(
   conversation_id: Uuid,
   episode: plastmem_core::CreatedEpisode,
   db: &DatabaseConnection,
   semantic_storage: &PostgresStorage<SemanticConsolidationJob>,
 ) -> Result<(), AppError> {
-  // Check if we should trigger consolidation
-  // 1. Flashbulb memory (high surprise) -> immediate force consolidation
-  // 2. Threshold reached (>= 3 unconsolidated episodes) -> standard consolidation
-
   let is_flashbulb = episode.surprise >= FLASHBULB_SURPRISE_THRESHOLD;
   let unconsolidated_count =
     EpisodicMemory::count_unconsolidated_for_conversation(conversation_id, db).await?;
@@ -174,8 +207,8 @@ async fn enqueue_semantic_consolidation(
       conversation_id,
       force: is_flashbulb,
     };
-    let mut semantic_job_storage = semantic_storage.clone();
-    semantic_job_storage.push(job).await?;
+    let mut storage = semantic_storage.clone();
+    storage.push(job).await?;
     tracing::info!(
       conversation_id = %conversation_id,
       unconsolidated_count,

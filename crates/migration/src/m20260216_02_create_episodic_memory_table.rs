@@ -31,6 +31,7 @@ impl MigrationTrait for Migration {
           .col(timestamp_with_time_zone(EpisodicMemory::EndAt))
           .col(timestamp_with_time_zone(EpisodicMemory::CreatedAt))
           .col(timestamp_with_time_zone(EpisodicMemory::LastReviewedAt))
+          .col(timestamp_with_time_zone(EpisodicMemory::ConsolidatedAt).null())
           .to_owned(),
       )
       .await?;
@@ -96,4 +97,6 @@ pub enum EpisodicMemory {
   CreatedAt,
   // last review timestamp
   LastReviewedAt,
+  // semantic consolidation timestamp (NULL = not yet consolidated)
+  ConsolidatedAt,
 }

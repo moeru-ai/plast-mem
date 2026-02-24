@@ -11,10 +11,15 @@ pub struct Model {
   pub messages: Json,
   #[sea_orm(column_type = "JsonBinary", nullable)]
   pub pending_reviews: Option<Json>,
-  #[sea_orm(column_type = "Text", nullable)]
-  pub event_model: Option<String>,
-  pub last_embedding: Option<PgVector>,
-  pub event_model_embedding: Option<PgVector>,
+  // Batch segmentation fence: message count when job was triggered
+  // (job processes messages[0..in_progress_fence])
+  pub in_progress_fence: Option<i32>,
+  // When the fence was set (for TTL-based stale job recovery)
+  pub in_progress_since: Option<DateTimeWithTimeZone>,
+  // Whether the window has been doubled after a no-split result
+  pub window_doubled: bool,
+  // Summary of the last drained episode; reference for next batch's first segment surprise_level
+  pub prev_episode_summary: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

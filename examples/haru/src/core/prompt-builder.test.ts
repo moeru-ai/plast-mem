@@ -12,19 +12,33 @@ describe('buildSystemPrompt', () => {
   it('should build a complete prompt with recent memories', () => {
     const episodicMemory: EpisodicMemory[] = [
       {
+        consolidated_at: null,
+        conversation_id: 'conv_1',
         created_at: '2023-11-01T11:30:00Z',
+        difficulty: 0.3,
+        end_at: '2023-11-01T11:30:00Z',
         id: 'mem_1',
-        importance: 0.8,
-        last_accessed_at: '2023-11-01T11:30:00Z',
+        last_reviewed_at: '2023-11-01T11:30:00Z',
+        messages: [],
+        stability: 1.0,
+        start_at: '2023-11-01T11:00:00Z',
         summary: 'User was frustrated with a borrow checker error.',
+        surprise: 0.8,
         title: 'Rust Borrow Checker',
       },
       {
+        consolidated_at: null,
+        conversation_id: 'conv_1',
         created_at: '2023-10-31T10:00:00Z',
+        difficulty: 0.3,
+        end_at: '2023-10-31T10:00:00Z',
         id: 'mem_2',
-        importance: 0.5,
-        last_accessed_at: '2023-10-31T10:00:00Z',
+        last_reviewed_at: '2023-10-31T10:00:00Z',
+        messages: [],
+        stability: 1.0,
+        start_at: '2023-10-31T09:00:00Z',
         summary: 'User mentioned loving FastAPI and Pydantic.',
+        surprise: 0.5,
         title: 'Favorite Python Libraries',
       },
     ]
@@ -39,6 +53,7 @@ describe('buildSystemPrompt', () => {
     expect(prompt).not.toContain('{time}')
     expect(prompt).not.toContain('{recent_memory}')
     expect(prompt).not.toContain('{examples}')
+    expect(prompt).not.toContain('{semantic_context}')
 
     // Snapshot test to ensure the overall structure remains consistent
     expect(prompt).toMatchSnapshot()

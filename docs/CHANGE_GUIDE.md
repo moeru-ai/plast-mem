@@ -82,15 +82,13 @@ Database schema changes require migration and entity updates.
 
 Event segmentation determines when conversations become memories.
 
-1. **Understand dual-channel detection**:
-   - Statistical detection: token count, time gaps
-   - LLM-based detection: boundary classification
-2. **Modify detection logic** in `crates/core/src/message_queue/boundary.rs`
-3. **Update segmentation rules** in `crates/core/src/message_queue/segmentation.rs`
+1. **Understand batch detection**: a single LLM call segments the whole window; see `docs/architecture/segmentation.md`
+2. **Modify trigger logic** in `crates/core/src/message_queue/check.rs` (thresholds, fence TTL)
+3. **Modify LLM segmentation** in `crates/core/src/message_queue/segmentation.rs` (prompt, output schema)
 4. **Adjust job dispatch** in `crates/worker/src/jobs/event_segmentation.rs`
 5. **Test with varied inputs** - segmentation quality affects memory quality
 
-**Key constraint:** Segmentation runs in background jobs; must handle retries and partial failure.
+**Key constraint:** Drain happens before episode creation; a crash after drain loses messages (acceptable) but never creates duplicate episodes.
 
 ### AI Changes
 
@@ -116,7 +114,7 @@ Memory retrieval uses hybrid ranking (BM25 + vector) with FSRS re-ranking.
    - RRF (Reciprocal Rank Fusion)
    - FSRS retrievability weighting
 2. **Modify ranking** in `crates/core/src/memory/retrieval.rs` if applicable
-3. **Update review queue** - retrieval records pending reviews in `crates/core/src/message_queue/pending_reviews.rs`
+3. **Update review queue** - retrieval records pending reviews in `crates/core/src/message_queue/state.rs`
 4. **Test retrieval quality** with representative queries
 
 ### Adding a Job Type
