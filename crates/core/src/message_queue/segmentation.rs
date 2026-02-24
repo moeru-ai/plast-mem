@@ -246,8 +246,8 @@ pub async fn batch_segment(
     tracing::warn!("LLM returned empty segments; treating entire batch as one segment");
     resolved.push(BatchSegment {
       messages: messages.to_vec(),
-      title: String::new(),
-      summary: String::new(),
+      title: "Conversation Segment".to_owned(),
+      summary: "Conversation summary unavailable (segmentation fallback).".to_owned(),
       surprise_level: SurpriseLevel::Low,
     });
   }
