@@ -37,15 +37,10 @@ API endpoint → Server handler → Core service → Entity/DB
 
 - **plastmem**: Entry program - initializes tracing, DB, migrations, job storage, spawns worker and server
 - **plastmem_core**: Core domain logic
-  - `memory/episodic/mod.rs` - hybrid retrieval with FSRS re-ranking
-  - `memory/episodic/creation.rs` - episode generation and FSRS initialization
-  - `memory/semantic/mod.rs` - semantic fact retrieval (BM25 + vector, no FSRS)
-  - `memory/semantic/consolidation.rs` - CLS consolidation pipeline (episodes → long-term facts)
+  - `memory/episodic.rs` - `EpisodicMemory` struct, hybrid retrieval with FSRS re-ranking
+  - `memory/semantic.rs` - `SemanticMemory` struct, semantic fact retrieval (BM25 + vector, no FSRS)
   - `memory/retrieval.rs` - shared markdown formatting (`format_tool_result`, `DetailLevel`)
-  - `message_queue/mod.rs` - MessageQueue struct, push/drain/get, PendingReview type
-  - `message_queue/check.rs` - trigger check (count/time), fence acquisition, SegmentationCheck
-  - `message_queue/segmentation.rs` - batch LLM segmentation (batch_segment, BatchSegment, SurpriseLevel)
-  - `message_queue/state.rs` - fence state management, pending reviews
+  - `message_queue.rs` - `MessageQueue` struct, push/drain/get, `PendingReview`, `SegmentationCheck`
 - **plastmem_migration**: Database table migrations
 - **plastmem_entities**: Database table entities (Sea-ORM)
   - `episodic_memory.rs` - episodic memory entity
@@ -54,9 +49,9 @@ API endpoint → Server handler → Core service → Entity/DB
 - **plastmem_ai**: AI SDK wrapper - embeddings, cosine similarity, text generation, structured output
 - **plastmem_shared**: Reusable utilities (env, error)
 - **plastmem_worker**: Background tasks worker
-  - `event_segmentation.rs` - job dispatch, consolidation trigger
+  - `event_segmentation.rs` - job dispatch, episode creation, consolidation trigger
   - `memory_review.rs` - LLM-based review and FSRS update
-  - `semantic_consolidation.rs` - runs CLS consolidation pipeline
+  - `semantic_consolidation.rs` - CLS consolidation pipeline (episodes → long-term facts)
 - **plastmem_server**: HTTP server and API handlers
   - `api/add_message.rs` - message ingestion
   - `api/recent_memory.rs` - recent memories (raw JSON and markdown)
@@ -118,17 +113,13 @@ When implementing new features:
 | `docs/ARCHITECTURE.md` | System-wide architecture and design principles |
 | `docs/architecture/fsrs.md` | FSRS algorithm and memory scheduling |
 | `docs/architecture/semantic_memory.md` | Semantic memory schema, consolidation pipeline, retrieval |
-| `crates/core/src/memory/episodic/mod.rs` | Episodic memory retrieval with hybrid ranking |
-| `crates/core/src/memory/episodic/creation.rs` | Episode generation logic |
-| `crates/core/src/memory/semantic/mod.rs` | Semantic memory retrieval |
-| `crates/core/src/memory/semantic/consolidation.rs` | CLS consolidation pipeline |
-| `crates/core/src/message_queue/mod.rs` | Queue push/drain/get, PendingReview type |
-| `crates/core/src/message_queue/check.rs` | Trigger check, fence acquisition |
-| `crates/core/src/message_queue/segmentation.rs` | Batch LLM segmentation, BatchSegment, SurpriseLevel |
-| `crates/core/src/message_queue/state.rs` | Fence state management, pending reviews |
+| `crates/core/src/memory/episodic.rs` | Episodic memory struct and hybrid retrieval |
+| `crates/core/src/memory/semantic.rs` | Semantic memory struct and retrieval |
+| `crates/core/src/memory/retrieval.rs` | Shared markdown formatting |
+| `crates/core/src/message_queue.rs` | Queue push/drain/get, PendingReview, SegmentationCheck |
 | `crates/worker/src/jobs/memory_review.rs` | LLM review and FSRS updates |
-| `crates/worker/src/jobs/event_segmentation.rs` | Event segmentation job dispatch + consolidation trigger |
-| `crates/worker/src/jobs/semantic_consolidation.rs` | Semantic consolidation job |
+| `crates/worker/src/jobs/event_segmentation.rs` | Event segmentation, episode creation, consolidation trigger |
+| `crates/worker/src/jobs/semantic_consolidation.rs` | CLS consolidation pipeline |
 | `crates/server/src/api/add_message.rs` | Message ingestion API |
 | `crates/server/src/api/retrieve_memory.rs` | Memory retrieval API (semantic + episodic); `context_pre_retrieve` for semantic-only pre-LLM injection |
 | `crates/server/src/api/recent_memory.rs` | Recent episodic memories API |

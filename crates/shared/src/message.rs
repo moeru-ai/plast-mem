@@ -32,13 +32,3 @@ impl fmt::Display for Message {
     writeln!(f, "{}: {}", self.role, self.content)
   }
 }
-
-// impl Message {
-//   pub fn is_user(&self) -> bool {
-//     matches!(self.role, MessageRole::User)
-//   }
-
-//   pub fn is_assistant(&self) -> bool {
-//     matches!(self.role, MessageRole::Assistant)
-//   }
-// }

@@ -56,7 +56,7 @@ Processing flow:
 
 ### SemanticConsolidationJob
 
-Triggered after episode creation when unconsolidated episode count ≥ threshold or surprise ≥ 0.85:
+Triggered after episode creation when unconsolidated episode count ≥ threshold (3) or surprise ≥ 0.85:
 
 ```rust
 pub struct SemanticConsolidationJob {
@@ -64,6 +64,15 @@ pub struct SemanticConsolidationJob {
     pub force: bool,  // true for flashbulb (surprise ≥ 0.85)
 }
 ```
+
+Processing flow:
+
+1. Fetch unconsolidated episodes for the conversation
+2. Check threshold (skip if below, unless `force=true`)
+3. Load related existing facts as context
+4. Single LLM call → fact actions (new/reinforce/update/invalidate)
+5. Embed new facts, apply actions in a transaction
+6. Mark episodes as consolidated
 
 ## Usage
 

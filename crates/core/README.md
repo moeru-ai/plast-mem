@@ -22,14 +22,32 @@ pub struct EpisodicMemory {
     pub id: Uuid,
     pub conversation_id: Uuid,
     pub messages: Vec<Message>,     // Original conversation
-    pub title: String,              // From batch segmentation LLM
-    pub summary: String,            // From batch segmentation LLM
+    pub title: String,
+    pub summary: String,
     pub stability: f32,             // FSRS stability
     pub difficulty: f32,            // FSRS difficulty
     pub surprise: f32,              // 0.0-1.0 significance score
     pub start_at: DateTime<Utc>,
     pub end_at: DateTime<Utc>,
     // ... timestamps
+}
+```
+
+### SemanticMemory
+
+A long-term fact extracted from episodic memories:
+
+```rust
+pub struct SemanticMemory {
+    pub id: Uuid,
+    pub conversation_id: Uuid,
+    pub subject: String,
+    pub predicate: String,
+    pub object: String,
+    pub fact: String,               // Natural language sentence
+    pub source_episodic_ids: Vec<Uuid>,
+    pub valid_at: DateTime<Utc>,
+    pub invalid_at: Option<DateTime<Utc>>,
 }
 ```
 
@@ -56,69 +74,26 @@ pub struct PendingReview {
 }
 ```
 
-### BatchSegment / SurpriseLevel
-
-Output types from `batch_segment()`:
-
-```rust
-pub struct BatchSegment {
-    pub messages: Vec<Message>,     // Sliced from queue
-    pub title: String,
-    pub summary: String,
-    pub surprise_level: SurpriseLevel,  // Low / High / ExtremelyHigh
-}
-```
-
 ## Key Functions
 
-### Retrieval
+### Episodic Retrieval
 
 ```rust
-use plastmem_core::{EpisodicMemory, DetailLevel};
-
-let results = EpisodicMemory::retrieve(
-    "user query",
-    5,                              // limit
-    Some(conversation_id),         // scope (None for global)
-    db,
-).await?;
+let results = EpisodicMemory::retrieve(query, limit, conversation_id, db).await?;
 ```
 
-### Batch Segmentation
+### Semantic Retrieval
 
 ```rust
-use plastmem_core::batch_segment;
-
-// Single LLM call; returns segments with title, summary, surprise_level
-let segments = batch_segment(&messages, prev_episode_summary).await?;
-```
-
-### Episode Creation
-
-```rust
-use plastmem_core::create_episode_from_segment;
-
-let created = create_episode_from_segment(
-    conversation_id,
-    &segment.messages,
-    &segment.title,
-    &segment.summary,
-    segment.surprise_level.to_signal(),
-    db,
-).await?;
+let results = SemanticMemory::retrieve(query, limit, conversation_id, db).await?;
 ```
 
 ## Modules
 
-- `memory/episodic/mod.rs` - `EpisodicMemory` struct and hybrid retrieval
-- `memory/episodic/creation.rs` - Episode creation and FSRS initialization
-- `memory/semantic/mod.rs` - Semantic memory retrieval
-- `memory/semantic/consolidation.rs` - CLS consolidation pipeline
+- `memory/episodic.rs` - `EpisodicMemory` struct, hybrid BM25 + vector retrieval with FSRS re-ranking
+- `memory/semantic.rs` - `SemanticMemory` struct, hybrid BM25 + vector retrieval
 - `memory/retrieval.rs` - Shared markdown formatting (`format_tool_result`, `DetailLevel`)
-- `message_queue/mod.rs` - `MessageQueue`, `PendingReview`, push/drain
-- `message_queue/check.rs` - Trigger check, fence acquisition, `SegmentationCheck`
-- `message_queue/segmentation.rs` - `batch_segment`, `BatchSegment`, `SurpriseLevel`
-- `message_queue/state.rs` - Fence state management, pending reviews
+- `message_queue.rs` - `MessageQueue`, `PendingReview`, `SegmentationCheck`, push/drain/get
 
 ## Architecture Notes
 
