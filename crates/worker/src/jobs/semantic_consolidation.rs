@@ -242,24 +242,7 @@ async fn process_fact_action<C: ConnectionTrait>(
         tracing::debug!(existing_id = %existing.id, fact = %fact.fact, "Merging duplicate during consolidation");
         append_source_episodic_ids(existing.id, &existing.source_episodic_ids, episode_ids, db).await?;
       } else {
-        let id = Uuid::now_v7();
-        let now = Utc::now();
-        semantic_memory::Model {
-          id,
-          conversation_id,
-          subject: fact.subject.clone(),
-          predicate: fact.predicate.clone(),
-          object: fact.object.clone(),
-          fact: fact.fact.clone(),
-          source_episodic_ids: episode_ids.to_vec(),
-          valid_at: now.into(),
-          invalid_at: None,
-          embedding,
-          created_at: now.into(),
-        }
-        .into_active_model()
-        .insert(db)
-        .await?;
+        insert_semantic_fact(fact, embedding, episode_ids, conversation_id, db).await?;
         tracing::debug!(fact = %fact.fact, "Inserted new semantic fact via consolidation");
       }
     }
@@ -278,24 +261,7 @@ async fn process_fact_action<C: ConnectionTrait>(
     FactAction::Update => {
       if let Some(existing_id) = validated_existing_id {
         invalidate_fact(existing_id, db).await?;
-        let id = Uuid::now_v7();
-        let now = Utc::now();
-        semantic_memory::Model {
-          id,
-          conversation_id,
-          subject: fact.subject.clone(),
-          predicate: fact.predicate.clone(),
-          object: fact.object.clone(),
-          fact: fact.fact.clone(),
-          source_episodic_ids: episode_ids.to_vec(),
-          valid_at: now.into(),
-          invalid_at: None,
-          embedding,
-          created_at: now.into(),
-        }
-        .into_active_model()
-        .insert(db)
-        .await?;
+        insert_semantic_fact(fact, embedding, episode_ids, conversation_id, db).await?;
         tracing::debug!(old_id = %existing_id, fact = %fact.fact, "Updated semantic fact");
       } else {
         tracing::warn!(fact = %fact.fact, "Update action without valid existing_fact_id, skipping");
@@ -422,6 +388,33 @@ pub async fn process_semantic_consolidation(
   mark_consolidated(&episode_ids, &txn).await?;
   txn.commit().await?;
 
+  Ok(())
+}
+
+async fn insert_semantic_fact<C: ConnectionTrait>(
+  fact: &ConsolidatedFact,
+  embedding: PgVector,
+  episode_ids: &[Uuid],
+  conversation_id: Uuid,
+  db: &C,
+) -> Result<(), AppError> {
+  let now = Utc::now();
+  semantic_memory::Model {
+    id: Uuid::now_v7(),
+    conversation_id,
+    subject: fact.subject.clone(),
+    predicate: fact.predicate.clone(),
+    object: fact.object.clone(),
+    fact: fact.fact.clone(),
+    source_episodic_ids: episode_ids.to_vec(),
+    valid_at: now.into(),
+    invalid_at: None,
+    embedding,
+    created_at: now.into(),
+  }
+  .into_active_model()
+  .insert(db)
+  .await?;
   Ok(())
 }
 
