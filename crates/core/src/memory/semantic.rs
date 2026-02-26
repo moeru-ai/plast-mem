@@ -1,8 +1,3 @@
-mod consolidation;
-pub use consolidation::{
-  CONSOLIDATION_EPISODE_THRESHOLD, FLASHBULB_SURPRISE_THRESHOLD, process_consolidation,
-};
-
 use chrono::{DateTime, Utc};
 use plastmem_ai::embed;
 use plastmem_entities::semantic_memory;
@@ -67,7 +62,6 @@ impl SemanticMemory {
   }
 
   /// Retrieve semantic facts using hybrid BM25 + vector search with RRF.
-  /// Only active facts (`invalid_at IS NULL`) from the specified conversation are returned.
   pub async fn retrieve(
     query: &str,
     limit: i64,
@@ -75,11 +69,11 @@ impl SemanticMemory {
     db: &DatabaseConnection,
   ) -> Result<Vec<(Self, f64)>, AppError> {
     let query_embedding = embed(query).await?;
-    Self::retrieve_by_vector(query, query_embedding, limit, conversation_id, db).await
+    Self::retrieve_by_embedding(query, query_embedding, limit, conversation_id, db).await
   }
 
   /// Like `retrieve`, but accepts a pre-computed embedding to avoid redundant API calls.
-  pub(crate) async fn retrieve_by_vector(
+  pub async fn retrieve_by_embedding(
     query: &str,
     query_embedding: PgVector,
     limit: i64,
@@ -124,11 +118,11 @@ impl SemanticMemory {
       DbBackend::Postgres,
       sql,
       vec![
-        query.to_owned().into(),          // $1
-        conversation_id.into(),           // $2
-        RETRIEVAL_CANDIDATE_LIMIT.into(), // $3: candidate limit
-        query_embedding.into(),           // $4
-        limit.into(),                     // $5
+        query.to_owned().into(),
+        conversation_id.into(),
+        RETRIEVAL_CANDIDATE_LIMIT.into(),
+        query_embedding.into(),
+        limit.into(),
       ],
     );
 
@@ -138,8 +132,7 @@ impl SemanticMemory {
     for row in rows {
       let model = semantic_memory::Model::from_query_result(&row, "")?;
       let score: f64 = row.try_get("", "score")?;
-      let fact = Self::from_model(model);
-      results.push((fact, score));
+      results.push((Self::from_model(model), score));
     }
 
     Ok(results)

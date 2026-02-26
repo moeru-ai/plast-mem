@@ -1,5 +1,3 @@
-pub mod creation;
-
 use chrono::{DateTime, Utc};
 use fsrs::{DEFAULT_PARAMETERS, FSRS, FSRS6_DEFAULT_DECAY, MemoryState};
 use plastmem_ai::embed;
@@ -7,9 +5,8 @@ use plastmem_entities::episodic_memory;
 use plastmem_shared::{AppError, Message};
 
 use sea_orm::{
-  ColumnTrait, ConnectionTrait, DatabaseConnection, DbBackend, EntityTrait, FromQueryResult,
-  QueryFilter, QueryOrder, Statement,
-  prelude::{Expr, PgVector},
+  ConnectionTrait, DatabaseConnection, DbBackend, FromQueryResult, Statement,
+  prelude::PgVector,
 };
 use serde::Serialize;
 use utoipa::ToSchema;
@@ -72,54 +69,6 @@ impl EpisodicMemory {
       last_reviewed_at: self.last_reviewed_at.into(),
       consolidated_at: self.consolidated_at.map(Into::into),
     })
-  }
-
-  /// Count unconsolidated episodes for a specific conversation.
-  pub async fn count_unconsolidated_for_conversation(
-    conversation_id: Uuid,
-    db: &DatabaseConnection,
-  ) -> Result<u64, AppError> {
-    use sea_orm::PaginatorTrait;
-    let count = episodic_memory::Entity::find()
-      .filter(episodic_memory::Column::ConsolidatedAt.is_null())
-      .filter(episodic_memory::Column::ConversationId.eq(conversation_id))
-      .count(db)
-      .await?;
-    Ok(count)
-  }
-
-  /// Fetch unconsolidated episodes for a specific conversation.
-  pub async fn fetch_unconsolidated_for_conversation(
-    conversation_id: Uuid,
-    db: &DatabaseConnection,
-  ) -> Result<Vec<Self>, AppError> {
-    let models = episodic_memory::Entity::find()
-      .filter(episodic_memory::Column::ConsolidatedAt.is_null())
-      .filter(episodic_memory::Column::ConversationId.eq(conversation_id))
-      .order_by_asc(episodic_memory::Column::CreatedAt)
-      .all(db)
-      .await?;
-    models.into_iter().map(Self::from_model).collect()
-  }
-
-  /// Mark the given episodes as consolidated (bulk update).
-  pub async fn mark_consolidated<C: ConnectionTrait>(ids: &[Uuid], db: &C) -> Result<(), AppError> {
-    use sea_orm::sea_query::Value as SeaValue;
-
-    if ids.is_empty() {
-      return Ok(());
-    }
-
-    let now: sea_orm::prelude::DateTimeWithTimeZone = Utc::now().into();
-
-    // Bulk update: UPDATE episodic_memory SET consolidated_at = now WHERE id = ANY(ids)
-    episodic_memory::Entity::update_many()
-      .col_expr(episodic_memory::Column::ConsolidatedAt, Expr::value(now))
-      .filter(episodic_memory::Column::Id.is_in(ids.iter().copied().map(SeaValue::from)))
-      .exec(db)
-      .await?;
-
-    Ok(())
   }
 
   /// Retrieve episodic memories using hybrid BM25 + vector search with FSRS re-ranking.
@@ -198,23 +147,15 @@ impl EpisodicMemory {
       let rrf_score: f64 = row.try_get("", "score")?;
       let mem = Self::from_model(model)?;
 
-      // FSRS re-ranking: multiply RRF score by retrievability
-      // Use 0 if negative (clock skew) or unreasonably large
       let days_elapsed =
         u32::try_from((now - mem.last_reviewed_at).num_days().clamp(0, 365 * 100)).unwrap_or(0);
-      let memory_state = MemoryState {
-        stability: mem.stability,
-        difficulty: mem.difficulty,
-      };
+      let memory_state = MemoryState { stability: mem.stability, difficulty: mem.difficulty };
       let retrievability =
         fsrs.current_retrievability(memory_state, days_elapsed, FSRS6_DEFAULT_DECAY);
 
-      let final_score = rrf_score * f64::from(retrievability);
-
-      results.push((mem, final_score));
+      results.push((mem, rrf_score * f64::from(retrievability)));
     }
 
-    // Re-sort by final score descending and truncate to requested limit
     results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
     let limit = usize::try_from(limit).unwrap_or(usize::MAX);
     results.truncate(limit);

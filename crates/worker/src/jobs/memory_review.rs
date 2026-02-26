@@ -131,8 +131,10 @@ pub async fn process_memory_review(
   // 1. Aggregate: deduplicate memory IDs, collect matched queries
   let aggregated = aggregate_pending_reviews(&job.pending_reviews);
 
-  // 2. Fetch summaries from database
-  let mut memories_for_review = Vec::new();
+  // 2. Fetch models, apply stale + same-day filters
+  let mut memories_for_review: Vec<(Uuid, String, Vec<String>)> = Vec::new();
+  let mut models_by_id: HashMap<Uuid, episodic_memory::Model> = HashMap::new();
+
   for (memory_id, queries) in &aggregated {
     let Some(model) = episodic_memory::Entity::find_by_id(*memory_id)
       .one(db)
@@ -141,19 +143,16 @@ pub async fn process_memory_review(
       continue; // memory was deleted
     };
 
-    // Stale skip: if job's reviewed_at is not newer than last review
     let last_reviewed_at = model.last_reviewed_at.with_timezone(&Utc);
     if job.reviewed_at <= last_reviewed_at {
       continue;
     }
-
-    // Same-day skip: FSRS with days_elapsed=0 produces near-initial states
-    let days_elapsed = (job.reviewed_at - last_reviewed_at).num_days();
-    if days_elapsed < 1 {
+    if (job.reviewed_at - last_reviewed_at).num_days() < 1 {
       continue;
     }
 
     memories_for_review.push((*memory_id, model.summary.clone(), queries.clone()));
+    models_by_id.insert(*memory_id, model);
   }
 
   if memories_for_review.is_empty() {
@@ -162,7 +161,6 @@ pub async fn process_memory_review(
 
   // 3. Call LLM for review
   let user_message = build_review_user_message(&job.context_messages, &memories_for_review);
-
   let system = ChatCompletionRequestSystemMessage::from(REVIEW_SYSTEM_PROMPT);
   let user = ChatCompletionRequestUserMessage::from(user_message);
 
@@ -184,30 +182,17 @@ pub async fn process_memory_review(
       continue;
     };
 
-    let Some(model) = episodic_memory::Entity::find_by_id(memory_id)
-      .one(db)
-      .await?
-    else {
-      continue;
+    let Some(model) = models_by_id.remove(&memory_id) else {
+      continue; // hallucinated ID or already processed
     };
 
     let last_reviewed_at = model.last_reviewed_at.with_timezone(&Utc);
-    if job.reviewed_at <= last_reviewed_at {
-      continue;
-    }
-
     let days_elapsed = u32::try_from(
-      (job.reviewed_at - last_reviewed_at)
-        .num_days()
-        .clamp(0, 365 * 100),
+      (job.reviewed_at - last_reviewed_at).num_days().clamp(0, 365 * 100),
     )
     .unwrap_or(0);
 
-    let current_state = MemoryState {
-      stability: model.stability,
-      difficulty: model.difficulty,
-    };
-
+    let current_state = MemoryState { stability: model.stability, difficulty: model.difficulty };
     let next_states = fsrs.next_states(Some(current_state), DESIRED_RETENTION, days_elapsed)?;
 
     let rating = Rating::parse(&rating_output.rating);
