@@ -45,10 +45,9 @@ struct ConsolidationOutput {
 struct ConsolidatedFact {
   action: FactAction,
   existing_fact_id: Option<String>,
-  subject: String,
-  predicate: String,
-  object: String,
+  category: String,
   fact: String,
+  keywords: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -65,43 +64,33 @@ enum FactAction {
 // ──────────────────────────────────────────────────
 
 const CONSOLIDATION_SYSTEM_PROMPT: &str = "\
-You are performing memory consolidation — reviewing recent experiences \
-against existing knowledge to update long-term memory.
+You are performing memory consolidation — reviewing recent conversation episodes \
+against existing semantic memory to extract and update long-term knowledge.
 
-For each piece of knowledge you identify, classify it:
-1. \"new\": A fact not covered by existing knowledge.
-2. \"reinforce\": An existing fact confirmed by new evidence. Include its ID in existing_fact_id.
-3. \"update\": An existing fact that needs modification (e.g., a preference changed). Include its ID.
-4. \"invalidate\": An existing fact contradicted by new evidence (e.g., moved cities). Include its ID.
+## Memory Categories
+- identity    : User's personal facts — name, age, location, occupation, background
+- preference  : What the user likes, dislikes, or prefers
+- interest    : Topics, hobbies, subjects the user is curious about or passionate about
+- personality : Personality traits, emotional patterns, communication style
+- relationship: Dynamics between user and AI — inside jokes, rituals, communication patterns
+- experience  : Significant events or experiences the user has had or discussed
+- goal        : User's goals, plans, aspirations, ongoing projects
+- guideline   : How the AI should behave — response style, topics to avoid, conditional rules
 
-Categories to extract:
-1. Facts about the user (preferences, personal info, relationships)
-2. Facts about the relationship (\"we\" subject)
-3. Behavioral rules for the assistant:
-   - Communication preferences the user has expressed
-   - Topics to avoid or emphasize
-   - Interaction patterns and rituals
-   - Conditional behavior (when X happens, do Y)
+## Actions
+- \"new\"       : A lasting fact not covered by existing knowledge
+- \"reinforce\" : Existing fact confirmed by new evidence — include existing_fact_id
+- \"update\"    : Existing fact needs modification — include existing_fact_id (old will be invalidated)
+- \"invalidate\": Existing fact contradicted by new evidence — include existing_fact_id
 
-Rules:
-1. Only extract long-term facts. Ignore transient states (\"I'm hungry now\" is NOT a fact).
-2. Use subject-predicate-object format.
-3. Include a natural language `fact` sentence for each entry.
-4. For new/update facts, preferences, habits, personal info, relationships, and significant events \
-   are good candidates.
-5. For behavioral rules, use subject = \"assistant\".
-6. If no lasting facts can be extracted, return an empty `facts` array.
-7. Multiple values for the same predicate can coexist (e.g., liking multiple things). \
-   Only use \"invalidate\" when genuinely replaced (e.g., changed residence, corrected name).
-8. Cross-reference across episodes: if multiple episodes mention the same fact, \
-   that's stronger signal. Prefer one \"new\" entry over duplicate entries.
-
-Predicate taxonomy (use these when applicable; create new ones if needed):
-
-  Personal: likes, dislikes, prefers, lives_in, works_at, age_is, name_is
-  Knowledge: is_interested_in, has_experience_with, knows_about
-  Relational: communicate_in_style, relationship_is, has_shared_reference, has_routine
-  Behavioral: should, should_not, should_when_[context], responds_to_[trigger]_with";
+## Rules
+1. Only extract durable facts. Skip transient states (\"I'm tired today\" → ignore).
+2. Write facts as concise natural language sentences (\"User lives in Tokyo\").
+3. keywords: 2-5 entity names and key nouns from the fact, e.g. [\"user\", \"Tokyo\"].
+4. For guideline: describe specific AI behavior rules (\"AI should use casual tone\").
+5. Multiple episodes confirming the same fact → one \"new\", not duplicates.
+6. New episode contradicts existing fact → \"update\" or \"invalidate\", not \"new\".
+7. If nothing lasting found → return empty facts array.";
 
 // ──────────────────────────────────────────────────
 // Consolidation helpers
@@ -119,7 +108,7 @@ async fn find_similar_facts<C: ConnectionTrait>(
 ) -> Result<Vec<semantic_memory::Model>, AppError> {
   let sql = r"
   SELECT
-    id, conversation_id, subject, predicate, object, fact, source_episodic_ids,
+    id, conversation_id, category, fact, keywords, source_episodic_ids,
     valid_at, invalid_at, embedding, created_at,
     -(embedding <#> $1) AS similarity
   FROM semantic_memory
@@ -201,8 +190,15 @@ async fn load_related_facts(
   let mut facts = Vec::new();
 
   for (ep, embedding) in episodes.iter().zip(embeddings.into_iter()) {
-    let results =
-      SemanticMemory::retrieve_by_embedding(&ep.summary, embedding, RELATED_FACTS_LIMIT, conversation_id, db).await?;
+    let results = SemanticMemory::retrieve_by_embedding(
+      &ep.summary,
+      embedding,
+      RELATED_FACTS_LIMIT,
+      conversation_id,
+      db,
+      None,
+    )
+    .await?;
     for (fact, _) in results {
       if seen_ids.insert(fact.id) {
         facts.push(fact);
@@ -240,7 +236,8 @@ async fn process_fact_action<C: ConnectionTrait>(
       let similar = find_similar_facts(&embedding, DEDUPE_THRESHOLD, conversation_id, db).await?;
       if let Some(existing) = similar.first() {
         tracing::debug!(existing_id = %existing.id, fact = %fact.fact, "Merging duplicate during consolidation");
-        append_source_episodic_ids(existing.id, &existing.source_episodic_ids, episode_ids, db).await?;
+        append_source_episodic_ids(existing.id, &existing.source_episodic_ids, episode_ids, db)
+          .await?;
       } else {
         insert_semantic_fact(fact, embedding, episode_ids, conversation_id, db).await?;
         tracing::debug!(fact = %fact.fact, "Inserted new semantic fact via consolidation");
@@ -250,7 +247,8 @@ async fn process_fact_action<C: ConnectionTrait>(
     FactAction::Reinforce => {
       if let Some(existing_id) = validated_existing_id {
         if let Some(existing) = semantic_memory::Entity::find_by_id(existing_id).one(db).await? {
-          append_source_episodic_ids(existing.id, &existing.source_episodic_ids, episode_ids, db).await?;
+          append_source_episodic_ids(existing.id, &existing.source_episodic_ids, episode_ids, db)
+            .await?;
           tracing::debug!(existing_id = %existing_id, fact = %fact.fact, "Reinforced existing semantic fact");
         }
       } else {
@@ -291,8 +289,7 @@ pub async fn process_semantic_consolidation(
 ) -> Result<(), AppError> {
   let db = &*db;
 
-  let episodes =
-    fetch_unconsolidated(job.conversation_id, db).await?;
+  let episodes = fetch_unconsolidated(job.conversation_id, db).await?;
 
   if episodes.is_empty() {
     tracing::debug!(conversation_id = %job.conversation_id, "No unconsolidated episodes, skipping consolidation");
@@ -330,8 +327,8 @@ pub async fn process_semantic_consolidation(
     for fact in &existing_facts {
       let _ = writeln!(
         existing_facts_section,
-        "- [ID: {}] ({}, {}, {}) — {}",
-        fact.id, fact.subject, fact.predicate, fact.object, fact.fact
+        "- [ID: {}] [{}] {}",
+        fact.id, fact.category, fact.fact
       );
     }
   }
@@ -378,12 +375,17 @@ pub async fn process_semantic_consolidation(
     return Ok(());
   }
 
-  let fact_texts: Vec<String> = output.facts.iter().map(|f| f.fact.clone()).collect();
-  let embeddings = embed_many(&fact_texts).await?;
+  let embed_inputs: Vec<String> = output
+    .facts
+    .iter()
+    .map(|f| format!("{}: {} {}", f.category, f.fact, f.keywords.join(" ")))
+    .collect();
+  let embeddings = embed_many(&embed_inputs).await?;
 
   let txn = db.begin().await?;
   for (fact, embedding) in output.facts.iter().zip(embeddings.into_iter()) {
-    process_fact_action(fact, embedding, &episode_ids, &valid_fact_ids, conversation_id, &txn).await?;
+    process_fact_action(fact, embedding, &episode_ids, &valid_fact_ids, conversation_id, &txn)
+      .await?;
   }
   mark_consolidated(&episode_ids, &txn).await?;
   txn.commit().await?;
@@ -402,10 +404,9 @@ async fn insert_semantic_fact<C: ConnectionTrait>(
   semantic_memory::Model {
     id: Uuid::now_v7(),
     conversation_id,
-    subject: fact.subject.clone(),
-    predicate: fact.predicate.clone(),
-    object: fact.object.clone(),
+    category: fact.category.clone(),
     fact: fact.fact.clone(),
+    keywords: fact.keywords.clone(),
     source_episodic_ids: episode_ids.to_vec(),
     valid_at: now.into(),
     invalid_at: None,
