@@ -1,5 +1,8 @@
 # Plast Mem
 
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/moeru-ai/plast-mem)
+[![License](https://badgen.net/github/license/moeru-ai/plast-mem)](LICENSE.md)
+
 Yet Another Memory Layer, inspired by Cognitive Science, designed for Cyber Waifu
 
 ## Core Design
