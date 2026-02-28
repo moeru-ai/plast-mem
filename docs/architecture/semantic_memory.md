@@ -16,13 +16,12 @@ SemanticConsolidationJob
         │  3. Process fact actions         (write)
         │  4. Mark episodes consolidated
         ▼
-SemanticMemory (facts / behavioral guidelines)
+SemanticMemory (categorized facts)
 ```
 
 ## Schema
 
-- **Core struct**: `crates/core/src/memory/semantic/mod.rs`
-- **Consolidation pipeline**: `crates/core/src/memory/semantic/consolidation.rs`
+- **Core struct**: `crates/core/src/memory/semantic.rs`
 - **Database entity**: `crates/entities/src/semantic_memory.rs`
 
 ### Field Semantics
@@ -31,57 +30,36 @@ SemanticMemory (facts / behavioral guidelines)
 |-------|---------|---------|
 | `id` | UUID v7 primary key | No |
 | `conversation_id` | Isolation boundary — facts scoped per conversation | No |
-| `subject` | Triplet subject (`"user"`, `"assistant"`, `"we"`) | No |
-| `predicate` | Relationship type (e.g. `"likes"`, `"should"`) | No |
-| `object` | Triplet object value | No |
+| `category` | One of 8 fixed categories (see below) | No |
 | `fact` | Natural language sentence describing the fact | No |
+| `keywords` | Key entity names / nouns for BM25 multi-hop search | No |
+| `search_text` | `GENERATED` column: `fact || ' ' || array_to_string(keywords, ' ')` — indexed for BM25 | No (generated) |
 | `source_episodic_ids` | UUIDs of episodes that evidence this fact (provenance) | Yes (reinforce appends) |
 | `valid_at` | When this fact became valid | No |
 | `invalid_at` | When this fact was superseded/contradicted; `NULL` = still active | Yes (Update/Invalidate sets) |
-| `embedding` | Vector of `fact` text (used for retrieval and deduplication) | No |
+| `embedding` | Vector of `"{category}: {fact} {keywords}"` (category prefix biases embedding) | No |
 | `created_at` | Record creation timestamp | No |
 
 ### Differences from Episodic Memory
 
 Semantic memory has **no FSRS parameters** (no stability, difficulty, last_reviewed_at). It does not decay. Facts are either active (`invalid_at IS NULL`) or superseded. Instead of time-based retrievability, relevance is determined purely by hybrid search ranking.
 
-## Two Categories of Facts
+## 8 Flat Categories
 
-Facts are distinguished at retrieval time by their subject and predicate:
+Every fact is assigned exactly one category. These replace the old SPO predicate taxonomy.
 
-### Known Facts
+| Category | What it captures |
+|----------|-----------------|
+| `identity` | Name, location, occupation, age, demographic facts |
+| `preference` | Likes, dislikes, favorites, rankings |
+| `interest` | Topics, hobbies, domains the person engages with |
+| `personality` | Communication style, emotional tendencies, traits |
+| `relationship` | Dynamics between user and assistant, shared references, routines |
+| `experience` | Skills, past events, professional background |
+| `goal` | Desires, plans, aspirations |
+| `guideline` | How the assistant *should* behave — rules, tone preferences, conditional instructions |
 
-Everything where `is_behavioral()` returns `false`. Captures durable information about the user, the relationship, or the world:
-
-```
-subject: "user"        predicate: "likes"      object: "dark mode"
-subject: "user"        predicate: "lives_in"   object: "Tokyo"
-subject: "we"          predicate: "has_routine" object: "weekly check-in on Sundays"
-```
-
-### Behavioral Guidelines
-
-Facts where `subject == "assistant"` and predicate is `"should"`, `"should_not"`, `"should_when_*"`, or `"responds_to_*"`. Encodes communication preferences and conditional behaviors:
-
-```
-subject: "assistant"   predicate: "should_not"             object: "use formal honorifics"
-subject: "assistant"   predicate: "should_when_stressed"   object: "offer calming response first"
-```
-
-**Code**: `SemanticMemory::is_behavioral()` in `crates/core/src/memory/semantic/mod.rs`
-
-### Predicate Taxonomy
-
-The LLM is prompted to use these predicates when applicable:
-
-| Category | Predicates |
-|----------|-----------|
-| Personal | `likes`, `dislikes`, `prefers`, `lives_in`, `works_at`, `age_is`, `name_is` |
-| Knowledge | `is_interested_in`, `has_experience_with`, `knows_about` |
-| Relational | `communicate_in_style`, `relationship_is`, `has_shared_reference`, `has_routine` |
-| Behavioral | `should`, `should_not`, `should_when_[context]`, `responds_to_[trigger]_with` |
-
-New predicates can be created by the LLM when none of the above fit.
+`guideline` replaces the old `is_behavioral()` / `subject == "assistant"` logic.
 
 ## Lifecycle
 
@@ -98,11 +76,11 @@ After each new episode is created, `event_segmentation.rs` checks whether to enq
 
 ### 2. Consolidation Pipeline
 
-Implemented in `process_consolidation()` (`crates/core/src/memory/semantic/consolidation.rs`):
+Implemented in `SemanticConsolidationJob` (`crates/worker/src/jobs/semantic_consolidation.rs`):
 
 #### Step 1 — Predict: Load Related Facts
 
-Fetch existing active facts semantically related to the unconsolidated episodes. Uses `embed_many()` on episode summaries, then `SemanticMemory::retrieve_by_vector()` per episode, deduplicated by fact ID.
+Fetch existing active facts semantically related to the unconsolidated episodes. Uses `embed_many()` on episode summaries, then `SemanticMemory::retrieve_by_embedding()` per episode, deduplicated by fact ID.
 
 - Limit: 20 related facts presented to the LLM as context
 - Only searches active facts (`invalid_at IS NULL`) in the same conversation
@@ -111,8 +89,8 @@ Fetch existing active facts semantically related to the unconsolidated episodes.
 
 Single `generate_object::<ConsolidationOutput>()` call with:
 
-- **System**: `CONSOLIDATION_SYSTEM_PROMPT` (extraction rules + predicate taxonomy)
-- **User**: Existing knowledge + episode summaries + messages
+- **System**: `CONSOLIDATION_SYSTEM_PROMPT` (8 category descriptions + action taxonomy)
+- **User**: Existing knowledge (formatted as `[ID: …] [category] fact`) + episode summaries + messages
 
 Output structure:
 
@@ -121,17 +99,20 @@ ConsolidationOutput {
     facts: Vec<ConsolidatedFact {
         action: FactAction,          // new | reinforce | update | invalidate
         existing_fact_id: Option<String>,
-        subject: String,
-        predicate: String,
-        object: String,
+        category: String,            // one of 8 categories
         fact: String,                // natural language sentence
+        keywords: Vec<String>,       // key entity names / nouns
     }>
 }
 ```
 
 #### Step 3 — Write: Process Fact Actions
 
-All fact sentences are batch-embedded via `embed_many()` before the transaction opens. Then, inside a single DB transaction:
+All fact sentences are batch-embedded via `embed_many()` before the transaction opens.
+
+Embed input format: `"{category}: {fact} {keywords.join(" ")}"` — category prefix biases the vector toward the semantic domain.
+
+Then, inside a single DB transaction:
 
 | Action | Behavior |
 |--------|---------|
@@ -155,10 +136,10 @@ All episode IDs are marked `consolidated_at = now()` in the same transaction, pr
 Facts are never hard-deleted. When a fact is contradicted:
 
 ```
-Old fact: { subject: "user", predicate: "lives_in", object: "Osaka", invalid_at: NULL }
+Old fact: { category: "identity", fact: "User lives in Osaka", invalid_at: NULL }
      ↓  Update action
-New fact: { subject: "user", predicate: "lives_in", object: "Tokyo", invalid_at: NULL }
-Old fact: { ..., invalid_at: "2026-02-21T..." }  ← soft-deleted
+New fact: { category: "identity", fact: "User lives in Tokyo", invalid_at: NULL }
+Old fact: { ..., invalid_at: "2026-02-28T..." }  ← soft-deleted
 ```
 
 This preserves history and avoids information loss.
@@ -167,40 +148,48 @@ This preserves history and avoids information loss.
 
 ### Hybrid BM25 + Vector Search
 
-**Code**: `SemanticMemory::retrieve()` in `crates/core/src/memory/semantic/mod.rs`
+**Code**: `SemanticMemory::retrieve()` and `SemanticMemory::retrieve_by_embedding()` in `crates/core/src/memory/semantic.rs`
 
 ```sql
 WITH
 fulltext AS (
   SELECT id, ROW_NUMBER() OVER (ORDER BY pdb.score(id) DESC) AS r
   FROM semantic_memory
-  WHERE fact ||| $query AND conversation_id = $id AND invalid_at IS NULL
+  WHERE search_text ||| $query
+    AND conversation_id = $id
+    AND invalid_at IS NULL
+    AND ($category::text IS NULL OR category = $category)
   LIMIT 100
 ),
 semantic AS (
   SELECT id, ROW_NUMBER() OVER (ORDER BY embedding <#> $vec) AS r
   FROM semantic_memory
   WHERE conversation_id = $id AND invalid_at IS NULL
+    AND ($category::text IS NULL OR category = $category)
   LIMIT 100
 ),
 ...RRF merge...
 ```
 
+BM25 runs against `search_text` (generated column = `fact || ' ' || keywords joined`), which gives keyword entities multi-hop reach.
+
 RRF formula: `score = Σ 1.0 / (60 + rank)`
 
-**No FSRS reranking** — semantic facts are not subject to decay, so there is no `× retrievability` step unlike episodic retrieval.
+**No FSRS reranking** — semantic facts are not subject to decay.
+
+### Category Filter
+
+Both `retrieve()` and `retrieve_by_embedding()` accept `category: Option<&str>`. When `Some("guideline")` is passed, only guideline facts are returned. Callers (including the API) pass `None` for a full search.
 
 ### In Tool Results
 
-`format_tool_result()` (`crates/core/src/memory/retrieval.rs`) splits semantic results into two sections:
+`format_tool_result()` (`crates/core/src/memory/retrieval.rs`) renders semantic facts as a flat list with a `[category]` prefix:
 
 ```markdown
-## Known Facts
-- User prefers dark mode interfaces (sources: 3 conversations)
-- User lives in Tokyo (sources: 1 conversation)
-
-## Behavioral Guidelines
-- Assistant should avoid formal honorifics (sources: 2 conversations)
+## Semantic Memory
+- [preference] User prefers dark mode interfaces (sources: 3 conversations)
+- [identity] User lives in Tokyo (sources: 1 conversation)
+- [guideline] Assistant should avoid formal honorifics (sources: 2 conversations)
 ```
 
 Sources count = `source_episodic_ids.len()`, indicating how many independent episodes corroborate the fact.
@@ -215,8 +204,11 @@ Semantic facts are returned alongside episodic results from the retrieve_memory 
 |----------|----------|
 | `POST /api/v0/retrieve_memory` | `crates/server/src/api/retrieve_memory.rs` |
 | `POST /api/v0/retrieve_memory/raw` | `crates/server/src/api/retrieve_memory.rs` |
+| `POST /api/v0/context_pre_retrieve` | `crates/server/src/api/retrieve_memory.rs` |
 
 The raw endpoint returns `{ "semantic": [...], "episodic": [...] }`.
+
+`context_pre_retrieve` returns semantic-only markdown for system prompt injection; it does **not** record a pending review.
 
 There is **no direct write API** for semantic memory. All facts are created exclusively through the consolidation pipeline.
 
@@ -224,18 +216,30 @@ There is **no direct write API** for semantic memory. All facts are created excl
 
 | Operation | Location |
 |-----------|----------|
-| `SemanticMemory::retrieve()` | `crates/core/src/memory/semantic/mod.rs` |
-| `SemanticMemory::is_behavioral()` | `crates/core/src/memory/semantic/mod.rs` |
-| `process_consolidation()` | `crates/core/src/memory/semantic/consolidation.rs` |
+| `SemanticMemory::retrieve(query, limit, conversation_id, db, category)` | `crates/core/src/memory/semantic.rs` |
+| `SemanticMemory::retrieve_by_embedding(query, embedding, limit, conversation_id, db, category)` | `crates/core/src/memory/semantic.rs` |
+
+## Migration Notes
+
+The `search_text` generated column uses `immutable_keywords_to_text(TEXT[])`, a user-defined `IMMUTABLE` wrapper around `array_to_string`. This is required because PostgreSQL's `array_to_string` is `STABLE`, and `GENERATED ALWAYS AS … STORED` requires `IMMUTABLE` functions. The wrapper is created in migration `m20260228_01_refactor_semantic_memory`.
 
 ## Design Decisions
 
-### Why SPO Triplets?
+### Why Fact-Centric (Not SPO Triplets)?
 
-Subject-predicate-object structure enables:
-- **Deduplication**: Semantically equivalent facts can be detected by embedding similarity
-- **Mutation tracking**: `update` and `invalidate` actions have clear semantics
-- **Behavioral separation**: `subject == "assistant"` reliably identifies behavioral guidelines
+The previous design used subject/predicate/object triples. This was replaced because:
+- Natural language facts are more flexible and readable
+- The LLM generates better-quality content without rigid predicate constraints
+- Categories provide enough structure for filtering without locking into a taxonomy
+- Deduplication works via embedding similarity regardless of structure
+
+### Why 8 Flat Categories?
+
+Hierarchical labels (e.g., `user/preference`, `self/guideline`) add complexity without benefit. 8 flat categories cover all relevant knowledge domains and are simple enough for an LLM to consistently assign.
+
+### Why `keywords` Field?
+
+BM25 on `fact` alone misses entity references. If the fact is "User's colleague Alex introduced them to Rust," the keyword `["Alex", "Rust"]` ensures BM25 can surface this fact when querying for "Alex" or "Rust" even if the fact text doesn't lead with those words.
 
 ### Why No FSRS for Semantic Memory?
 
@@ -262,12 +266,12 @@ Hard-deleting invalidated facts would lose history. Soft deletes via `invalid_at
 
 | Constant | Value | Location |
 |----------|-------|----------|
-| `CONSOLIDATION_EPISODE_THRESHOLD` | 3 | `crates/core/src/memory/semantic/consolidation.rs` |
-| `FLASHBULB_SURPRISE_THRESHOLD` | 0.85 | `crates/core/src/memory/semantic/consolidation.rs` |
-| `DEDUPE_THRESHOLD` | 0.95 | `crates/core/src/memory/semantic/consolidation.rs` |
-| `DUPLICATE_CANDIDATE_LIMIT` | 5 | `crates/core/src/memory/semantic/consolidation.rs` |
-| `RELATED_FACTS_LIMIT` | 20 | `crates/core/src/memory/semantic/consolidation.rs` |
-| `RETRIEVAL_CANDIDATE_LIMIT` | 100 | `crates/core/src/memory/semantic/mod.rs` |
+| `CONSOLIDATION_EPISODE_THRESHOLD` | 3 | `crates/worker/src/jobs/semantic_consolidation.rs` |
+| `FLASHBULB_SURPRISE_THRESHOLD` | 0.85 | `crates/worker/src/jobs/event_segmentation.rs` |
+| `DEDUPE_THRESHOLD` | 0.95 | `crates/worker/src/jobs/semantic_consolidation.rs` |
+| `DUPLICATE_CANDIDATE_LIMIT` | 5 | `crates/worker/src/jobs/semantic_consolidation.rs` |
+| `RELATED_FACTS_LIMIT` | 20 | `crates/worker/src/jobs/semantic_consolidation.rs` |
+| `RETRIEVAL_CANDIDATE_LIMIT` | 100 | `crates/core/src/memory/semantic.rs` |
 
 ## Relationships
 
@@ -287,15 +291,16 @@ Hard-deleting invalidated facts would lose history. Soft deletes via `invalid_at
                               ┌──────────┴──────────┐
                               ▼                     ▼
                     ┌──────────────────┐   ┌──────────────────┐
-                    │  Known Facts     │   │  Behavioral      │
-                    │  (user, we,...)  │   │  Guidelines      │
-                    │                 │   │  (assistant,...)  │
+                    │  identity /      │   │  guideline       │
+                    │  preference /    │   │  (behavioral     │
+                    │  interest / ...  │   │   rules)         │
                     └──────────────────┘   └──────────────────┘
                               │
                     ┌─────────┴─────────┐
-                    │  retrieve_memory  │◀── Query
-                    │  (BM25 + vector   │
-                    │   RRF, no FSRS)   │
+                    │  retrieve_memory  │◀── Query (+ optional category filter)
+                    │  (BM25+vector RRF │
+                    │   on search_text, │
+                    │   no FSRS)        │
                     └───────────────────┘
 ```
 

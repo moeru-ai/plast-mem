@@ -2,10 +2,11 @@
 
 Phase 2+ enhancements for the semantic memory system.
 
-> **Architecture Note**: This document has been updated to align with the current batch-consolidation architecture (`SemanticConsolidationJob`) rather than the deprecated per-episode extraction model. Key changes:
-> - Semantic Note generation triggers after batch consolidation
-> - Adaptive threshold is per-conversation (not per-user)
-> - Flashbulb detection uses relative surprise (mean + 2σ) rather than fixed thresholds
+> **Architecture Note (2026-02-28)**: SPO (subject/predicate/object) triplets have been **removed** from the semantic memory schema. The current schema uses `category` (8 flat values) + `fact` + `keywords` instead. The designs in this document that reference `subject`, `predicate`, or `object` fields need to be rethought before implementation:
+> - **Semantic Note**: The `subject` grouping concept could map to `category` grouping instead (e.g., a note per category rather than per subject). Cross-subject linking via shared objects is no longer applicable.
+> - **Inferred Relations**: The SPO-based inference rules (`lives_in`, `is_in`, etc.) are not compatible with the current schema. If implemented, inference would need to operate on `fact` strings + `keywords` instead.
+
+> **Architecture Note (batch-consolidation)**: Semantic Note generation triggers after batch consolidation; adaptive threshold is per-conversation (not per-user); flashbulb detection uses relative surprise (mean + 2σ) rather than fixed thresholds.
 
 ---
 
