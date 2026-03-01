@@ -86,68 +86,37 @@ struct SegmentItem {
   surprise_level: SurpriseLevel,
 }
 
-const SEGMENTATION_SYSTEM_PROMPT: &str = "\
-# Instruction
+const SEGMENTATION_SYSTEM_PROMPT: &str = r#"\
+Your task is to segment the conversation into continuous, non-overlapping blocks using a hybrid strategy.
+You must create a new segment boundary whenever there is a **Topic Shift** OR a **Surprise Shift**.
 
-You are an episodic memory segmentation system (Event Segmentation Theory).
-Segment the conversation into episodes — moments where the current event model no longer predicts the next turn.
+When in doubt, prefer finer granularity (split rather than merge).
 
-A segment boundary MUST be created when **either**:
-- The topic or intent changes meaningfully, OR
-- The new message is surprising or discontinuous relative to prior context.
+# Boundary Triggers (Split when ANY of these occur)
 
-When in doubt, split rather than merge.
+1. **Topic & Intent:** - Meaningful changes in semantic focus, goals, or activities.
+ - Subtopic transitions or shifts in user intent (e.g., venting → requesting help).
+ - Explicit discourse markers signaling transitions (e.g., "by the way", "anyway", "换个话题", "对了").
 
----
+2. **Surprise & Discontinuity:** - Abrupt emotional reversals or unexpected vulnerability.
+ - Sudden shifts between personal/emotional and logistical/factual content.
+ - Introduction of a completely new domain (e.g., health → finance).
+ - Sharp changes in tone, register, or notable time gaps.
 
-# Output Format
+# Field Guidelines (Adhere strictly to the JSON schema)
 
-Return a JSON list of segments. Each segment must include:
-- `start_message_index` — 0-indexed position of the first message (inclusive)
-- `end_message_index` — 0-indexed position of the last message (inclusive)
-- `num_messages` — number of messages; must equal `end_message_index − start_message_index + 1`
-- `title` — 5–15 words capturing the core theme
-- `summary` — ≤50 words, third-person narrative (e.g., \"The user asked X; the assistant explained Y…\")
-- `surprise_level` — `low` | `high` | `extremely_high` (relative to the preceding segment)
+- **title:** 5-15 words capturing the core theme.
+- **summary:** ≤50 words, third-person narrative (e.g., "The user asked X; the assistant explained Y...").
+- **surprise_level:** Measure how abruptly the segment begins relative to the *preceding* segment (First segment is `low` unless continuing from a prior episode):
+  - `low`: Gradual or routine transition.
+  - `high`: Noticeable discontinuity (unexpected emotion, intent reversal, domain change).
+  - `extremely_high`: Stark break (shocking event, intense emotion, major domain jump).
 
----
+# Quality Constraints
 
-# Segmentation Rules
-
-## 1. Topic-Aware Rules
-- Group consecutive messages sharing the same semantic focus, goal, or activity.
-- A boundary occurs when subject matter, intent, or activity changes meaningfully.
-- Subtopic changes count (e.g., emotional support → career advice → casual chat).
-- Watch for discourse markers: \"by the way\", \"anyway\", \"换个话题\", \"对了\" — these signal deliberate transitions.
-- Intent shifts count: chatting→deciding, venting→requesting help.
-
-## 2. Surprise-Aware Rules
-Create a boundary if a message diverges abruptly from prior context:
-- Sudden emotional reversal or unexpected vulnerability
-- Shift between personal/emotional and logistical/factual content
-- Introduction of a new domain (health, work, relationships, finance, etc.)
-- Sharp change in tone, register, or a notable time gap (visible in timestamps)
-
-## 3. Fusion Policy
-- A boundary is created if **either** channel triggers — topic shift OR surprise.
-- Prefer finer granularity: when in doubt, split rather than merge.
-
-## 4. Surprise Level
-Measures how abruptly this segment begins relative to the preceding segment:
-- `low` — gradual or routine transition
-- `high` — noticeable discontinuity: unexpected emotion, intent reversal, or domain change
-- `extremely_high` — stark break: shocking event, intense emotion, or major domain jump
-
-First segment: assess relative to the previous episode summary if provided; otherwise use `low`.
-
----
-
-# Quality Requirements
-- Segments must be consecutive, non-overlapping, and cover all messages exactly once.
-- The first segment must start at message index 0.
-- `num_messages` is the authoritative field for slicing and must be accurate.
-- All `num_messages` values must sum to the total input message count.
-- A single coherent conversation must return exactly one segment covering all messages.";
+- Segments must completely cover all messages exactly once, starting from index 0.
+- Mathematical accuracy is strict: `num_messages` MUST equal `end_message_index - start_message_index + 1`.
+- A single coherent conversation without shifts must return exactly one segment."#;
 
 fn format_messages(messages: &[Message]) -> String {
   messages
@@ -181,7 +150,7 @@ async fn batch_segment(
     None => format!("Messages to segment:\n{formatted}"),
   };
 
-  let system = ChatCompletionRequestSystemMessage::from(SEGMENTATION_SYSTEM_PROMPT);
+  let system = ChatCompletionRequestSystemMessage::from(SEGMENTATION_SYSTEM_PROMPT.trim());
   let user = ChatCompletionRequestUserMessage::from(user_content);
 
   let output = generate_object::<SegmentationOutput>(
@@ -435,7 +404,6 @@ pub async fn process_event_segmentation(
       for episode in created_episodes {
         enqueue_semantic_consolidation(conversation_id, episode, db, semantic_storage).await?;
       }
-
     }
   }
 
