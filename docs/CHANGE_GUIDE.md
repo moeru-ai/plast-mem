@@ -44,7 +44,7 @@ FSRS (Free Spaced Repetition Scheduler) parameters affect memory scheduling thro
 2. **Update parameter definitions** in `crates/shared/src/fsrs.rs` if adding new parameters
 3. **Modify calculation logic**:
    - `crates/core/src/memory/episodic.rs` - Retrieval and scheduling
-   - `crates/core/src/memory/creation.rs` - Initial FSRS values on creation
+   - `crates/worker/src/jobs/event_segmentation.rs` - Initial FSRS values on episode creation
 4. **Update review logic** in `crates/worker/src/jobs/memory_review.rs`:
    - LLM evaluation mapping (Again/Hard/Good/Easy)
    - Parameter update formulas
@@ -71,7 +71,7 @@ Database schema changes require migration and entity updates.
    - `crates/entities/src/episodic_memory.rs`
    - `crates/entities/src/message_queue.rs`
 4. **Update core logic** to use new fields:
-   - `crates/core/src/memory/creation.rs` - Set defaults on creation
+   - `crates/worker/src/jobs/event_segmentation.rs` - Set defaults on episode creation
    - `crates/core/src/memory/episodic.rs` - Use in retrieval/updates
 5. **Run migration**:
    ```bash
@@ -83,9 +83,9 @@ Database schema changes require migration and entity updates.
 Event segmentation determines when conversations become memories.
 
 1. **Understand batch detection**: a single LLM call segments the whole window; see `docs/architecture/segmentation.md`
-2. **Modify trigger logic** in `crates/core/src/message_queue/check.rs` (thresholds, fence TTL)
-3. **Modify LLM segmentation** in `crates/core/src/message_queue/segmentation.rs` (prompt, output schema)
-4. **Adjust job dispatch** in `crates/worker/src/jobs/event_segmentation.rs`
+2. **Modify trigger logic** in `crates/core/src/message_queue.rs` (thresholds, fence TTL)
+3. **Modify LLM segmentation** in `crates/worker/src/jobs/event_segmentation.rs` (batch_segment function, prompt, output schema)
+4. **Adjust job dispatch** in `crates/worker/src/jobs/event_segmentation.rs` (process_event_segmentation)
 5. **Test with varied inputs** - segmentation quality affects memory quality
 
 **Key constraint:** Drain happens before episode creation; a crash after drain loses messages (acceptable) but never creates duplicate episodes.
@@ -114,14 +114,14 @@ Memory retrieval uses hybrid ranking (BM25 + vector) with FSRS re-ranking.
    - RRF (Reciprocal Rank Fusion)
    - FSRS retrievability weighting
 2. **Modify ranking** in `crates/core/src/memory/retrieval.rs` if applicable
-3. **Update review queue** - retrieval records pending reviews in `crates/core/src/message_queue/state.rs`
+3. **Update review queue** - retrieval records pending reviews via `MessageQueue::add_pending_review()` in `crates/core/src/message_queue.rs`
 4. **Test retrieval quality** with representative queries
 
 ### Adding a Job Type
 
 Background jobs handle segmentation and memory review.
 
-1. **Define job data** in `crates/core/src/message_queue/` if it needs queue storage
+1. **Define job data** in `crates/core/src/message_queue.rs` if it needs queue storage (for pending reviews)
 2. **Create job handler** in `crates/worker/src/jobs/<name>.rs`:
    ```rust
    pub async fn run(state: AppState, job_data: JobData) -> Result<()> {

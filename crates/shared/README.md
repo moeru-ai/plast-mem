@@ -10,19 +10,11 @@ circular dependencies.
 
 ## Key Types
 
-### Message
+### [Message](src/message.rs)
 
-The fundamental unit of conversation:
+The fundamental unit of conversation with `role`, `content`, and `timestamp`.
 
-```rust
-pub struct Message {
-    pub role: MessageRole,      // User or Assistant
-    pub content: String,        // Message text
-    pub timestamp: DateTime<Utc>,
-}
-```
-
-### AppError
+### [AppError](src/error.rs)
 
 Application-wide error type with HTTP status code support:
 
@@ -34,7 +26,7 @@ let err = AppError::new("something went wrong");
 let err = AppError::with_status(StatusCode::BAD_REQUEST, "invalid input");
 ```
 
-### Environment
+### [AppEnv](src/env.rs)
 
 Global application configuration via `APP_ENV`:
 

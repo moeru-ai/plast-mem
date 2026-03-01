@@ -28,6 +28,8 @@ Add a message to a conversation queue (triggers background segmentation):
 }
 ```
 
+See [add_message.rs](src/api/add_message.rs) for implementation.
+
 ### POST /api/v0/retrieve_memory
 
 Search memories with hybrid retrieval. Returns Markdown-formatted results optimized for LLM tool use. Records a pending FSRS review.
@@ -60,6 +62,8 @@ Response:
 - user: "I've been doing Python for 5 years..."
 ```
 
+See [retrieve_memory.rs](src/api/retrieve_memory.rs) for implementation.
+
 ### POST /api/v0/retrieve_memory/raw
 
 Same search, returns JSON with `{ "semantic": [...], "episodic": [...] }`. Records a pending FSRS review.
@@ -84,6 +88,8 @@ Returns Markdown of semantic facts only.
 
 Recent episodic memories, optionally filtered by recency. Returns Markdown.
 
+See [recent_memory.rs](src/api/recent_memory.rs) for implementation.
+
 ### POST /api/v0/recent_memory/raw
 
 Recent episodic memories as JSON array.
@@ -105,45 +111,11 @@ Available at `/openapi/` when server is running:
 
 ## Request Types
 
-### AddMessage
+Request/response types are defined in the API handler files:
 
-```rust
-pub struct AddMessage {
-    pub conversation_id: Uuid,
-    pub message: AddMessageMessage,
-}
-
-pub struct AddMessageMessage {
-    pub role: MessageRole,
-    pub content: String,
-    pub timestamp: Option<DateTime<Utc>>,
-}
-```
-
-### RetrieveMemory
-
-```rust
-pub struct RetrieveMemory {
-    pub conversation_id: Uuid,
-    pub query: String,
-    pub episodic_limit: u64,        // default: 5
-    pub semantic_limit: u64,        // default: 20
-    pub detail: DetailLevel,        // default: Auto
-    pub category: Option<String>,   // optional semantic category filter
-}
-```
-
-### ContextPreRetrieve
-
-```rust
-pub struct ContextPreRetrieve {
-    pub conversation_id: Uuid,
-    pub query: String,
-    pub semantic_limit: u64,        // default: 20
-    pub detail: DetailLevel,        // default: Auto
-    pub category: Option<String>,   // optional semantic category filter
-}
-```
+- [AddMessage](src/api/add_message.rs) - Message ingestion request
+- [RetrieveMemory](src/api/retrieve_memory.rs) - Memory retrieval request with `episodic_limit`, `semantic_limit`, `detail`, `category`
+- [ContextPreRetrieve](src/api/retrieve_memory.rs) - Semantic-only pre-retrieval request
 
 `DetailLevel` controls whether full message details are included in episodic results:
 

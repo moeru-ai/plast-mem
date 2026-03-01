@@ -19,16 +19,10 @@ Core domain logic
 
 **Key Components**:
 - `memory/`: Various types of memory
-  - `episodic/mod.rs`: Episodic Memory (hybrid retrieval with FSRS re-ranking)
-  - `episodic/creation.rs`: Episode generation (LLM) and creation (FSRS init, persistence)
-  - `semantic/mod.rs`: Semantic Memory (hybrid retrieval, no FSRS)
-  - `semantic/consolidation.rs`: CLS-inspired consolidation pipeline (LLM → facts)
+  - `episodic.rs`: Episodic Memory (hybrid retrieval with FSRS re-ranking)
+  - `semantic.rs`: Semantic Memory (hybrid retrieval, no FSRS)
   - `retrieval.rs`: `format_tool_result()`, `DetailLevel` — shared markdown formatting
-- `message_queue/`: Message queue and segmentation
-  - `mod.rs`: MessageQueue struct, push/drain/get, PendingReview type
-  - `check.rs`: Trigger check (count/time), fence acquisition, SegmentationCheck
-  - `segmentation.rs`: Batch LLM segmentation (batch_segment, BatchSegment, SurpriseLevel)
-  - `state.rs`: Fence state management, pending reviews
+- `message_queue.rs`: MessageQueue struct, push/drain/get, PendingReview, SegmentationCheck
 
 ### 3. plastmem_migration
 

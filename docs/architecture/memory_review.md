@@ -28,53 +28,34 @@ MemoryReviewJob (async worker):
 
 ## Data Structures
 
-### PendingReview
-
-```rust
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct PendingReview {
-    pub query: String,
-    pub memory_ids: Vec<Uuid>,
-}
-```
+### [PendingReview](../../crates/core/src/message_queue.rs)
 
 Stored in `message_queue.pending_reviews` as JSON array. `NULL` means no pending reviews.
 
-### MemoryReviewJob
-
-```rust
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct MemoryReviewJob {
-    pub pending_reviews: Vec<PendingReview>,
-    pub context_messages: Vec<Message>,
-    pub reviewed_at: DateTime<Utc>,
-}
-```
-
-See: [`crates/worker/src/jobs/memory_review.rs`](../../crates/worker/src/jobs/memory_review.rs)
+### [MemoryReviewJob](../../crates/worker/src/jobs/memory_review.rs)
 
 ## Key Components
 
 ### 1. Recording Pending Reviews
 
-After retrieval, [`record_pending_review()`](../../crates/server/src/api/retrieve_memory.rs) appends the retrieved memory IDs to the queue via [`MessageQueue::add_pending_review()`](../../crates/core/src/message_queue/pending_reviews.rs).
+After retrieval, [`fetch_memory()`](../../crates/server/src/api/retrieve_memory.rs) appends the retrieved memory IDs to the queue via [`MessageQueue::add_pending_review()`](../../crates/core/src/message_queue.rs).
 
 ### 2. Enqueueing Review Job
 
-During event segmentation, [`enqueue_pending_reviews()`](../../crates/worker/src/jobs/event_segmentation.rs) atomically takes pending reviews and enqueues a `MemoryReviewJob`. Called on all segmentation paths (including when no boundary is detected).
+During event segmentation, [`enqueue_pending_reviews()`](../../crates/worker/src/jobs/event_segmentation.rs) atomically takes pending reviews and enqueues a `MemoryReviewJob`. Called on all segmentation paths.
 
 ### 3. Processing Reviews
 
 [`process_memory_review()`](../../crates/worker/src/jobs/memory_review.rs):
 
 1. **Aggregate**: Deduplicate by `memory_id`, collect matched queries
-2. **Fetch**: Load memory content from DB, skip if stale
+2. **Fetch**: Load memory content from DB, skip if stale or same-day
 3. **LLM Review**: Call [`generate_object()`](../../crates/ai/src/lib.rs) with structured output
 4. **Update**: Apply FSRS state transition based on rating
 
 ### 4. Stale Skip
 
-Prevents race conditions: if `job.reviewed_at <= memory.last_reviewed_at`, skip the update.
+Prevents race conditions: if `job.reviewed_at <= memory.last_reviewed_at`, skip the update. Same-day reviews are also skipped (at least 1 day between reviews).
 
 ## LLM Review Prompt
 
@@ -116,8 +97,7 @@ struct MemoryRatingOutput {
 
 ## Related Files
 
-- `crates/core/src/message_queue/mod.rs` - `PendingReview` struct
-- `crates/core/src/message_queue/pending_reviews.rs` - `add_pending_review()`, `take_pending_reviews()`
+- `crates/core/src/message_queue.rs` - `PendingReview` struct, `add_pending_review()`, `take_pending_reviews()`
 - `crates/server/src/api/retrieve_memory.rs` - Records pending reviews
 - `crates/worker/src/jobs/event_segmentation.rs` - Enqueues review job
 - `crates/worker/src/jobs/memory_review.rs` - Review job implementation

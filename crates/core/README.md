@@ -9,53 +9,22 @@ This crate implements the central business logic:
 - **Episodic Memory** - Storage and retrieval of conversation segments
 - **Semantic Memory** - Long-term fact storage and consolidation
 - **Message Queue** - Buffering, trigger detection, and batch segmentation
-- **Episode Creation** - Embedding + FSRS initialization from batch segment output
 
 ## Key Types
 
-### EpisodicMemory
+### [EpisodicMemory](src/memory/episodic.rs)
 
-The main memory type representing a conversation segment:
+The main memory type representing a conversation segment with FSRS parameters for spaced repetition scheduling.
 
-```rust
-pub struct EpisodicMemory {
-    pub id: Uuid,
-    pub conversation_id: Uuid,
-    pub messages: Vec<Message>,     // Original conversation
-    pub title: String,
-    pub summary: String,
-    pub stability: f32,             // FSRS stability
-    pub difficulty: f32,            // FSRS difficulty
-    pub surprise: f32,              // 0.0-1.0 significance score
-    pub start_at: DateTime<Utc>,
-    pub end_at: DateTime<Utc>,
-    // ... timestamps
-}
-```
+### [SemanticMemory](src/memory/semantic.rs)
 
-### SemanticMemory
+A long-term fact extracted from episodic memories. Uses 8 categories: `identity`, `preference`, `interest`, `personality`, `relationship`, `experience`, `goal`, `guideline`.
 
-A long-term fact extracted from episodic memories:
+### [MessageQueue](src/message_queue.rs)
 
-```rust
-pub struct SemanticMemory {
-    pub id: Uuid,
-    pub conversation_id: Uuid,
-    pub category: String,           // One of 8 fixed categories
-    pub fact: String,               // Natural language sentence
-    pub keywords: Vec<String>,      // Key entity names for BM25 recall
-    pub source_episodic_ids: Vec<Uuid>,
-    pub valid_at: DateTime<Utc>,
-    pub invalid_at: Option<DateTime<Utc>>,
-}
-```
+Per-conversation message buffer with segmentation trigger logic.
 
-The 8 categories: `identity`, `preference`, `interest`, `personality`, `relationship`, `experience`, `goal`, `guideline`.
-
-### MessageQueue
-
-Per-conversation message buffer:
-
+Key operations:
 ```rust
 // Push a message; returns Some(SegmentationCheck) if a job should be enqueued
 let check = MessageQueue::push(conversation_id, message, db).await?;
@@ -64,16 +33,9 @@ let check = MessageQueue::push(conversation_id, message, db).await?;
 MessageQueue::drain(conversation_id, count, db).await?;
 ```
 
-### PendingReview
+### [PendingReview](src/message_queue.rs)
 
-Tracks memories retrieved for later FSRS review:
-
-```rust
-pub struct PendingReview {
-    pub query: String,              // The search query
-    pub memory_ids: Vec<Uuid>,      // Retrieved memory IDs
-}
-```
+Tracks memories retrieved for later FSRS review.
 
 ## Key Functions
 

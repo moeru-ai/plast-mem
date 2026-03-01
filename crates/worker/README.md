@@ -14,17 +14,9 @@ Uses [Apalis](https://github.com/apalis-rs/apalis) for job queue management with
 
 ## Job Types
 
-### EventSegmentationJob
+### [EventSegmentationJob](src/jobs/event_segmentation.rs)
 
-Triggered when `MessageQueue::push()` returns a `SegmentationCheck`:
-
-```rust
-pub struct EventSegmentationJob {
-    pub conversation_id: Uuid,
-    /// Exact message count at push time (fence boundary).
-    pub fence_count: i32,
-}
-```
+Triggered when `MessageQueue::push()` returns a `SegmentationCheck`.
 
 Processing flow:
 
@@ -36,17 +28,9 @@ Processing flow:
 
 Window doubling: if LLM returns 1 segment and window not yet doubled → double window, clear fence, wait for more messages.
 
-### MemoryReviewJob
+### [MemoryReviewJob](src/jobs/memory_review.rs)
 
-Triggered after retrieval to evaluate memory relevance:
-
-```rust
-pub struct MemoryReviewJob {
-    pub pending_reviews: Vec<PendingReview>,
-    pub context_messages: Vec<Message>,
-    pub reviewed_at: DateTime<Utc>,
-}
-```
+Triggered after retrieval to evaluate memory relevance.
 
 Processing flow:
 
@@ -54,16 +38,9 @@ Processing flow:
 2. Call LLM to evaluate relevance (Again/Hard/Good/Easy)
 3. Update FSRS parameters based on rating
 
-### SemanticConsolidationJob
+### [SemanticConsolidationJob](src/jobs/semantic_consolidation.rs)
 
-Triggered after episode creation when unconsolidated episode count ≥ threshold (3) or surprise ≥ 0.85:
-
-```rust
-pub struct SemanticConsolidationJob {
-    pub conversation_id: Uuid,
-    pub force: bool,  // true for flashbulb (surprise ≥ 0.85)
-}
-```
+Triggered after episode creation when unconsolidated episode count ≥ threshold (3) or surprise ≥ 0.85.
 
 Processing flow:
 

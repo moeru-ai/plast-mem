@@ -42,6 +42,8 @@ Consolidation is a belief update process.
 
 ### Fact Structure
 
+See actual implementation: [`SemanticMemory`](../../crates/core/src/memory/semantic.rs)
+
 ```rust
 pub struct SemanticMemory {
     pub id: Uuid,

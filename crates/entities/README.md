@@ -9,65 +9,25 @@ Entities are manually maintained alongside migrations in the `migration` crate.
 
 ## Entities
 
-### episodic_memory
+### [episodic_memory](src/episodic_memory.rs)
 
-Stores episodic memories with FSRS parameters:
+Stores episodic memories with FSRS parameters (stability, difficulty) for spaced repetition scheduling.
 
-```rust
-pub struct Model {
-    pub id: Uuid,
-    pub conversation_id: Uuid,
-    pub messages: Json,           // Vec<Message> as JSON
-    pub title: String,
-    pub summary: String,
-    pub embedding: PgVector,      // pgvector extension
-    pub stability: f32,           // FSRS stability
-    pub difficulty: f32,          // FSRS difficulty
-    pub surprise: f32,            // Creation-time surprise signal
-    pub start_at: DateTimeWithTimeZone,
-    pub end_at: DateTimeWithTimeZone,
-    pub created_at: DateTimeWithTimeZone,
-    pub last_reviewed_at: DateTimeWithTimeZone,
-    pub consolidated_at: Option<DateTimeWithTimeZone>,
-}
-```
+Key fields: `id`, `conversation_id`, `messages`, `title`, `summary`, `embedding`, `stability`, `difficulty`, `surprise`, `start_at`, `end_at`, `consolidated_at`.
 
-### semantic_memory
+### [semantic_memory](src/semantic_memory.rs)
 
-Stores categorized long-term facts:
+Stores categorized long-term facts with temporal validity tracking.
 
-```rust
-pub struct Model {
-    pub id: Uuid,
-    pub conversation_id: Uuid,
-    pub category: String,         // One of 8 fixed categories
-    pub fact: String,             // Natural language sentence
-    pub keywords: Vec<String>,    // Key entity names for BM25 recall
-    // search_text is a GENERATED column (fact || ' ' || keywords), not mapped here
-    pub source_episodic_ids: Vec<Uuid>,
-    pub valid_at: DateTimeWithTimeZone,
-    pub invalid_at: Option<DateTimeWithTimeZone>,
-    pub embedding: PgVector,
-    pub created_at: DateTimeWithTimeZone,
-}
-```
+Key fields: `id`, `conversation_id`, `category`, `fact`, `keywords`, `source_episodic_ids`, `valid_at`, `invalid_at`, `embedding`.
 
-The `search_text` generated column exists in the DB (used for the BM25 index) but is not mapped in the entity since it cannot be inserted or updated.
+The `search_text` generated column exists in the DB (used for the BM25 index: `fact || ' ' || keywords`) but is not mapped in the entity since it cannot be inserted or updated.
 
-### message_queue
+### [message_queue](src/message_queue.rs)
 
-Per-conversation message buffer and state:
+Per-conversation message buffer and segmentation state.
 
-```rust
-pub struct Model {
-    pub id: Uuid,                 // conversation_id
-    pub messages: Json,           // Vec<Message> as JSON
-    pub pending_reviews: Option<Json>, // Vec<PendingReview>
-    pub event_model: Option<String>,   // Current event description
-    pub last_embedding: Option<PgVector>,
-    pub event_model_embedding: Option<PgVector>,
-}
-```
+Key fields: `id`, `messages`, `pending_reviews`, `in_progress_fence`, `in_progress_since`, `window_doubled`, `prev_episode_summary`.
 
 ## Updating Entities
 

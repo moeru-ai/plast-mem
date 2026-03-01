@@ -18,8 +18,8 @@ Conversation Messages → Event Segmentation → EpisodicMemory (with FSRS state
 
 ## Schema
 
-- **Core struct**: `crates/core/src/memory/episodic/mod.rs`
-- **Episode creation**: `crates/core/src/memory/episodic/creation.rs`
+- **Core struct**: `crates/core/src/memory/episodic.rs`
+- **Episode creation**: `crates/worker/src/jobs/event_segmentation.rs`
 - **Database entity**: `crates/entities/src/episodic_memory.rs`
 
 ### Field Semantics
@@ -134,9 +134,9 @@ See [retrieve_memory](retrieve_memory.md) for endpoint details.
 
 | Operation | Location |
 |-----------|----------|
-| `EpisodicMemory::retrieve()` | `crates/core/src/memory/episodic/mod.rs` |
-| `EpisodicMemory::from_model()` | `crates/core/src/memory/episodic/mod.rs` |
-| `EpisodicMemory::to_model()` | `crates/core/src/memory/episodic/mod.rs` |
+| `EpisodicMemory::retrieve()` | `crates/core/src/memory/episodic.rs` |
+| `EpisodicMemory::from_model()` | `crates/core/src/memory/episodic.rs` |
+| `EpisodicMemory::to_model()` | `crates/core/src/memory/episodic.rs` |
 
 ## Design Decisions
 

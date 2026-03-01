@@ -26,15 +26,15 @@ New Message → MessageQueue::push()
 
 ## Trigger Conditions
 
-**Code**: `crates/core/src/message_queue/check.rs`
+**Code**: `crates/core/src/message_queue.rs` (MessageQueue::check)
 
 A segmentation job is triggered when **either** condition is met:
 
 | Condition | Threshold |
 | --------- | --------- |
-| Count trigger | `trigger_count ≥ WINDOW_BASE` (20) or `WINDOW_MAX` (40) if doubled |
+| Count trigger | `trigger_count >= WINDOW_BASE` (20) or `WINDOW_MAX` (40) if doubled |
 | Time trigger | Oldest message in queue is > 2 hours old |
-| Minimum floor | Always skip if `trigger_count < 5` |
+| Minimum floor | Always skip if `trigger_count < MIN_MESSAGES` (5) |
 
 ### Fence Mechanism (TOCTOU prevention)
 
@@ -55,7 +55,7 @@ Stale fences (> 120 minutes) are cleared automatically before trigger evaluation
 
 ## Batch Segmentation (LLM)
 
-**Code**: `crates/core/src/message_queue/segmentation.rs`
+**Code**: `crates/worker/src/jobs/event_segmentation.rs` (batch_segment function)
 
 A single LLM call (`batch_segment`) receives all messages in the window and returns a list of segments. Each segment includes:
 
@@ -111,9 +111,8 @@ The **last segment** from a multi-segment result is never drained — it stays i
 
 | Component | Location |
 | --------- | -------- |
-| Trigger check + fence | `crates/core/src/message_queue/check.rs` |
-| Batch LLM segmentation | `crates/core/src/message_queue/segmentation.rs` |
-| Queue push + drain | `crates/core/src/message_queue/mod.rs` |
-| Fence + pending reviews state | `crates/core/src/message_queue/state.rs` |
-| Job dispatch | `crates/worker/src/jobs/event_segmentation.rs` |
-| Episode creation | `crates/core/src/memory/episodic/creation.rs` |
+| Trigger check + fence | `crates/core/src/message_queue.rs` (check, try_set_fence) |
+| Batch LLM segmentation | `crates/worker/src/jobs/event_segmentation.rs` (batch_segment) |
+| Queue push + drain | `crates/core/src/message_queue.rs` (push, drain) |
+| Job dispatch | `crates/worker/src/jobs/event_segmentation.rs` (process_event_segmentation) |
+| Episode creation | `crates/worker/src/jobs/event_segmentation.rs` (create_episode) |

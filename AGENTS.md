@@ -143,7 +143,7 @@ RUST_LOG=debug cargo run
 ## Remember
 
 - The codebase follows predictable patterns. Most changes follow the same flow: API → Handler → Core → DB
-- When in doubt about FSRS, check `docs/architecture/fsrs.md` and `crates/core/src/memory/episodic/mod.rs`
-- When in doubt about semantic memory, check `docs/architecture/semantic_memory.md` and `crates/core/src/memory/semantic/`
+- When in doubt about FSRS, check `docs/architecture/fsrs.md` and `crates/core/src/memory/episodic.rs`
+- When in doubt about semantic memory, check `docs/architecture/semantic_memory.md` and `crates/core/src/memory/semantic.rs`
 - Memory operations are: creation (segmentation → episode), consolidation (episodes → semantic facts), retrieval (semantic + episodic), or review (FSRS update)
 - Prefer reading existing implementations over guessing patterns

@@ -16,7 +16,7 @@ Flashbulb Memory is not a new memory type — it is a **flag on Episodic Memory*
 
 ### Schema Change
 
-Add a single field to `episodic_memory`:
+Add a single field to [`EpisodicMemory`](../../crates/core/src/memory/episodic.rs):
 
 ```rust
 pub struct EpisodicMemory {
@@ -61,7 +61,7 @@ if memory.is_flashbulb {
 
 Two paths:
 
-1. **Automatic** — Episode surprise score exceeds a high threshold (e.g., `surprise > 0.9`). The assumption: extreme surprise correlates with emotional significance.
+1. **Automatic** — Episode surprise score exceeds a high threshold (e.g., `surprise >= 0.85`). The assumption: extreme surprise correlates with emotional significance.
 
 2. **Explicit** — Future API endpoint or user command: "remember this forever." This is more reliable but requires UX design.
 
@@ -77,7 +77,7 @@ Flashbulb episodes are still processed by the Semantic Extraction Job — they c
 - [ ] Update `EpisodicMemory` struct and entity
 - [ ] Modify `retrieve()` — skip retrievability decay for flashbulb memories
 - [ ] Modify review job — skip flashbulb memories
-- [ ] Set `is_flashbulb = true` when `surprise > threshold` during episode creation
+- [ ] Set `is_flashbulb = true` when `surprise >= 0.85` (FLASHBULB_SURPRISE_THRESHOLD) during episode creation
 - [ ] Optional: API endpoint for explicit flashbulb marking
 
 ## What We Don't Do
