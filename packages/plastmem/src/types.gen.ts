@@ -16,6 +16,10 @@ export type AddMessageMessage = {
 };
 
 export type ContextPreRetrieve = {
+    /**
+     * Optional category filter, e.g. "guideline", "preference"
+     */
+    category?: string | null;
     conversation_id: string;
     detail?: DetailLevel;
     query: string;
@@ -73,6 +77,10 @@ export type RecentMemory = {
 
 export type RetrieveMemory = {
     /**
+     * Optional category filter, e.g. "guideline", "preference"
+     */
+    category?: string | null;
+    /**
      * Conversation ID to filter memories by and associate pending review with
      */
     conversation_id: string;
@@ -106,14 +114,13 @@ export type RetrieveMemoryRawResult = {
 };
 
 export type SemanticMemory = {
+    category: string;
     conversation_id: string;
     fact: string;
     id: string;
     invalid_at?: string | null;
-    object: string;
-    predicate: string;
+    keywords: Array<string>;
     source_episodic_ids: Array<string>;
-    subject: string;
     valid_at: string;
 };
 

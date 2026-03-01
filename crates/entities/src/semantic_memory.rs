@@ -9,13 +9,10 @@ pub struct Model {
   pub id: Uuid,
   pub conversation_id: Uuid,
   #[sea_orm(column_type = "Text")]
-  pub subject: String,
-  #[sea_orm(column_type = "Text")]
-  pub predicate: String,
-  #[sea_orm(column_type = "Text")]
-  pub object: String,
+  pub category: String,
   #[sea_orm(column_type = "Text")]
   pub fact: String,
+  pub keywords: Vec<String>,
   pub source_episodic_ids: Vec<Uuid>,
   pub valid_at: DateTimeWithTimeZone,
   pub invalid_at: Option<DateTimeWithTimeZone>,

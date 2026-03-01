@@ -41,33 +41,15 @@ pub fn format_tool_result(
 ) -> String {
   let mut out = String::new();
 
-  // ── Known Facts & Behavioral Guidelines ──
-  let (known, behavioral): (Vec<_>, Vec<_>) = semantic_results
-    .iter()
-    .partition(|(f, _)| !f.is_behavioral());
-
-  if !known.is_empty() {
+  // ── Known Facts ──
+  if !semantic_results.is_empty() {
     let _ = writeln!(out, "## Known Facts");
-    for (fact, _score) in &known {
+    for (fact, _score) in semantic_results {
       let sources = fact.source_episodic_ids.len();
       let _ = writeln!(
         out,
-        "- {} (sources: {} conversation{})",
-        fact.fact,
-        sources,
-        if sources == 1 { "" } else { "s" }
-      );
-    }
-    let _ = writeln!(out);
-  }
-
-  if !behavioral.is_empty() {
-    let _ = writeln!(out, "## Behavioral Guidelines");
-    for (fact, _score) in &behavioral {
-      let sources = fact.source_episodic_ids.len();
-      let _ = writeln!(
-        out,
-        "- {} (sources: {} conversation{})",
+        "- [{}] {} (sources: {} conversation{})",
+        fact.category,
         fact.fact,
         sources,
         if sources == 1 { "" } else { "s" }

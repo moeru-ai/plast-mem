@@ -8,6 +8,7 @@ The `retrieve_memory` API provides LLM-optimized access to both semantic facts a
 | -------- | ------ | --------------- | -------- |
 | `/api/v0/retrieve_memory` | POST | Markdown (tool result) | LLM consumption |
 | `/api/v0/retrieve_memory/raw` | POST | JSON | Debug/integration |
+| `/api/v0/context_pre_retrieve` | POST | Markdown (semantic only) | System prompt injection |
 
 ## Request Format
 
@@ -17,7 +18,8 @@ The `retrieve_memory` API provides LLM-optimized access to both semantic facts a
   "conversation_id": "550e8400-e29b-41d4-a716-446655440001",
   "episodic_limit": 5,
   "semantic_limit": 20,
-  "detail": "auto"
+  "detail": "auto",
+  "category": null
 }
 ```
 
@@ -30,6 +32,9 @@ The `retrieve_memory` API provides LLM-optimized access to both semantic facts a
 | `episodic_limit` | number | 5 | Maximum episodic memories to return (1-100) |
 | `semantic_limit` | number | 20 | Maximum semantic facts to return |
 | `detail` | string | `"auto"` | Detail level for episodic memories: `"auto"`, `"none"`, `"low"`, `"high"` |
+| `category` | string \| null | `null` | Optional semantic category filter (e.g. `"guideline"`, `"preference"`). `null` = all categories |
+
+`context_pre_retrieve` accepts the same fields except `episodic_limit` and `detail` (it only retrieves semantic facts).
 
 ## Retrieval Pipeline
 
@@ -42,6 +47,8 @@ Query → embed(query) ─────┤
                                                                                            │
                                                                                Record pending review
 ```
+
+`context_pre_retrieve` runs only the semantic leg and does **not** record a pending review.
 
 ### Episodic: Hybrid Search + FSRS Re-ranking
 
@@ -61,24 +68,24 @@ See [FSRS](fsrs.md) for details.
 
 ### Semantic: Hybrid Search (no FSRS)
 
-1. BM25 search on `fact` text → 100 candidates
+1. BM25 search on `search_text` column (`fact || ' ' || keywords joined`) → 100 candidates
 2. Vector search on `embedding` → 100 candidates
 3. RRF fusion: `rrf_score = Σ 1.0 / (60 + rank)`
-4. Sort by `rrf_score`, truncate to `semantic_limit`
+4. Optional category filter: `AND ($category::text IS NULL OR category = $category)`
+5. Sort by `rrf_score`, truncate to `semantic_limit`
 
-Semantic facts do not decay and are not subject to FSRS re-ranking. Only active facts (`invalid_at IS NULL`) are searched.
+Semantic facts do not decay and are not subject to FSRS re-ranking. Only active facts (`invalid_at IS NULL`) are searched. BM25 runs against `search_text` (not just `fact`) so that keywords such as entity names contribute to BM25 scoring.
 
 ## Response Format (Markdown Endpoint)
 
-The tool result is optimized for LLM consumption. Semantic facts are rendered first, then episodic memories:
+The tool result is optimized for LLM consumption. Semantic facts are rendered first as a flat list with `[category]` prefixes, then episodic memories:
 
 ```markdown
-## Known Facts
-- User has been doing Python for 5 years (sources: 2 conversations)
-- User's new team uses Rust for a trading system (sources: 1 conversation)
-
-## Behavioral Guidelines
-- Assistant should emphasize practical examples when teaching (sources: 1 conversation)
+## Semantic Memory
+- [preference] User prefers dark mode interfaces (sources: 2 conversations)
+- [experience] User has been doing Python for 5 years (sources: 2 conversations)
+- [experience] User's new team uses Rust for a trading system (sources: 1 conversation)
+- [guideline] Assistant should emphasize practical examples when teaching (sources: 1 conversation)
 
 ## Episodic Memories
 
@@ -97,11 +104,11 @@ The tool result is optimized for LLM consumption. Semantic facts are rendered fi
 **Summary:** User prefers dark mode interfaces and finds light mode straining.
 ```
 
-The `## Known Facts` and `## Behavioral Guidelines` sections are omitted when no matching facts exist.
+The `## Semantic Memory` section is omitted when no matching facts exist.
 
 ### Detail Level Behavior
 
-Applies to episodic memories only. Semantic facts are always rendered as bullet points without detail levels.
+Applies to episodic memories only. Semantic facts are always rendered as bullet points.
 
 | `detail` | Behavior |
 | -------- | -------- |
@@ -131,10 +138,9 @@ Returns a single object with `semantic` and `episodic` arrays:
     {
       "id": "550e8400-e29b-41d4-a716-446655440002",
       "conversation_id": "550e8400-e29b-41d4-a716-446655440001",
-      "subject": "user",
-      "predicate": "likes",
-      "object": "dark mode",
+      "category": "preference",
       "fact": "User likes dark mode interfaces.",
+      "keywords": ["dark mode"],
       "source_episodic_ids": ["550e8400-e29b-41d4-a716-446655440003"],
       "valid_at": "2025-01-14T09:00:00Z",
       "invalid_at": null,
@@ -188,27 +194,42 @@ Note: `embedding` is omitted from both semantic and episodic responses (`#[serde
 
 Semantic facts are either active or invalidated—they don't decay. FSRS decay modeling is only meaningful for episodic memories, where recency and review history affect how "fresh" a memory is.
 
+### Why BM25 on `search_text` (not `fact`)?
+
+`search_text` is a generated column: `fact || ' ' || array_to_string(keywords, ' ')`. BM25 on this column gives keyword entity names equal weight alongside the fact text. This improves entity recall—e.g., querying "Alex" finds facts that mention Alex in keywords even when "Alex" appears incidentally in the fact sentence.
+
 ## Side Effects
 
-Each retrieval records a pending review in `MessageQueue` (episodic memory IDs + query). No FSRS parameters are updated at retrieval time. Semantic facts have no side effects.
+Each `retrieve_memory` call records a pending review in `MessageQueue` (episodic memory IDs + query). `context_pre_retrieve` has no side effects. No FSRS parameters are updated at retrieval time.
 
 When event segmentation later triggers, the segmentation worker takes the pending reviews and enqueues a `MemoryReviewJob`. The review worker then uses an LLM to evaluate each memory's relevance in the conversation context and updates FSRS parameters accordingly. See [FSRS](fsrs.md) for rating details.
 
 ## Example Scenarios
 
-### Casual Query
+### Category-filtered: guidelines only
 
 ```bash
 POST /api/v0/retrieve_memory
 {
-  "query": "how are you",
-  "conversation_id": "550e8400-e29b-41d4-a716-446655440001"
+  "query": "how should I respond",
+  "conversation_id": "550e8400-e29b-41d4-a716-446655440001",
+  "category": "guideline",
+  "semantic_limit": 10
 }
-
-# Returns: up to 20 facts + 5 episode summaries, 0 details (no key moments)
 ```
 
-### Deep Context Needed
+### System prompt injection (semantic only, no pending review)
+
+```bash
+POST /api/v0/context_pre_retrieve
+{
+  "query": "User is asking about career decisions",
+  "conversation_id": "550e8400-e29b-41d4-a716-446655440001"
+}
+# Returns: markdown of semantic facts only
+```
+
+### Deep context needed
 
 ```bash
 POST /api/v0/retrieve_memory
@@ -217,11 +238,10 @@ POST /api/v0/retrieve_memory
   "conversation_id": "550e8400-e29b-41d4-a716-446655440001",
   "detail": "high"
 }
-
 # Returns: facts + all episodic memories with full message details
 ```
 
-### Summary Only
+### Summary only
 
 ```bash
 POST /api/v0/retrieve_memory
@@ -230,21 +250,7 @@ POST /api/v0/retrieve_memory
   "conversation_id": "550e8400-e29b-41d4-a716-446655440001",
   "detail": "none"
 }
-
 # Returns: facts + episode summaries only, no message details
-```
-
-### Minimal Detail
-
-```bash
-POST /api/v0/retrieve_memory
-{
-  "query": "quick reminder",
-  "conversation_id": "550e8400-e29b-41d4-a716-446655440001",
-  "detail": "low"
-}
-
-# Returns: facts + only rank 1 episode gets details (if surprising)
 ```
 
 ## See Also

@@ -33,6 +33,8 @@ pub struct RetrieveMemory {
   /// Detail level: "auto", "none", "low", "high"
   #[serde(default)]
   pub detail: DetailLevel,
+  /// Optional category filter, e.g. "guideline", "preference"
+  pub category: Option<String>,
 }
 
 /// Fetch both memory types and record a pending review for episodic results.
@@ -42,9 +44,16 @@ async fn fetch_memory(
   query: &str,
   episodic_limit: u64,
   semantic_limit: u64,
+  category: Option<&str>,
 ) -> Result<(Vec<(SemanticMemory, f64)>, Vec<(EpisodicMemory, f64)>), AppError> {
   let (semantic, episodic) = tokio::try_join!(
-    SemanticMemory::retrieve(query, sanitize_limit(semantic_limit), conversation_id, &state.db),
+    SemanticMemory::retrieve(
+      query,
+      sanitize_limit(semantic_limit),
+      conversation_id,
+      &state.db,
+      category,
+    ),
     EpisodicMemory::retrieve(query, episodic_limit, conversation_id, &state.db),
   )?;
   if !episodic.is_empty() {
@@ -65,6 +74,8 @@ pub struct ContextPreRetrieve {
   pub semantic_limit: u64,
   #[serde(default)]
   pub detail: DetailLevel,
+  /// Optional category filter, e.g. "guideline", "preference"
+  pub category: Option<String>,
 }
 
 /// Retrieve semantic memories as markdown for pre-retrieval context injection.
@@ -93,6 +104,7 @@ pub async fn context_pre_retrieve(
     sanitize_limit(payload.semantic_limit),
     payload.conversation_id,
     &state.db,
+    payload.category.as_deref(),
   )
   .await?;
   Ok(format_tool_result(&semantic, &[], &payload.detail))
@@ -149,6 +161,7 @@ pub async fn retrieve_memory_raw(
     &payload.query,
     payload.episodic_limit,
     payload.semantic_limit,
+    payload.category.as_deref(),
   )
   .await?;
   Ok(Json(RetrieveMemoryRawResult {
@@ -184,6 +197,7 @@ pub async fn retrieve_memory(
     &payload.query,
     payload.episodic_limit,
     payload.semantic_limit,
+    payload.category.as_deref(),
   )
   .await?;
   Ok(format_tool_result(&semantic, &episodic, &payload.detail))

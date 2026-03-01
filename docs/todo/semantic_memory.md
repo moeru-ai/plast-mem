@@ -5,6 +5,7 @@
 In cognitive science, Episodic Memory records *what happened* — concrete experiences tied to time and context. Semantic Memory stores *what I know* — knowledge, preferences, and facts distilled from many experiences.
 
 Complementary Learning Systems (CLS) theory describes this:
+
 - **Hippocampus** = Episodic Memory: rapid encoding of single experiences
 - **Neocortex** = Semantic Memory: slow extraction of patterns across experiences
 
@@ -21,39 +22,52 @@ Plast Mem implements this via **delayed consolidation**: experiences initially e
 
 ## Design: Delayed Consolidation (Offline Replay)
 
-We moved from immediate per-episode extraction to a **batch consolidation** model. This better aligns with CLS theory and enables cross-episode pattern recognition.
+Batch consolidation model aligned with CLS theory enables cross-episode pattern recognition.
 
 ### Consolidation Triggers
 
-1.  **Threshold Trigger**: Consolidate when **3 unconsolidated episodes** accumulate.
-2.  **Flashbulb Trigger**: Consolidate **immediately** if an episode has surprise ≥ 0.85.
+1. **Threshold Trigger**: Consolidate when **3 unconsolidated episodes** accumulate.
+2. **Flashbulb Trigger**: Consolidate **immediately** if an episode has surprise ≥ 0.85.
 
 ### The Predict-Calibrate Loop
 
-Consolidation is not just extraction; it is a belief update process.
+Consolidation is a belief update process.
 
-1.  **Predict**: Before looking at new episodes, we retrieve existing semantic facts related to them. This represents "what we already believe."
-2.  **Calibrate**: The LLM reviews the new episodes *in the context of* existing beliefs. It determines whether the new experiences:
-    - Reveal **New** facts
-    - **Reinforce** existing facts
-    - **Update** existing facts (e.g., preference change)
-    - **Invalidate** existing facts (e.g., contradiction)
+1. **Predict**: Retrieve existing semantic facts related to the new episodes. This represents "what we already believe."
+2. **Calibrate**: The LLM reviews new episodes *in the context of* existing beliefs and determines whether they:
+   - Reveal **New** facts
+   - **Reinforce** existing facts
+   - **Update** existing facts (e.g., preference change)
+   - **Invalidate** existing facts (e.g., contradiction)
 
 ### Fact Structure
 
 ```rust
 pub struct SemanticMemory {
     pub id: Uuid,
-    pub subject: String,       // "user", "we", "assistant"
-    pub predicate: String,     // "likes", "lives_in"
-    pub object: String,        // "Rust", "Tokyo"
-    pub fact: String,          // Natural language: "User lives in Tokyo"
+    pub conversation_id: Uuid,
+    pub category: String,          // One of 8 categories (see below)
+    pub fact: String,              // Natural language: "User lives in Tokyo"
+    pub keywords: Vec<String>,     // ["Tokyo"] — for BM25 entity recall
     pub source_episodic_ids: Vec<Uuid>,
     pub valid_at: DateTime<Utc>,
     pub invalid_at: Option<DateTime<Utc>>, // NULL = active
-    /* ... embeddings ... */
+    /* ... embedding ... */
 }
 ```
+
+### 8 Categories
+
+| Category | What it captures |
+|----------|-----------------|
+| `identity` | Name, location, occupation, demographics |
+| `preference` | Likes, dislikes, favorites |
+| `interest` | Topics and hobbies |
+| `personality` | Communication style, emotional tendencies |
+| `relationship` | Dynamics, shared references, routines |
+| `experience` | Skills, background, past events |
+| `goal` | Plans and aspirations |
+| `guideline` | How the assistant *should* behave |
 
 ## Data Flow
 
@@ -80,7 +94,7 @@ Check Consolidation Triggers
                        |
                        v
               4. Execute Actions
-                 - New: Insert + Embed
+                 - New: Insert + Embed (category prefix in embed input)
                  - Reinforce: Update source_ids
                  - Update/Invalidate: Set invalid_at, Insert new
                        |
@@ -90,21 +104,25 @@ Check Consolidation Triggers
 
 ## Retrieval
 
-Semantic retrieval is **vector-only** (embeddings of the `fact` sentence).
-- Filters for `invalid_at IS NULL` (only active beliefs).
-- No FSRS decay (facts don't fade like episodes).
-- Presented alongside episodic memories in retrieval results.
+Semantic retrieval uses **hybrid BM25 + vector search** (RRF fusion):
+
+- BM25 on `search_text` generated column (`fact || ' ' || keywords`) — entity names in keywords boost BM25 recall
+- Vector search on embedding (embed input: `"{category}: {fact} {keywords}"`)
+- Optional `category` filter for targeted queries (e.g., `"guideline"` only)
+- Filters for `invalid_at IS NULL` (only active beliefs)
+- No FSRS decay (facts don't fade like episodes)
 
 ## Implementation Status
 
-- [x] **Database**: `semantic_memory` table, `consolidated_at` on episodes.
-- [x] **Entities**: Rust structs and SeaORM models.
-- [x] **Consolidation Job**: Batch processing with accumulation logic.
-- [x] **Core Logic**: `process_consolidation` pipeline with LLM integration.
-- [x] **Retrieval**: Integrated into `retrieve_memory` API.
+- [x] **Database**: `semantic_memory` table with `category`, `keywords`, `search_text` generated column
+- [x] **Entities**: Rust structs and SeaORM models
+- [x] **Consolidation Job**: Batch processing, 8-category LLM prompt, predict-calibrate loop
+- [x] **Core Logic**: `SemanticMemory::retrieve()` with hybrid BM25+vector and category filter
+- [x] **Retrieval**: Integrated into `retrieve_memory` and `context_pre_retrieve` APIs
+- [x] **Migration**: `m20260228_01_refactor_semantic_memory` (SPO → category+keywords)
 
 ## Future Improvements (Phase 2)
 
 - **Active Inquiry**: If consolidation reveals ambiguity, generate a question for the user.
-- **Graph Queries**: Expose subject/predicate structure for complex reasoning.
 - **Consistency Check**: Periodic background job to find and resolve latent contradictions.
+- **Adaptive Surprise Threshold**: Per-conversation sliding window statistics for flashbulb detection.

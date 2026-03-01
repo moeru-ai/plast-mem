@@ -41,15 +41,16 @@ A long-term fact extracted from episodic memories:
 pub struct SemanticMemory {
     pub id: Uuid,
     pub conversation_id: Uuid,
-    pub subject: String,
-    pub predicate: String,
-    pub object: String,
+    pub category: String,           // One of 8 fixed categories
     pub fact: String,               // Natural language sentence
+    pub keywords: Vec<String>,      // Key entity names for BM25 recall
     pub source_episodic_ids: Vec<Uuid>,
     pub valid_at: DateTime<Utc>,
     pub invalid_at: Option<DateTime<Utc>>,
 }
 ```
+
+The 8 categories: `identity`, `preference`, `interest`, `personality`, `relationship`, `experience`, `goal`, `guideline`.
 
 ### MessageQueue
 
@@ -85,13 +86,19 @@ let results = EpisodicMemory::retrieve(query, limit, conversation_id, db).await?
 ### Semantic Retrieval
 
 ```rust
-let results = SemanticMemory::retrieve(query, limit, conversation_id, db).await?;
+// Full hybrid search (BM25 on search_text + vector), optional category filter
+let results = SemanticMemory::retrieve(query, limit, conversation_id, db, category).await?;
+
+// Pre-embedded variant (used inside consolidation to avoid re-embedding)
+let results = SemanticMemory::retrieve_by_embedding(
+    query, embedding, limit, conversation_id, db, category
+).await?;
 ```
 
 ## Modules
 
 - `memory/episodic.rs` - `EpisodicMemory` struct, hybrid BM25 + vector retrieval with FSRS re-ranking
-- `memory/semantic.rs` - `SemanticMemory` struct, hybrid BM25 + vector retrieval
+- `memory/semantic.rs` - `SemanticMemory` struct, hybrid BM25 + vector retrieval (no FSRS)
 - `memory/retrieval.rs` - Shared markdown formatting (`format_tool_result`, `DetailLevel`)
 - `message_queue.rs` - `MessageQueue`, `PendingReview`, `SegmentationCheck`, push/drain/get
 
