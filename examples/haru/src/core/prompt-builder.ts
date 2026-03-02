@@ -49,6 +49,7 @@ const formatDuration = (duration: { hours: number, minutes: number, seconds: num
  * @param args.episodicMemory - The recent episodic memories to inject.
  * @param args.initialAt - The session start time.
  * @param args.now - The current time.
+ * @param args.semanticContext - Optional semantic context from pre-retrieval to inject.
  * @returns The fully assembled system prompt string.
  */
 export const buildSystemPrompt = ({

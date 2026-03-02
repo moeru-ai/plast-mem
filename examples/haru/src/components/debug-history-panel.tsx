@@ -78,8 +78,8 @@ const ConversationMsg = ({ msg }: { msg: Message }) => {
 }
 
 const DetailsView = ({ item }: { item: HistoryItem }) => {
-  const historyItems = (item.history || []).map((msg, i) => (
-    <ConversationMsg key={`${msg.role}-${i}`} msg={msg} />
+  const historyItems = item.history.map(msg => (
+    <ConversationMsg key={`${msg.role}-${String(msg.content).substring(0, 20)}`} msg={msg} />
   ))
 
   return (
@@ -155,6 +155,30 @@ export const DebugHistoryPanel = ({ history, onClose }: DebugHistoryPanelProps) 
 
   const selectedItem = displayedHistory[displayedIndex]
 
+  const listContent = history.length === 0
+    ? (
+        <Box paddingY={1}>
+          <Text color={COLORS.muted} italic>
+            No requests recorded yet. Press Esc to exit.
+          </Text>
+        </Box>
+      )
+    : (
+        <Box flexDirection="column" marginBottom={1}>
+          {displayedHistory.map((item, index) => (
+            <HistoryRow
+              isSelected={index === displayedIndex}
+              item={item}
+              key={`${item.timestamp}-${item.system_prompt.substring(0, 10)}`}
+            />
+          ))}
+        </Box>
+      )
+
+  const detailContent = isDetailExpanded && selectedItem != null
+    ? <DetailsView item={selectedItem} />
+    : null
+
   return (
     <Box flexDirection="column" marginTop={1}>
       <Box
@@ -174,33 +198,9 @@ export const DebugHistoryPanel = ({ history, onClose }: DebugHistoryPanelProps) 
           </Text>
         </Box>
 
-        {history.length === 0
-          ? (
-              <Box paddingY={1}>
-                <Text color={COLORS.muted} italic>
-                  No requests recorded yet. Press Esc to exit.
-                </Text>
-              </Box>
-            )
-          : (
-              <Box flexDirection="column" marginBottom={1}>
-                {displayedHistory.map((item, index) => (
-                  <HistoryRow
-                    isSelected={index === displayedIndex}
-                    item={item}
-                    key={`${item.timestamp}-${item.system_prompt.substring(0, 10)}`}
-                  />
-                ))}
-              </Box>
-            )}
+        {listContent}
 
-        {isDetailExpanded && selectedItem != null
-          ? (
-              <DetailsView
-                item={selectedItem}
-              />
-            )
-          : null}
+        {detailContent}
       </Box>
 
       <Box marginTop={0} paddingX={1}>

@@ -1,0 +1,6 @@
+{
+  "extends": "@moeru/tsconfig",
+  "compilerOptions": {
+    "noEmit": true
+  }
+}
