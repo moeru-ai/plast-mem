@@ -10,6 +10,7 @@ words:
   - direnv
   - dotenv
   - fsrs
+  - graphiti
   - haru
   - hnsw
   - iden

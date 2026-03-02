@@ -58,6 +58,12 @@ The search returns the most relevant memories from both episodic and semantic la
 
 We have not yet released version 0.1.0 because the core functionality is incomplete. However, you are welcome to join us in developing it! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
+### Why not use a graph database?
+
+While introducing graph structures can be beneficial, it also dramatically increases complexity. Plast Mem is written in Rust, which makes it difficult to easily reuse solutions like Graphiti.
+
+Overall, I think the convenience of self-hosting is more important.
+
 ### Is it related to Project AIRI's Alaya?
 
 No, but I might draw inspiration from some of it - or I might not.
