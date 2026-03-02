@@ -124,7 +124,7 @@ impl SemanticMemory {
         RETRIEVAL_CANDIDATE_LIMIT.into(),
         query_embedding.into(),
         limit.into(),
-        category.map(|s| s.to_owned()).into(),
+        category.map(std::borrow::ToOwned::to_owned).into(),
       ],
     );
 

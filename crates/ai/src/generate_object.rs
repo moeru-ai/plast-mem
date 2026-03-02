@@ -41,7 +41,7 @@ use serde::de::DeserializeOwned;
 ///     None,
 /// ).await?;
 /// ```
-/// Recursively fix a JSON schema for OpenAI strict mode:
+/// Recursively fix a JSON schema for `OpenAI` strict mode:
 /// - additionalProperties: false on all objects
 /// - required must include all property keys
 fn fix_schema_for_strict(schema: &mut serde_json::Value) {
@@ -69,13 +69,13 @@ fn fix_schema_for_strict(schema: &mut serde_json::Value) {
   if let Some(any_of) = obj.get("anyOf").and_then(|v| v.as_array()).cloned() {
     let non_null: Vec<&serde_json::Value> =
       any_of.iter().filter(|v| v.get("type").and_then(|t| t.as_str()) != Some("null")).collect();
-    if non_null.len() == 1 {
-      if let Some(inner_map) = non_null[0].as_object().cloned() {
-        obj.clear();
-        obj.extend(inner_map);
-        fix_schema_for_strict(schema);
-        return;
-      }
+    if non_null.len() == 1
+      && let Some(inner_map) = non_null[0].as_object().cloned()
+    {
+      obj.clear();
+      obj.extend(inner_map);
+      fix_schema_for_strict(schema);
+      return;
     }
   }
 

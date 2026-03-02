@@ -46,11 +46,11 @@ enum SurpriseLevel {
 }
 
 impl SurpriseLevel {
-  fn to_signal(&self) -> f32 {
+  const fn to_signal(&self) -> f32 {
     match self {
-      SurpriseLevel::Low => 0.2,
-      SurpriseLevel::High => 0.6,
-      SurpriseLevel::ExtremelyHigh => 0.9,
+      Self::Low => 0.2,
+      Self::High => 0.6,
+      Self::ExtremelyHigh => 0.9,
     }
   }
 }
@@ -143,14 +143,16 @@ async fn batch_segment(
 ) -> Result<Vec<BatchSegment>, AppError> {
   let formatted = format_messages(messages);
 
-  let user_content = match prev_episode_summary {
-    Some(summary) => format!(
-      "Previous episode: {summary}\n\
-       Use this as the reference point for the first segment's surprise_level.\n\n\
-       Messages to segment:\n{formatted}"
-    ),
-    None => format!("Messages to segment:\n{formatted}"),
-  };
+  let user_content = prev_episode_summary.map_or_else(
+    || format!("Messages to segment:\n{formatted}"),
+    |summary| {
+      format!(
+        "Previous episode: {summary}\n\
+         Use this as the reference point for the first segment's surprise_level.\n\n\
+         Messages to segment:\n{formatted}"
+      )
+    },
+  );
 
   let system = ChatCompletionRequestSystemMessage::from(SEGMENTATION_SYSTEM_PROMPT.trim());
   let user = ChatCompletionRequestUserMessage::from(user_content);
@@ -193,16 +195,16 @@ async fn batch_segment(
     });
   }
 
-  if processed_up_to < batch_len {
-    if let Some(last) = resolved.last_mut() {
-      last
-        .messages
-        .extend_from_slice(&messages[processed_up_to..]);
-      tracing::warn!(
-        remaining = batch_len - processed_up_to,
-        "LLM under-counted messages; absorbed into last segment"
-      );
-    }
+  if processed_up_to < batch_len
+    && let Some(last) = resolved.last_mut()
+  {
+    last
+      .messages
+      .extend_from_slice(&messages[processed_up_to..]);
+    tracing::warn!(
+      remaining = batch_len - processed_up_to,
+      "LLM under-counted messages; absorbed into last segment"
+    );
   }
 
   if resolved.is_empty() {
@@ -314,6 +316,12 @@ async fn create_episodes_batch(
 // Job processing
 // ──────────────────────────────────────────────────
 
+/// Process event segmentation job.
+///
+/// # Panics
+///
+/// Panics if `to_drain` is empty when accessing the last element. This should never happen
+/// because `to_drain` is created by slicing `segments` and is guaranteed to be non-empty.
 pub async fn process_event_segmentation(
   job: EventSegmentationJob,
   db: Data<DatabaseConnection>,
@@ -322,7 +330,7 @@ pub async fn process_event_segmentation(
 ) -> Result<(), AppError> {
   let db = &*db;
   let conversation_id = job.conversation_id;
-  let fence_count = job.fence_count as usize;
+  let fence_count = usize::try_from(job.fence_count).unwrap_or(0);
   let force_process = job.force_process;
 
   let current_messages = MessageQueue::get(conversation_id, db).await?.messages;
@@ -351,16 +359,15 @@ pub async fn process_event_segmentation(
   }
 
   // Determine which segments to drain and the summary for the next iteration
-  let (drain_segments, new_prev_summary): (&[BatchSegment], Option<String>) = match segments.len() {
-    1 => {
+  let (drain_segments, new_prev_summary): (&[BatchSegment], Option<String>) =
+    if segments.len() == 1 {
       tracing::info!(
         conversation_id = %conversation_id,
         messages = fence_count,
         "Force processing as single episode (reached max window)"
       );
       (&segments[..], None)
-    }
-    _ => {
+    } else {
       let to_drain = &segments[..segments.len() - 1];
       let last_summary = Some(to_drain.last().expect("non-empty").summary.clone());
       tracing::info!(
@@ -370,8 +377,7 @@ pub async fn process_event_segmentation(
         "Batch segmentation complete"
       );
       (to_drain, last_summary)
-    }
-  };
+    };
 
   // Calculate total messages to drain
   let drain_count: usize = drain_segments.iter().map(|s| s.messages.len()).sum();
