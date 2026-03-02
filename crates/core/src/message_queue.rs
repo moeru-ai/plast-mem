@@ -187,7 +187,7 @@ impl MessageQueue {
       Utc::now() - first.timestamp > TimeDelta::hours(SOFT_TIME_TRIGGER_HOURS)
     });
 
-    if !count_trigger && !time_trigger && !force_trigger {
+    if !count_trigger && !time_trigger {
       return Ok(None);
     }
 
