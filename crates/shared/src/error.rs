@@ -47,12 +47,14 @@ impl AppError {
   }
 
   /// Get the captured span trace
-  pub fn span_trace(&self) -> &SpanTrace {
+  #[must_use]
+  pub const fn span_trace(&self) -> &SpanTrace {
     &self.span_trace
   }
 
   /// Get the source location where the error originated
-  pub fn location(&self) -> &'static Location<'static> {
+  #[must_use]
+  pub const fn location(&self) -> &'static Location<'static> {
     self.location
   }
 }

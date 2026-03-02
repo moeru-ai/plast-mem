@@ -165,17 +165,17 @@ impl MessageQueue {
     trigger_count: i32,
     db: &DatabaseConnection,
   ) -> Result<Option<SegmentationCheck>, AppError> {
-    let model = MessageQueue::get_or_create_model(id, db).await?;
+    let model = Self::get_or_create_model(id, db).await?;
 
     if model.in_progress_fence.is_some() {
-      let cleared = MessageQueue::clear_stale_fence(id, FENCE_TTL_MINUTES, db).await?;
+      let cleared = Self::clear_stale_fence(id, FENCE_TTL_MINUTES, db).await?;
       if !cleared {
         tracing::debug!(conversation_id = %id, "Segmentation skipped: job in progress");
         return Ok(None);
       }
     }
 
-    let trigger_count_usize = trigger_count as usize;
+    let trigger_count_usize = usize::try_from(trigger_count).unwrap_or(0);
     if trigger_count_usize < MIN_MESSAGES {
       return Ok(None);
     }
@@ -191,7 +191,7 @@ impl MessageQueue {
       return Ok(None);
     }
 
-    if !MessageQueue::try_set_fence(id, trigger_count, db).await? {
+    if !Self::try_set_fence(id, trigger_count, db).await? {
       return Ok(None);
     }
 
