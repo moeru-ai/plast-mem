@@ -2,7 +2,7 @@ import type { DialogTurn, LoCoMoSample } from './types'
 
 import process from 'node:process'
 
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
 
 import { addMessage } from 'plastmem'
 import { v7 as uuidv7 } from 'uuid'
@@ -111,9 +111,12 @@ export const ingestAll = async (
 }
 
 export const loadConversationIds = (path: string): Record<string, string> => {
-  if (!existsSync(path))
+  try {
+    return JSON.parse(readFileSync(path, 'utf-8')) as Record<string, string>
+  }
+  catch {
     return {}
-  return JSON.parse(readFileSync(path, 'utf-8')) as Record<string, string>
+  }
 }
 
 export const saveConversationIds = (path: string, ids: Record<string, string>): void => {

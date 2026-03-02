@@ -52,7 +52,7 @@ const parseArgs = (): Args => {
 const main = async () => {
   // Load root .env before reading env vars
   try {
-    process.loadEnvFile(resolve(fileURLToPath(import.meta.url), '../../../../.env'))
+    process.loadEnvFile(resolve(__dirname, '../../../.env'))
   }
   catch { }
 
