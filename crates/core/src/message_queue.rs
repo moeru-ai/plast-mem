@@ -274,10 +274,7 @@ impl MessageQueue {
   }
 
   /// Clear fence without processing (used when segmentation is deferred).
-  pub async fn clear_fence(
-    id: Uuid,
-    db: &DatabaseConnection,
-  ) -> Result<(), AppError> {
+  pub async fn clear_fence(id: Uuid, db: &DatabaseConnection) -> Result<(), AppError> {
     message_queue::Entity::update(message_queue::ActiveModel {
       id: Set(id),
       in_progress_fence: Set(None),

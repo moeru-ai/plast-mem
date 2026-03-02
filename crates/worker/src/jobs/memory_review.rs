@@ -188,11 +188,16 @@ pub async fn process_memory_review(
 
     let last_reviewed_at = model.last_reviewed_at.with_timezone(&Utc);
     let days_elapsed = u32::try_from(
-      (job.reviewed_at - last_reviewed_at).num_days().clamp(0, 365 * 100),
+      (job.reviewed_at - last_reviewed_at)
+        .num_days()
+        .clamp(0, 365 * 100),
     )
     .unwrap_or(0);
 
-    let current_state = MemoryState { stability: model.stability, difficulty: model.difficulty };
+    let current_state = MemoryState {
+      stability: model.stability,
+      difficulty: model.difficulty,
+    };
     let next_states = fsrs.next_states(Some(current_state), DESIRED_RETENTION, days_elapsed)?;
 
     let rating = Rating::parse(&rating_output.rating);

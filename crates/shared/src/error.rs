@@ -1,7 +1,4 @@
-use std::{
-  fmt::Display,
-  panic::Location,
-};
+use std::{fmt::Display, panic::Location};
 
 use axum::{
   http::StatusCode,

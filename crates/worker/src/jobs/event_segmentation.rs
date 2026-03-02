@@ -359,25 +359,25 @@ pub async fn process_event_segmentation(
   }
 
   // Determine which segments to drain and the summary for the next iteration
-  let (drain_segments, new_prev_summary): (&[BatchSegment], Option<String>) =
-    if segments.len() == 1 {
-      tracing::info!(
-        conversation_id = %conversation_id,
-        messages = fence_count,
-        "Force processing as single episode (reached max window)"
-      );
-      (&segments[..], None)
-    } else {
-      let to_drain = &segments[..segments.len() - 1];
-      let last_summary = Some(to_drain.last().expect("non-empty").summary.clone());
-      tracing::info!(
-        conversation_id = %conversation_id,
-        total_segments = segments.len(),
-        draining = to_drain.len(),
-        "Batch segmentation complete"
-      );
-      (to_drain, last_summary)
-    };
+  let (drain_segments, new_prev_summary): (&[BatchSegment], Option<String>) = if segments.len() == 1
+  {
+    tracing::info!(
+      conversation_id = %conversation_id,
+      messages = fence_count,
+      "Force processing as single episode (reached max window)"
+    );
+    (&segments[..], None)
+  } else {
+    let to_drain = &segments[..segments.len() - 1];
+    let last_summary = Some(to_drain.last().expect("non-empty").summary.clone());
+    tracing::info!(
+      conversation_id = %conversation_id,
+      total_segments = segments.len(),
+      draining = to_drain.len(),
+      "Batch segmentation complete"
+    );
+    (to_drain, last_summary)
+  };
 
   // Calculate total messages to drain
   let drain_count: usize = drain_segments.iter().map(|s| s.messages.len()).sum();

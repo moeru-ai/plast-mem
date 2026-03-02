@@ -5,8 +5,7 @@ use plastmem_entities::episodic_memory;
 use plastmem_shared::{AppError, Message};
 
 use sea_orm::{
-  ConnectionTrait, DatabaseConnection, DbBackend, FromQueryResult, Statement,
-  prelude::PgVector,
+  ConnectionTrait, DatabaseConnection, DbBackend, FromQueryResult, Statement, prelude::PgVector,
 };
 use serde::Serialize;
 use utoipa::ToSchema;
@@ -149,7 +148,10 @@ impl EpisodicMemory {
 
       let days_elapsed =
         u32::try_from((now - mem.last_reviewed_at).num_days().clamp(0, 365 * 100)).unwrap_or(0);
-      let memory_state = MemoryState { stability: mem.stability, difficulty: mem.difficulty };
+      let memory_state = MemoryState {
+        stability: mem.stability,
+        difficulty: mem.difficulty,
+      };
       let retrievability =
         fsrs.current_retrievability(memory_state, days_elapsed, FSRS6_DEFAULT_DECAY);
 

@@ -11,11 +11,19 @@ use crate::utils::AppState;
 
 // --- Shared ---
 
-const fn default_episodic_limit() -> u64 { 5 }
-const fn default_semantic_limit() -> u64 { 20 }
+const fn default_episodic_limit() -> u64 {
+  5
+}
+const fn default_semantic_limit() -> u64 {
+  20
+}
 
 const fn sanitize_limit(value: u64) -> i64 {
-  if value > 0 && value <= 1000 { value.cast_signed() } else { 100 }
+  if value > 0 && value <= 1000 {
+    value.cast_signed()
+  } else {
+    100
+  }
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -165,8 +173,14 @@ pub async fn retrieve_memory_raw(
   )
   .await?;
   Ok(Json(RetrieveMemoryRawResult {
-    semantic: semantic.into_iter().map(|(memory, score)| SemanticMemoryResult { memory, score }).collect(),
-    episodic: episodic.into_iter().map(|(memory, score)| EpisodicMemoryResult { memory, score }).collect(),
+    semantic: semantic
+      .into_iter()
+      .map(|(memory, score)| SemanticMemoryResult { memory, score })
+      .collect(),
+    episodic: episodic
+      .into_iter()
+      .map(|(memory, score)| EpisodicMemoryResult { memory, score })
+      .collect(),
   }))
 }
 

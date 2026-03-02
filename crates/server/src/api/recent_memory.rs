@@ -101,8 +101,16 @@ pub async fn recent_memory(
   let _ = writeln!(out, "## Recent Memories\n");
 
   for mem in memories {
-    let key_moment = if mem.surprise >= 0.7 { " (key moment)" } else { "" };
-    let header = if mem.title.is_empty() { "Memory".to_string() } else { mem.title.clone() };
+    let key_moment = if mem.surprise >= 0.7 {
+      " (key moment)"
+    } else {
+      ""
+    };
+    let header = if mem.title.is_empty() {
+      "Memory".to_string()
+    } else {
+      mem.title.clone()
+    };
     let time_str = HumanTime::from(now.signed_duration_since(mem.created_at));
 
     let _ = writeln!(out, "### {header}{key_moment}");

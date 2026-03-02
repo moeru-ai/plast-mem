@@ -155,12 +155,20 @@ async fn append_source_episodic_ids<C: ConnectionTrait>(
     return Ok(());
   }
 
-  let uuid_list = ids_to_add.iter().map(|id| format!("'{id}'")).collect::<Vec<_>>().join(",");
+  let uuid_list = ids_to_add
+    .iter()
+    .map(|id| format!("'{id}'"))
+    .collect::<Vec<_>>()
+    .join(",");
   let sql = format!(
     "UPDATE semantic_memory SET source_episodic_ids = source_episodic_ids || ARRAY[{uuid_list}]::uuid[] WHERE id = $1"
   );
-  db.execute_raw(Statement::from_sql_and_values(DbBackend::Postgres, &sql, [fact_id.into()]))
-    .await?;
+  db.execute_raw(Statement::from_sql_and_values(
+    DbBackend::Postgres,
+    &sql,
+    [fact_id.into()],
+  ))
+  .await?;
 
   Ok(())
 }
@@ -248,7 +256,10 @@ async fn process_fact_action<C: ConnectionTrait>(
 
     FactAction::Reinforce => {
       if let Some(existing_id) = validated_existing_id {
-        if let Some(existing) = semantic_memory::Entity::find_by_id(existing_id).one(db).await? {
+        if let Some(existing) = semantic_memory::Entity::find_by_id(existing_id)
+          .one(db)
+          .await?
+        {
           append_source_episodic_ids(existing.id, &existing.source_episodic_ids, episode_ids, db)
             .await?;
           tracing::debug!(existing_id = %existing_id, fact = %fact.fact, "Reinforced existing semantic fact");
@@ -386,8 +397,15 @@ pub async fn process_semantic_consolidation(
 
   let txn = db.begin().await?;
   for (fact, embedding) in output.facts.iter().zip(embeddings.into_iter()) {
-    process_fact_action(fact, embedding, &episode_ids, &valid_fact_ids, conversation_id, &txn)
-      .await?;
+    process_fact_action(
+      fact,
+      embedding,
+      &episode_ids,
+      &valid_fact_ids,
+      conversation_id,
+      &txn,
+    )
+    .await?;
   }
   mark_consolidated(&episode_ids, &txn).await?;
   txn.commit().await?;
