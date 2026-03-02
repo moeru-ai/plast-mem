@@ -284,6 +284,34 @@ async fn create_episode(
   Ok(Some(CreatedEpisode { surprise }))
 }
 
+async fn create_episodes_batch(
+  conversation_id: Uuid,
+  segments: &[BatchSegment],
+  db: &DatabaseConnection,
+) -> Result<Vec<CreatedEpisode>, AppError> {
+  let futures: Vec<_> = segments
+    .iter()
+    .map(|seg| {
+      create_episode(
+        conversation_id,
+        &seg.messages,
+        &seg.title,
+        &seg.summary,
+        seg.surprise_level.to_signal(),
+        db,
+      )
+    })
+    .collect();
+
+  let episodes: Vec<CreatedEpisode> = try_join_all(futures)
+    .await?
+    .into_iter()
+    .flatten()
+    .collect();
+
+  Ok(episodes)
+}
+
 // ──────────────────────────────────────────────────
 // Job processing
 // ──────────────────────────────────────────────────
@@ -295,16 +323,13 @@ pub async fn process_event_segmentation(
   semantic_storage: Data<PostgresStorage<SemanticConsolidationJob>>,
 ) -> Result<(), AppError> {
   let db = &*db;
-  let review_storage = &*review_storage;
-  let semantic_storage = &*semantic_storage;
   let conversation_id = job.conversation_id;
   let fence_count = job.fence_count as usize;
 
   let current_messages = MessageQueue::get(conversation_id, db).await?.messages;
-  let window_doubled = MessageQueue::get_or_create_model(conversation_id, db)
-    .await?
-    .window_doubled;
+  let queue = MessageQueue::get_or_create_model(conversation_id, db).await?;
 
+  // Stale job check
   if current_messages.len() < fence_count {
     tracing::debug!(
       conversation_id = %conversation_id,
@@ -317,94 +342,56 @@ pub async fn process_event_segmentation(
   }
 
   let batch_messages = &current_messages[..fence_count];
-
-  tracing::debug!(
-    conversation_id = %conversation_id,
-    fence_count,
-    window_doubled,
-    "Processing batch segmentation"
-  );
-
   let prev_summary = MessageQueue::get_prev_episode_summary(conversation_id, db).await?;
   let segments = batch_segment(batch_messages, prev_summary.as_deref()).await?;
 
-  match segments.len() {
-    // ── No split ──────────────────────────────────────────────────────────
-    1 if !window_doubled => {
-      tracing::info!(conversation_id = %conversation_id, "No split detected — doubling window");
-      MessageQueue::set_doubled_and_clear_fence(conversation_id, db).await?;
-    }
+  // Case 1: No split detected and window not doubled — double and retry
+  if segments.len() == 1 && !queue.window_doubled {
+    tracing::info!(conversation_id = %conversation_id, "No split detected — doubling window");
+    MessageQueue::set_doubled_and_clear_fence(conversation_id, db).await?;
+    return Ok(());
+  }
 
-    // ── No split after doubling: force drain ──────────────────────────────
+  // Cases 2 & 3: Process segments (single after doubling, or multiple)
+  // Determine which segments to drain and the summary for the next iteration
+  let (drain_segments, new_prev_summary): (&[BatchSegment], Option<String>) = match segments.len() {
     1 => {
       tracing::info!(
         conversation_id = %conversation_id,
         messages = fence_count,
         "No split after doubled window — force draining as single episode"
       );
-      let seg = &segments[0];
-
-      MessageQueue::drain(conversation_id, fence_count, db).await?;
-      MessageQueue::finalize_job(conversation_id, None, db).await?;
-
-      enqueue_pending_reviews(conversation_id, batch_messages, db, review_storage).await?;
-
-      if let Some(episode) = create_episode(
-        conversation_id,
-        &seg.messages,
-        &seg.title,
-        &seg.summary,
-        seg.surprise_level.to_signal(),
-        db,
-      )
-      .await?
-      {
-        enqueue_semantic_consolidation(conversation_id, episode, db, semantic_storage).await?;
-      }
+      (&segments, None)
     }
-
-    // ── Multiple segments: drain all but last ─────────────────────────────
     _ => {
-      let drain_segments = &segments[..segments.len() - 1];
-
+      let to_drain = &segments[..segments.len() - 1];
+      let last_summary = Some(to_drain.last().expect("non-empty").summary.clone());
       tracing::info!(
         conversation_id = %conversation_id,
         total_segments = segments.len(),
-        draining = drain_segments.len(),
+        draining = to_drain.len(),
         "Batch segmentation complete"
       );
-
-      let drain_count: usize = drain_segments.iter().map(|s| s.messages.len()).sum();
-      let new_prev_summary = Some(drain_segments.last().expect("non-empty").summary.clone());
-      MessageQueue::drain(conversation_id, drain_count, db).await?;
-      MessageQueue::finalize_job(conversation_id, new_prev_summary, db).await?;
-
-      enqueue_pending_reviews(conversation_id, batch_messages, db, review_storage).await?;
-
-      let episode_futures: Vec<_> = drain_segments
-        .iter()
-        .map(|seg| {
-          create_episode(
-            conversation_id,
-            &seg.messages,
-            &seg.title,
-            &seg.summary,
-            seg.surprise_level.to_signal(),
-            db,
-          )
-        })
-        .collect();
-
-      let created_episodes: Vec<CreatedEpisode> = try_join_all(episode_futures)
-        .await?
-        .into_iter()
-        .flatten()
-        .collect();
-
-      for episode in created_episodes {
-        enqueue_semantic_consolidation(conversation_id, episode, db, semantic_storage).await?;
-      }
+      (to_drain, last_summary)
     }
+  };
+
+  // Calculate total messages to drain
+  let drain_count: usize = drain_segments.iter().map(|s| s.messages.len()).sum();
+
+  // Create episodes and enqueue post-processing
+  let episodes = create_episodes_batch(conversation_id, drain_segments, db).await?;
+
+  // Enqueue pending reviews before draining
+  enqueue_pending_reviews(conversation_id, batch_messages, db, &review_storage).await?;
+
+  // Drain messages and finalize
+  MessageQueue::drain(conversation_id, drain_count, db).await?;
+  MessageQueue::finalize_job(conversation_id, new_prev_summary, db).await?;
+
+  // Enqueue semantic consolidation jobs
+  for episode in episodes {
+    enqueue_semantic_consolidation(conversation_id, episode, db, &semantic_storage).await?;
   }
 
   Ok(())
