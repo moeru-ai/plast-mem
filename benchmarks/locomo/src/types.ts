@@ -22,7 +22,7 @@ export interface BenchmarkStats {
 
 export interface DialogTurn {
   blip_caption?: string
-  clean_text: string
+  text: string
   compressed_text?: string
   dia_id: string // e.g. "S1:D0"
   img_file?: string

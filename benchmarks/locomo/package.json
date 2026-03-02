@@ -5,7 +5,7 @@
   "private": true,
   "packageManager": "pnpm@10.30.0",
   "scripts": {
-    "run": "tsx src/cli.ts"
+    "start": "tsx src/cli.ts"
   },
   "dependencies": {
     "@xsai/generate-text": "^0.4.3",

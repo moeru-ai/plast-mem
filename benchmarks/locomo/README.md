@@ -22,19 +22,19 @@ OPENAI_CHAT_MODEL=qwen3:8b
 
 ```bash
 # full run: ingest → wait → evaluate
-pnpm --filter @plastmem/benchmark-locomo run
+pnpm --filter @plastmem/benchmark-locomo start
 
 # skip ingestion (reuse previously ingested conversations)
-pnpm --filter @plastmem/benchmark-locomo run -- --skip-ingest
+pnpm --filter @plastmem/benchmark-locomo start -- --skip-ingest
 
 # skip wait phase (conversations already processed)
-pnpm --filter @plastmem/benchmark-locomo run -- --skip-ingest --skip-wait
+pnpm --filter @plastmem/benchmark-locomo start -- --skip-ingest --skip-wait
 
 # run specific samples only
-pnpm --filter @plastmem/benchmark-locomo run -- --sample-ids sample_1,sample_2
+pnpm --filter @plastmem/benchmark-locomo start -- --sample-ids sample_1,sample_2
 
 # custom input/output paths
-pnpm --filter @plastmem/benchmark-locomo run -- \
+pnpm --filter @plastmem/benchmark-locomo start -- \
   --data-file ./data/locomo10.json \
   --out-file ./results/run-1.json
 ```

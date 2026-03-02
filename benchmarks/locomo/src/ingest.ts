@@ -57,7 +57,7 @@ const ingestSample = async (
 
   for (const session of sessions) {
     for (const turn of session.turns) {
-      if (!turn.clean_text.trim()) {
+      if (!turn.text.trim()) {
         done++
         continue
       }
@@ -68,7 +68,7 @@ const ingestSample = async (
         baseUrl,
         body: {
           conversation_id: conversationId,
-          message: { content: turn.clean_text, role },
+          message: { content: turn.text, role },
         },
       })
 
