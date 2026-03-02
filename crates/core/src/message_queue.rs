@@ -4,10 +4,8 @@ use plastmem_entities::message_queue;
 use plastmem_shared::{AppError, Message};
 
 use sea_orm::{
-  ColumnTrait, ConnectionTrait, DatabaseConnection, DbBackend, EntityTrait, FromQueryResult,
-  QueryFilter, QuerySelect, Set, Statement, TransactionTrait,
-  prelude::Expr,
-  sea_query::OnConflict,
+  ConnectionTrait, DatabaseConnection, DbBackend, EntityTrait, FromQueryResult, QuerySelect, Set,
+  Statement, TransactionTrait, sea_query::OnConflict,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -263,13 +261,15 @@ impl MessageQueue {
     prev_episode_summary: Option<String>,
     db: &DatabaseConnection,
   ) -> Result<(), AppError> {
-    message_queue::Entity::update_many()
-      .col_expr(message_queue::Column::InProgressFence, Expr::value(Option::<i32>::None))
-      .col_expr(message_queue::Column::InProgressSince, Expr::value(Option::<chrono::DateTime<chrono::FixedOffset>>::None))
-      .col_expr(message_queue::Column::PrevEpisodeSummary, Expr::value(prev_episode_summary))
-      .filter(message_queue::Column::Id.eq(id))
-      .exec(db)
-      .await?;
+    message_queue::Entity::update(message_queue::ActiveModel {
+      id: Set(id),
+      in_progress_fence: Set(None),
+      in_progress_since: Set(None),
+      prev_episode_summary: Set(prev_episode_summary),
+      ..Default::default()
+    })
+    .exec(db)
+    .await?;
     Ok(())
   }
 
@@ -278,12 +278,14 @@ impl MessageQueue {
     id: Uuid,
     db: &DatabaseConnection,
   ) -> Result<(), AppError> {
-    message_queue::Entity::update_many()
-      .col_expr(message_queue::Column::InProgressFence, Expr::value(Option::<i32>::None))
-      .col_expr(message_queue::Column::InProgressSince, Expr::value(Option::<chrono::DateTime<chrono::FixedOffset>>::None))
-      .filter(message_queue::Column::Id.eq(id))
-      .exec(db)
-      .await?;
+    message_queue::Entity::update(message_queue::ActiveModel {
+      id: Set(id),
+      in_progress_fence: Set(None),
+      in_progress_since: Set(None),
+      ..Default::default()
+    })
+    .exec(db)
+    .await?;
     Ok(())
   }
 
@@ -345,14 +347,13 @@ impl MessageQueue {
       .filter(|v: &Vec<PendingReview>| !v.is_empty());
 
     if reviews.is_some() {
-      message_queue::Entity::update_many()
-        .col_expr(
-          message_queue::Column::PendingReviews,
-          Expr::value(Option::<serde_json::Value>::None),
-        )
-        .filter(message_queue::Column::Id.eq(id))
-        .exec(&txn)
-        .await?;
+      message_queue::Entity::update(message_queue::ActiveModel {
+        id: Set(id),
+        pending_reviews: Set(None),
+        ..Default::default()
+      })
+      .exec(&txn)
+      .await?;
     }
 
     txn.commit().await?;

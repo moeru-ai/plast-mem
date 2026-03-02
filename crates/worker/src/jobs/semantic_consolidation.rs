@@ -14,7 +14,7 @@ use plastmem_shared::AppError;
 use schemars::JsonSchema;
 use sea_orm::{
   ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, DbBackend, EntityTrait,
-  FromQueryResult, IntoActiveModel, QueryFilter, QueryOrder, Statement, TransactionTrait,
+  FromQueryResult, IntoActiveModel, QueryFilter, QueryOrder, Set, Statement, TransactionTrait,
   prelude::{Expr, PgVector},
   sea_query::Value as SeaValue,
 };
@@ -166,11 +166,13 @@ async fn append_source_episodic_ids<C: ConnectionTrait>(
 }
 
 async fn invalidate_fact<C: ConnectionTrait>(fact_id: Uuid, db: &C) -> Result<(), AppError> {
-  semantic_memory::Entity::update_many()
-    .col_expr(semantic_memory::Column::InvalidAt, Expr::value(Utc::now()))
-    .filter(semantic_memory::Column::Id.eq(fact_id))
-    .exec(db)
-    .await?;
+  semantic_memory::Entity::update(semantic_memory::ActiveModel {
+    id: Set(fact_id),
+    invalid_at: Set(Some(Utc::now().into())),
+    ..Default::default()
+  })
+  .exec(db)
+  .await?;
   Ok(())
 }
 
