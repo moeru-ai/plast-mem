@@ -43,6 +43,8 @@ pub struct PendingReview {
 #[derive(Debug, Clone)]
 pub struct SegmentationCheck {
   pub fence_count: i32,
+  /// Whether processing is forced due to reaching max window.
+  pub force_process: bool,
 }
 
 #[derive(Debug, FromQueryResult)]
@@ -80,7 +82,6 @@ impl MessageQueue {
       pending_reviews: Set(None),
       in_progress_fence: Set(None),
       in_progress_since: Set(None),
-      window_doubled: Set(false),
       prev_episode_summary: Set(None),
     };
 
@@ -179,14 +180,14 @@ impl MessageQueue {
       return Ok(None);
     }
 
-    let current_window = if model.window_doubled { WINDOW_MAX } else { WINDOW_BASE };
-    let count_trigger = trigger_count_usize >= current_window;
+    let count_trigger = trigger_count_usize >= WINDOW_BASE;
+    let force_trigger = trigger_count_usize >= WINDOW_MAX;
     let messages: Vec<plastmem_shared::Message> = serde_json::from_value(model.messages)?;
     let time_trigger = messages.first().is_some_and(|first| {
       Utc::now() - first.timestamp > TimeDelta::hours(SOFT_TIME_TRIGGER_HOURS)
     });
 
-    if !count_trigger && !time_trigger {
+    if !count_trigger && !time_trigger && !force_trigger {
       return Ok(None);
     }
 
@@ -199,11 +200,14 @@ impl MessageQueue {
       trigger_count,
       count_trigger,
       time_trigger,
-      window_doubled = model.window_doubled,
+      force_trigger,
       "Segmentation triggered"
     );
 
-    Ok(Some(SegmentationCheck { fence_count: trigger_count }))
+    Ok(Some(SegmentationCheck {
+      fence_count: trigger_count,
+      force_process: force_trigger,
+    }))
   }
 
   // ──────────────────────────────────────────────────
@@ -262,7 +266,6 @@ impl MessageQueue {
     message_queue::Entity::update_many()
       .col_expr(message_queue::Column::InProgressFence, Expr::value(Option::<i32>::None))
       .col_expr(message_queue::Column::InProgressSince, Expr::value(Option::<chrono::DateTime<chrono::FixedOffset>>::None))
-      .col_expr(message_queue::Column::WindowDoubled, Expr::value(false))
       .col_expr(message_queue::Column::PrevEpisodeSummary, Expr::value(prev_episode_summary))
       .filter(message_queue::Column::Id.eq(id))
       .exec(db)
@@ -270,14 +273,14 @@ impl MessageQueue {
     Ok(())
   }
 
-  pub async fn set_doubled_and_clear_fence(
+  /// Clear fence without processing (used when segmentation is deferred).
+  pub async fn clear_fence(
     id: Uuid,
     db: &DatabaseConnection,
   ) -> Result<(), AppError> {
     message_queue::Entity::update_many()
       .col_expr(message_queue::Column::InProgressFence, Expr::value(Option::<i32>::None))
       .col_expr(message_queue::Column::InProgressSince, Expr::value(Option::<chrono::DateTime<chrono::FixedOffset>>::None))
-      .col_expr(message_queue::Column::WindowDoubled, Expr::value(true))
       .filter(message_queue::Column::Id.eq(id))
       .exec(db)
       .await?;

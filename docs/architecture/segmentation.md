@@ -12,16 +12,16 @@ New Message → MessageQueue::push()
              RETURNING jsonb_array_length(messages) → trigger_count
                     ↓
              MessageQueue::check(trigger_count)
-                    ↓ (count trigger OR time trigger)
+                    ↓ (count trigger OR time trigger OR force trigger at max)
              try_set_fence (CAS) → EventSegmentationJob enqueued
                     ↓
              batch_segment(messages[0..fence_count])  ← single LLM call
                     ↓
-        ┌───────────┴────────────┐
-        │ 1 segment, not doubled │  → double window, clear fence
-        │ 1 segment, doubled     │  → drain + finalize, create 1 episode
-        │ N segments             │  → drain N-1, finalize, create N-1 episodes in parallel
-        └────────────────────────┘
+        ┌───────────┴─────────────────┐
+        │ 1 segment, not forced       │  → defer, clear fence (wait for more)
+        │ 1 segment, forced (at max)  │  → drain + finalize, create 1 episode
+        │ N segments                  │  → drain N-1, finalize, create N-1 episodes in parallel
+        └─────────────────────────────┘
 ```
 
 ## Trigger Conditions
@@ -32,7 +32,8 @@ A segmentation job is triggered when **either** condition is met:
 
 | Condition | Threshold |
 | --------- | --------- |
-| Count trigger | `trigger_count >= WINDOW_BASE` (20) or `WINDOW_MAX` (40) if doubled |
+| Count trigger | `trigger_count >= WINDOW_BASE` (20) |
+| Force trigger | `trigger_count >= WINDOW_MAX` (40) — always process |
 | Time trigger | Oldest message in queue is > 2 hours old |
 | Minimum floor | Always skip if `trigger_count < MIN_MESSAGES` (5) |
 
@@ -85,12 +86,14 @@ boosted_stability = initial_stability * (1.0 + surprise * SURPRISE_BOOST_FACTOR)
 
 `extremely_high` (≥ 0.85) also triggers immediate semantic consolidation (flashbulb memory path).
 
-## Window Doubling
+## Max Window (Force Processing)
 
-If the LLM returns exactly 1 segment (no split detected):
+When the queue reaches `WINDOW_MAX` (40 messages), segmentation is forced regardless of whether the LLM detects a boundary:
 
-- **First time**: set `window_doubled = true`, clear fence, wait for more messages (window grows to 40)
-- **After doubling**: force drain all messages as a single episode
+- **Before max**: If LLM returns 1 segment, job defers and waits for more messages
+- **At max**: Always process all messages, creating at least 1 episode
+
+This prevents unbounded queue growth while maintaining quality for most cases.
 
 ## Drain Order (crash safety)
 

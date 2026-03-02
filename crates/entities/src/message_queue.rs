@@ -16,8 +16,6 @@ pub struct Model {
   pub in_progress_fence: Option<i32>,
   // When the fence was set (for TTL-based stale job recovery)
   pub in_progress_since: Option<DateTimeWithTimeZone>,
-  // Whether the window has been doubled after a no-split result
-  pub window_doubled: bool,
   // Summary of the last drained episode; reference for next batch's first segment surprise_level
   pub prev_episode_summary: Option<String>,
 }

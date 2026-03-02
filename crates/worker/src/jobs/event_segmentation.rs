@@ -29,6 +29,8 @@ pub struct EventSegmentationJob {
   pub conversation_id: Uuid,
   /// Number of messages in the queue when this job was triggered.
   pub fence_count: i32,
+  /// Whether processing is forced (reached max window).
+  pub force_process: bool,
 }
 
 // ──────────────────────────────────────────────────
@@ -325,9 +327,9 @@ pub async fn process_event_segmentation(
   let db = &*db;
   let conversation_id = job.conversation_id;
   let fence_count = job.fence_count as usize;
+  let force_process = job.force_process;
 
   let current_messages = MessageQueue::get(conversation_id, db).await?.messages;
-  let queue = MessageQueue::get_or_create_model(conversation_id, db).await?;
 
   // Stale job check
   if current_messages.len() < fence_count {
@@ -345,23 +347,22 @@ pub async fn process_event_segmentation(
   let prev_summary = MessageQueue::get_prev_episode_summary(conversation_id, db).await?;
   let segments = batch_segment(batch_messages, prev_summary.as_deref()).await?;
 
-  // Case 1: No split detected and window not doubled — double and retry
-  if segments.len() == 1 && !queue.window_doubled {
-    tracing::info!(conversation_id = %conversation_id, "No split detected — doubling window");
-    MessageQueue::set_doubled_and_clear_fence(conversation_id, db).await?;
+  // Single segment and not forced: defer processing and wait for more messages
+  if segments.len() == 1 && !force_process {
+    tracing::info!(conversation_id = %conversation_id, "No split detected — deferring for more messages");
+    MessageQueue::clear_fence(conversation_id, db).await?;
     return Ok(());
   }
 
-  // Cases 2 & 3: Process segments (single after doubling, or multiple)
   // Determine which segments to drain and the summary for the next iteration
   let (drain_segments, new_prev_summary): (&[BatchSegment], Option<String>) = match segments.len() {
     1 => {
       tracing::info!(
         conversation_id = %conversation_id,
         messages = fence_count,
-        "No split after doubled window — force draining as single episode"
+        "Force processing as single episode (reached max window)"
       );
-      (&segments, None)
+      (&segments[..], None)
     }
     _ => {
       let to_drain = &segments[..segments.len() - 1];

@@ -1,6 +1,6 @@
 use sea_orm_migration::{
   prelude::*,
-  schema::{boolean, integer, json_binary, text, timestamp_with_time_zone, uuid},
+  schema::{integer, json_binary, text, timestamp_with_time_zone, uuid},
 };
 
 #[derive(DeriveMigrationName)]
@@ -19,7 +19,6 @@ impl MigrationTrait for Migration {
           .col(json_binary(MessageQueue::PendingReviews).null())
           .col(integer(MessageQueue::InProgressFence).null())
           .col(timestamp_with_time_zone(MessageQueue::InProgressSince).null())
-          .col(boolean(MessageQueue::WindowDoubled).default(false).not_null())
           .col(text(MessageQueue::PrevEpisodeSummary).null())
           .to_owned(),
       )
@@ -41,6 +40,5 @@ pub enum MessageQueue {
   PendingReviews,
   InProgressFence,
   InProgressSince,
-  WindowDoubled,
   PrevEpisodeSummary,
 }

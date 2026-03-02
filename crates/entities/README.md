@@ -27,7 +27,7 @@ The `search_text` generated column exists in the DB (used for the BM25 index: `f
 
 Per-conversation message buffer and segmentation state.
 
-Key fields: `id`, `messages`, `pending_reviews`, `in_progress_fence`, `in_progress_since`, `window_doubled`, `prev_episode_summary`.
+Key fields: `id`, `messages`, `pending_reviews`, `in_progress_fence`, `in_progress_since`, `prev_episode_summary`.
 
 ## Updating Entities
 

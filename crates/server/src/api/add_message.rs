@@ -64,6 +64,7 @@ pub async fn add_message(
       .push(EventSegmentationJob {
         conversation_id: payload.conversation_id,
         fence_count: check.fence_count,
+        force_process: check.force_process,
       })
       .await?;
   }
