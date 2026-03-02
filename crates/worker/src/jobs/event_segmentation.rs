@@ -376,15 +376,15 @@ pub async fn process_event_segmentation(
   // Calculate total messages to drain
   let drain_count: usize = drain_segments.iter().map(|s| s.messages.len()).sum();
 
-  // Create episodes and enqueue post-processing
-  let episodes = create_episodes_batch(conversation_id, drain_segments, db).await?;
-
   // Enqueue pending reviews before draining
   enqueue_pending_reviews(conversation_id, batch_messages, db, &review_storage).await?;
 
-  // Drain messages and finalize
+  // Drain first (crash safety: if we crash after drain, messages are gone - acceptable loss)
   MessageQueue::drain(conversation_id, drain_count, db).await?;
   MessageQueue::finalize_job(conversation_id, new_prev_summary, db).await?;
+
+  // Then create episodes (if crash here, messages already gone - no duplicates on retry)
+  let episodes = create_episodes_batch(conversation_id, drain_segments, db).await?;
 
   // Enqueue semantic consolidation jobs
   for episode in episodes {
