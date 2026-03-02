@@ -88,7 +88,7 @@ struct SegmentItem {
   surprise_level: SurpriseLevel,
 }
 
-const SEGMENTATION_SYSTEM_PROMPT: &str = r#"\
+const SEGMENTATION_SYSTEM_PROMPT: &str = r#"
 Your task is to segment the conversation into continuous, non-overlapping blocks using a hybrid strategy.
 You must create a new segment boundary whenever there is a **Topic Shift** OR a **Surprise Shift**.
 
@@ -305,11 +305,7 @@ async fn create_episodes_batch(
     })
     .collect();
 
-  let episodes: Vec<CreatedEpisode> = try_join_all(futures)
-    .await?
-    .into_iter()
-    .flatten()
-    .collect();
+  let episodes: Vec<CreatedEpisode> = try_join_all(futures).await?.into_iter().flatten().collect();
 
   Ok(episodes)
 }
