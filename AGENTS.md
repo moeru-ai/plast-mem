@@ -11,6 +11,7 @@ When working on Plast Mem, follow this decision tree to navigate the codebase an
 ### Starting a Task
 
 **First, understand what type of change you're making:**
+
 - Is it a new feature? → Check docs/CHANGE_GUIDE.md for similar patterns
 - Is it a refactor? → Check docs/ARCHITECTURE.md for design principles
 - Is it a bug fix? → Read relevant crate README.md files
@@ -20,13 +21,15 @@ When working on Plast Mem, follow this decision tree to navigate the codebase an
 **Before making changes, trace the impact:**
 
 **Dependency flow pattern:**
-```
+
+```text
 API endpoint → Server handler → Core service → Entity/DB
      ↑              ↑              ↑
    HTTP           DTOs          Business Logic
 ```
 
 **Steps:**
+
 1. **Read the crate's README.md** to understand responsibilities
 2. **Check docs/ARCHITECTURE.md** for layer dependencies
 3. **Find all callers** with `grep -r "fn_name" crates/`
@@ -72,6 +75,7 @@ Load these additional context files when working on specific areas:
 - `docs/ARCHITECTURE.md` - System-wide architecture and design principles
 - `docs/ENVIRONMENT.md` - Environment variables and configuration
 - `docs/CHANGE_GUIDE.md` - Step-by-step guides for common changes
+- `docs/TYPESCRIPT.md` - TypeScript/ESLint conventions for examples/ and benchmarks/
 - `docs/architecture/fsrs.md` - FSRS algorithm, parameters, and memory scheduling
 - `docs/architecture/semantic_memory.md` - Semantic memory schema, consolidation pipeline, retrieval
 - `crates/core/README.md` - Core domain logic and memory operations
@@ -139,6 +143,10 @@ cargo test -p plastmem_core
 # Run with logging
 RUST_LOG=debug cargo run
 ```
+
+## TypeScript Conventions (examples/ and benchmarks/)
+
+See `docs/TYPESCRIPT.md` for ESLint rules, tsconfig setup, AI/LLM patterns, and common code patterns.
 
 ## Remember
 

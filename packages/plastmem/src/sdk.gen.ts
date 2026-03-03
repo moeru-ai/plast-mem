@@ -2,7 +2,7 @@
 
 import type { Client, Options as Options2, TDataShape } from './client';
 import { client } from './client.gen';
-import type { AddMessageData, AddMessageErrors, AddMessageResponses, ContextPreRetrieveData, ContextPreRetrieveErrors, ContextPreRetrieveResponses, RecentMemoryData, RecentMemoryRawData, RecentMemoryRawResponses, RecentMemoryResponses, RetrieveMemoryData, RetrieveMemoryErrors, RetrieveMemoryRawData, RetrieveMemoryRawErrors, RetrieveMemoryRawResponses, RetrieveMemoryResponses } from './types.gen';
+import type { AddMessageData, AddMessageErrors, AddMessageResponses, BenchmarkFlushData, BenchmarkFlushErrors, BenchmarkFlushResponses, BenchmarkJobStatusData, BenchmarkJobStatusErrors, BenchmarkJobStatusResponses, ContextPreRetrieveData, ContextPreRetrieveErrors, ContextPreRetrieveResponses, RecentMemoryData, RecentMemoryRawData, RecentMemoryRawResponses, RecentMemoryResponses, RetrieveMemoryData, RetrieveMemoryErrors, RetrieveMemoryRawData, RetrieveMemoryRawErrors, RetrieveMemoryRawResponses, RetrieveMemoryResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean> = Options2<TData, ThrowOnError> & {
     /**
@@ -29,6 +29,31 @@ export const addMessage = <ThrowOnError extends boolean = false>(options: Option
         ...options.headers
     }
 });
+
+/**
+ * Force-flush the message queue for a conversation.
+ *
+ * Clears any in-progress fence and enqueues an `EventSegmentationJob` with
+ * `force_process = true`, ensuring all remaining messages are processed into
+ * episodic memories regardless of normal trigger thresholds.
+ * Intended for use by the benchmark runner after ingestion.
+ */
+export const benchmarkFlush = <ThrowOnError extends boolean = false>(options: Options<BenchmarkFlushData, ThrowOnError>) => (options.client ?? client).post<BenchmarkFlushResponses, BenchmarkFlushErrors, ThrowOnError>({
+    url: '/api/v0/benchmark/flush',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * Query the processing status of a conversation's message queue.
+ *
+ * Used by the benchmark runner to poll until all ingested messages have been
+ * processed into episodic memories before running evaluation.
+ */
+export const benchmarkJobStatus = <ThrowOnError extends boolean = false>(options: Options<BenchmarkJobStatusData, ThrowOnError>) => (options.client ?? client).get<BenchmarkJobStatusResponses, BenchmarkJobStatusErrors, ThrowOnError>({ url: '/api/v0/benchmark/job_status', ...options });
 
 /**
  * Retrieve semantic memories as markdown for pre-retrieval context injection.

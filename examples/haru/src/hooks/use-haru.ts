@@ -19,12 +19,10 @@ const DEFAULT_TOKEN_BUDGET = 8192
 const CONTEXT_WINDOW_RATIO = 0.2
 
 /** Approximate token count: 4 chars ≈ 1 token */
-function approxTokens(text: string): number {
-  return Math.ceil(text.length / 4)
-}
+const approxTokens = (text: string): number => Math.ceil(text.length / 4)
 
 /** Truncate messages from the front to fit within token budget */
-function truncateMessages(messages: Message[], budget: number): Message[] {
+const truncateMessages = (messages: Message[], budget: number): Message[] => {
   let total = 0
   const result: Message[] = []
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -49,7 +47,9 @@ export const useHaru = (conversation_id: string) => {
 
   const clear = useCallback(() => {
     messagesRef.current = []
+    // eslint-disable-next-line react-hooks-extra/no-direct-set-state-in-use-effect
     setMessages([])
+    // eslint-disable-next-line react-hooks-extra/no-direct-set-state-in-use-effect
     setRequestHistory([])
   }, [])
 
@@ -68,8 +68,9 @@ export const useHaru = (conversation_id: string) => {
       })
       const json = await res.json() as { data: { context_length?: number, id: string }[] }
       const model = json.data.find(m => m.id === env.OPENAI_CHAT_MODEL)
-      if (model?.context_length)
-        return Math.floor(model.context_length * CONTEXT_WINDOW_RATIO)
+      const ctxLen = model?.context_length
+      if (ctxLen != null && ctxLen > 0)
+        return Math.floor(ctxLen * CONTEXT_WINDOW_RATIO)
     }
     catch (error) { console.error('Failed to fetch model context length, falling back to default.', error) }
     return DEFAULT_TOKEN_BUDGET

@@ -15,6 +15,37 @@ export type AddMessageMessage = {
     timestamp?: string | null;
 };
 
+export type BenchmarkFlush = {
+    conversation_id: string;
+};
+
+export type BenchmarkFlushResult = {
+    /**
+     * Whether a flush job was enqueued (false if queue was already empty).
+     */
+    enqueued: boolean;
+};
+
+export type BenchmarkJobStatus = {
+    /**
+     * Number of active (Pending or Running) Apalis jobs for this conversation.
+     * Covers EventSegmentationJob and SemanticConsolidationJob.
+     */
+    apalis_active: number;
+    /**
+     * True when the message queue is empty, no fence is active, and no Apalis jobs are active.
+     */
+    done: boolean;
+    /**
+     * Whether a segmentation job fence is currently active.
+     */
+    fence_active: boolean;
+    /**
+     * Number of messages still pending in the queue (not yet segmented).
+     */
+    messages_pending: number;
+};
+
 export type ContextPreRetrieve = {
     /**
      * Optional category filter, e.g. "guideline", "preference"
@@ -151,6 +182,57 @@ export type AddMessageResponses = {
      */
     200: unknown;
 };
+
+export type BenchmarkFlushData = {
+    body: BenchmarkFlush;
+    path?: never;
+    query?: never;
+    url: '/api/v0/benchmark/flush';
+};
+
+export type BenchmarkFlushErrors = {
+    /**
+     * Invalid request
+     */
+    400: unknown;
+};
+
+export type BenchmarkFlushResponses = {
+    /**
+     * Flush result
+     */
+    200: BenchmarkFlushResult;
+};
+
+export type BenchmarkFlushResponse = BenchmarkFlushResponses[keyof BenchmarkFlushResponses];
+
+export type BenchmarkJobStatusData = {
+    body?: never;
+    path?: never;
+    query: {
+        /**
+         * Conversation ID to check
+         */
+        conversation_id: string;
+    };
+    url: '/api/v0/benchmark/job_status';
+};
+
+export type BenchmarkJobStatusErrors = {
+    /**
+     * Invalid request
+     */
+    400: unknown;
+};
+
+export type BenchmarkJobStatusResponses = {
+    /**
+     * Job status
+     */
+    200: BenchmarkJobStatus;
+};
+
+export type BenchmarkJobStatusResponse = BenchmarkJobStatusResponses[keyof BenchmarkJobStatusResponses];
 
 export type ContextPreRetrieveData = {
     body: ContextPreRetrieve;

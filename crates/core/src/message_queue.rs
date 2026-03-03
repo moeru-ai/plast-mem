@@ -181,9 +181,12 @@ impl MessageQueue {
     let count_trigger = trigger_count_usize >= WINDOW_BASE;
     let force_trigger = trigger_count_usize >= WINDOW_MAX;
     let messages: Vec<plastmem_shared::Message> = serde_json::from_value(model.messages)?;
-    let time_trigger = messages.first().is_some_and(|first| {
-      Utc::now() - first.timestamp > TimeDelta::hours(SOFT_TIME_TRIGGER_HOURS)
-    });
+    let time_trigger_disabled =
+      std::env::var("DISABLE_TIME_TRIGGER").is_ok_and(|v| v == "true" || v == "1");
+    let time_trigger = !time_trigger_disabled
+      && messages.first().is_some_and(|first| {
+        Utc::now() - first.timestamp > TimeDelta::hours(SOFT_TIME_TRIGGER_HOURS)
+      });
 
     if !count_trigger && !time_trigger {
       return Ok(None);

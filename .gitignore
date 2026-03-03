@@ -29,6 +29,10 @@ postgresql
 # local env
 .env
 
+# Benchmark data and results
+benchmarks/locomo/data/
+benchmarks/locomo/results/
+
 # Claude Code
 .claude
 
