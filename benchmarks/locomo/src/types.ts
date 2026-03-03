@@ -15,19 +15,21 @@ export interface BenchmarkOutput {
 export interface BenchmarkStats {
   by_category: Record<QACategory, number>
   by_category_count: Record<QACategory, number>
+  by_category_llm: Record<QACategory, number>
   overall: number
+  overall_llm: number
   total: number
 }
 // 1 = multi-hop, 2 = single-hop, 3 = temporal, 4 = open-domain, 5 = adversarial
 
 export interface DialogTurn {
   blip_caption?: string
-  text: string
   compressed_text?: string
   dia_id: string // e.g. "S1:D0"
   img_file?: string
   search_query?: string
   speaker: string
+  text: string
 }
 
 export interface LoCoMoSample {
@@ -40,7 +42,7 @@ export type QACategory = 1 | 2 | 3 | 4 | 5
 
 export interface QAPair {
   adversarial_answer: null | string
-  answer: string
+  answer: number | string
   category: QACategory
   evidence: string[] // dia_ids containing the answer
   question: string
@@ -52,6 +54,7 @@ export interface QAResult {
   context_retrieved: string
   evidence: string[]
   gold_answer: string
+  llm_judge_score: number
   prediction: string
   question: string
   sample_id: string

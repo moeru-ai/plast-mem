@@ -2,8 +2,10 @@ import process from 'node:process'
 
 const POLL_INTERVAL_MS = 10_000 // 10s between polls
 const POLL_TIMEOUT_MS = 10 * 60_000 // 10 min max polling
+const INITIAL_WAIT_MS = 2 * 60_000 // 2 min initial wait
 
 interface JobStatus {
+  apalis_active: number
   done: boolean
   fence_active: boolean
   messages_pending: number
@@ -15,30 +17,6 @@ const getJobStatus = async (baseUrl: string, conversationId: string): Promise<Jo
   if (!res.ok)
     throw new Error(`job_status failed: ${res.status} ${await res.text()}`)
   return res.json() as Promise<JobStatus>
-}
-
-const pollUntilDone = async (
-  baseUrl: string,
-  conversationId: string,
-  label: string,
-): Promise<void> => {
-  const deadline = Date.now() + POLL_TIMEOUT_MS
-  while (Date.now() < deadline) {
-    const status = await getJobStatus(baseUrl, conversationId)
-    process.stdout.write(
-      `\r  ${label}: pending=${status.messages_pending} fence=${status.fence_active}   `,
-    )
-    if (status.done) {
-      process.stdout.write('\n')
-      return
-    }
-    await new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, POLL_INTERVAL_MS)
-      void timer
-    })
-  }
-  process.stdout.write('\n')
-  console.warn(`  Warning: poll timeout for ${conversationId}`)
 }
 
 const triggerFlush = async (baseUrl: string, conversationId: string): Promise<boolean> => {
@@ -54,47 +32,81 @@ const triggerFlush = async (baseUrl: string, conversationId: string): Promise<bo
 }
 
 /**
- * Three-phase wait strategy for a single conversation after ingestion:
- * 1. Sleep 5 minutes to let auto-triggered jobs fire.
- * 2. Poll job_status until done (or timeout).
- * 3. Trigger a force-flush, then poll again to catch any remaining messages.
+ * Poll all conversations in parallel until each is done or stuck.
+ * Returns the set of conversation IDs that are stuck (need a flush).
  */
-export const waitForProcessing = async (
+const pollAllUntilDoneOrStuck = async (
   baseUrl: string,
-  conversationId: string,
-): Promise<void> => {
-  // Phase 1: initial wait
-  process.stdout.write('  Phase 1: waiting 5 min for auto-triggered jobs...\n')
-  await new Promise<void>((resolve) => {
-    const timer = setTimeout(resolve, 5 * 60_000)
-    void timer
-  })
+  conversationIds: string[],
+  label: string,
+): Promise<Set<string>> => {
+  const stuck = new Set<string>()
+  const pending = new Set(conversationIds)
+  const deadline = Date.now() + POLL_TIMEOUT_MS
 
-  // Phase 2: poll until done
-  process.stdout.write('  Phase 2: polling job status...\n')
-  await pollUntilDone(baseUrl, conversationId, 'auto-jobs')
+  while (pending.size > 0 && Date.now() < deadline) {
+    const statuses = await Promise.all(
+      [...pending].map(async id => ({ id, status: await getJobStatus(baseUrl, id) })),
+    )
 
-  // Phase 3: force-flush remainder
-  process.stdout.write('  Phase 3: triggering flush...\n')
-  const enqueued = await triggerFlush(baseUrl, conversationId)
-  if (enqueued) {
-    await pollUntilDone(baseUrl, conversationId, 'flush-job')
+    const summary = statuses.map(({ id, status }) =>
+      `${id.slice(0, 8)}: p=${status.messages_pending} f=${status.fence_active} a=${status.apalis_active}`,
+    ).join(' | ')
+    process.stdout.write(`\r  [${label}] ${summary}   `)
+
+    for (const { id, status } of statuses) {
+      if (status.done) {
+        pending.delete(id)
+      }
+      else if (status.messages_pending > 0 && !status.fence_active && status.apalis_active === 0) {
+        pending.delete(id)
+        stuck.add(id)
+      }
+    }
+
+    if (pending.size > 0) {
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, POLL_INTERVAL_MS)
+        void timer
+      })
+    }
   }
-  else {
-    process.stdout.write('  Queue was already empty, no flush needed.\n')
-  }
+
+  process.stdout.write('\n')
+  if (pending.size > 0)
+    console.warn(`  Warning: poll timeout for ${[...pending].join(', ')}`)
+
+  return stuck
 }
 
 /**
- * Wait for all provided conversation IDs.
- * Runs sequentially to avoid hammering the server.
+ * Wait for all conversations to finish processing:
+ * 1. Single 2-minute wait for auto-triggered jobs to fire.
+ * 2. Poll all conversations in parallel until done or stuck.
+ * 3. Flush all stuck conversations in parallel, then poll again.
  */
 export const waitForAll = async (
   baseUrl: string,
   conversationIds: string[],
 ): Promise<void> => {
-  for (const id of conversationIds) {
-    process.stdout.write(`Waiting for conversation ${id}...\n`)
-    await waitForProcessing(baseUrl, id)
+  // Phase 1: shared initial wait
+  process.stdout.write('Phase 1: waiting 2 min for auto-triggered jobs...\n')
+  await new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, INITIAL_WAIT_MS)
+    void timer
+  })
+
+  // Phase 2+: poll → flush stuck → repeat until all done
+  let toCheck = conversationIds
+  let round = 2
+  while (toCheck.length > 0) {
+    process.stdout.write(`Phase ${round}: polling ${toCheck.length} conversation(s)...\n`)
+    const stuck = await pollAllUntilDoneOrStuck(baseUrl, toCheck, `round-${round}`)
+    if (stuck.size === 0)
+      break
+    process.stdout.write(`Phase ${round} flush: flushing ${stuck.size} stuck conversation(s)...\n`)
+    await Promise.all([...stuck].map(async id => triggerFlush(baseUrl, id)))
+    toCheck = [...stuck]
+    round++
   }
 }

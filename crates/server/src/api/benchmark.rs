@@ -161,7 +161,7 @@ async fn get_queue_status(
   // Covers EventSegmentationJob and SemanticConsolidationJob (both embed conversation_id).
   let apalis_sql = "SELECT COUNT(*)::bigint AS active FROM apalis.jobs \
     WHERE status IN ('Pending', 'Running') \
-    AND job->>'conversation_id' = $1";
+    AND convert_from(job, 'UTF8')::jsonb->>'conversation_id' = $1";
 
   let apalis_row = ApalisActiveRow::find_by_statement(Statement::from_sql_and_values(
     DbBackend::Postgres,

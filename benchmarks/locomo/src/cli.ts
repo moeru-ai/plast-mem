@@ -121,23 +121,29 @@ const main = async () => {
     const qaCount = sample.qa.length
     console.log(`  Sample ${sample.sample_id}: ${qaCount} questions`)
 
+    // Prefetch all contexts in parallel (HTTP to plast-mem, not Ollama)
+    process.stdout.write(`  Prefetching ${qaCount} contexts...`)
+    const contexts = await Promise.all(sample.qa.map(async qa => getContext(conversationId, qa.question, baseUrl)))
+    process.stdout.write(' done\n')
+
     for (let i = 0; i < sample.qa.length; i++) {
       const qa = sample.qa[i]
-      process.stdout.write(`    [${i + 1}/${qaCount}] retrieving...`)
-
-      const context = await getContext(conversationId, qa.question, baseUrl)
-      process.stdout.write(' generating...')
+      const context = contexts[i] ?? ''
+      process.stdout.write(`    [${i + 1}/${qaCount}] generating...`)
 
       const prediction = await generateAnswer(context, qa.question, qa.category, model)
       const score = scoreAnswer(prediction, qa.answer, qa.category)
+      // const llmScore = await llmJudge(prediction, qa.answer, qa.question, model)
+      const llmScore = 0
 
-      process.stdout.write(` score=${score.toFixed(2)}\n`)
+      process.stdout.write(` f1=${score.toFixed(2)}\n`)
 
       results.push({
         category: qa.category,
         context_retrieved: context,
         evidence: qa.evidence,
-        gold_answer: qa.answer,
+        gold_answer: qa.answer as string,
+        llm_judge_score: llmScore,
         prediction,
         question: qa.question,
         sample_id: sample.sample_id,

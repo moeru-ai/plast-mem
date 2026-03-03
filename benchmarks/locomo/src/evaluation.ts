@@ -1,13 +1,17 @@
 import type { QACategory } from './types'
 
+import process from 'node:process'
+
+import { generateText } from '@xsai/generate-text'
+
 // ──────────────────────────────────────────────────
 // Text normalization (mirrors LobeHub evaluation.py)
 // ──────────────────────────────────────────────────
 
 const ARTICLES = new Set(['a', 'an', 'and', 'the'])
 
-const normalizeAnswer = (s: string): string =>
-  s
+const normalizeAnswer = (s: number | string): string =>
+  String(s)
     .toLowerCase()
     .replace(/[^a-z0-9\s]/g, ' ')
     .split(/\s+/)
@@ -87,18 +91,54 @@ const scoreCategory5 = (prediction: string): number => {
  */
 export const scoreAnswer = (
   prediction: string,
-  goldAnswer: string,
+  goldAnswer: number | string,
   category: QACategory,
 ): number => {
+  const gold = String(goldAnswer)
   switch (category) {
     case 1:
-      return scoreCategory1(prediction, goldAnswer)
+      return scoreCategory1(prediction, gold)
     case 2:
     case 4:
-      return tokenF1(prediction, goldAnswer)
+      return tokenF1(prediction, gold)
     case 3:
-      return scoreCategory3(prediction, goldAnswer)
+      return scoreCategory3(prediction, gold)
     case 5:
       return scoreCategory5(prediction)
   }
+}
+
+// ──────────────────────────────────────────────────
+// LLM Judge (lenient semantic evaluation)
+// ──────────────────────────────────────────────────
+
+export const llmJudge = async (
+  prediction: string,
+  goldAnswer: number | string,
+  question: string,
+  model: string,
+): Promise<number> => {
+  const gold = String(goldAnswer)
+  const prompt = `Question: ${question}
+Gold answer: ${gold}
+Predicted answer: ${prediction}
+
+Is the predicted answer correct? Guidelines:
+- Accept semantically equivalent answers (e.g., "adoption agency" ≈ "adoption agencies")
+- Accept if a relative time expression in the prediction matches the specific date in the gold
+- Accept if the prediction captures the key fact even if phrased differently
+- For adversarial questions (gold = "No information available"): only accept if prediction also signals no information
+
+Respond with exactly one word: CORRECT or WRONG`
+
+  const { text } = await generateText({
+    apiKey: process.env.OPENAI_API_KEY ?? '',
+    baseURL: process.env.OPENAI_BASE_URL ?? 'https://api.openai.com/v1',
+    maxTokens: 10,
+    messages: [{ content: prompt, role: 'user' }],
+    model,
+    temperature: 0,
+  })
+
+  return (text ?? '').trim().toUpperCase().startsWith('CORRECT') ? 1.0 : 0.0
 }

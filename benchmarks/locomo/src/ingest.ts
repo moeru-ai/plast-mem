@@ -8,6 +8,29 @@ import { addMessage } from 'plastmem'
 import { v7 as uuidv7 } from 'uuid'
 
 const INGEST_DELAY_MS = 100
+// Minutes between consecutive turns within a session
+const TURN_INTERVAL_MINS = 1
+
+/**
+ * Parse LoCoMo session date strings like "1:56 pm on 8 May, 2023" into a UTC Date.
+ * Returns null if the string cannot be parsed.
+ */
+const parseSessionDate = (dateStr: string): Date | null => {
+  const m = dateStr.match(/^(\d{1,2}):(\d{2})\s*(am|pm)\s+on\s+(\d{1,2})\s+(\w+),\s+(\d{4})$/i)
+  if (m == null)
+    return null
+  const [, hStr, minStr, ampm, dStr, monthStr, yearStr] = m
+  const monthIndex = new Date(`${monthStr} 1, 2000`).getMonth()
+  if (Number.isNaN(monthIndex))
+    return null
+  let hours = Number.parseInt(hStr ?? '0', 10)
+  const mins = Number.parseInt(minStr ?? '0', 10)
+  if ((ampm ?? '').toLowerCase() === 'pm' && hours !== 12)
+    hours += 12
+  if ((ampm ?? '').toLowerCase() === 'am' && hours === 12)
+    hours = 0
+  return new Date(Date.UTC(Number.parseInt(yearStr ?? '0', 10), monthIndex, Number.parseInt(dStr ?? '1', 10), hours, mins))
+}
 
 const buildSpeakerRoleMap = (sample: LoCoMoSample): Map<string, 'assistant' | 'user'> => {
   const speakers: string[] = []
@@ -30,13 +53,15 @@ const buildSpeakerRoleMap = (sample: LoCoMoSample): Map<string, 'assistant' | 'u
   return map
 }
 
-const getOrderedSessions = (sample: LoCoMoSample): Array<{ turns: DialogTurn[] }> => {
-  const sessions: Array<{ turns: DialogTurn[] }> = []
+const getOrderedSessions = (sample: LoCoMoSample): Array<{ date: Date | null, turns: DialogTurn[] }> => {
+  const sessions: Array<{ date: Date | null, turns: DialogTurn[] }> = []
   for (let sn = 1; sn <= 100; sn++) {
     const turns = sample.conversation[`session_${sn}`]
     if (!Array.isArray(turns))
       break
-    sessions.push({ turns })
+    const dateStr = sample.conversation[`session_${sn}_date_time`]
+    const date = typeof dateStr === 'string' ? parseSessionDate(dateStr) : null
+    sessions.push({ date, turns })
   }
   return sessions
 }
@@ -56,19 +81,31 @@ const ingestSample = async (
   let done = 0
 
   for (const session of sessions) {
-    for (const turn of session.turns) {
-      if (!turn.text.trim()) {
+    for (let i = 0; i < session.turns.length; i++) {
+      const turn = session.turns[i]
+      if (turn == null || turn.text.trim().length === 0) {
         done++
         continue
       }
 
       const role = roleMap.get(turn.speaker) ?? 'user'
 
+      // Assign a timestamp: session start + i minutes, so turns are ordered
+      let timestamp: string | undefined
+      if (session.date != null) {
+        const ts = new Date(session.date.getTime() + i * TURN_INTERVAL_MINS * 60 * 1000)
+        timestamp = ts.toISOString()
+      }
+
       await addMessage({
         baseUrl,
         body: {
           conversation_id: conversationId,
-          message: { content: turn.text, role },
+          message: {
+            content: turn.text,
+            role,
+            ...(timestamp != null ? { timestamp } : {}),
+          },
         },
       })
 

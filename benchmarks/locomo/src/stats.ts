@@ -11,49 +11,45 @@ const CATEGORY_NAMES: Record<QACategory, string> = {
   5: 'adversarial',
 }
 
+const avg = (scores: number[]): number =>
+  scores.length > 0 ? scores.reduce((a, b) => a + b, 0) / scores.length : 0
+
 export const computeStats = (results: QAResult[]): BenchmarkStats => {
   const byCategory = Object.fromEntries(
     CATEGORIES.map(c => [c, [] as number[]]),
   ) as Record<QACategory, number[]>
 
+  const byCategoryLlm = Object.fromEntries(
+    CATEGORIES.map(c => [c, [] as number[]]),
+  ) as Record<QACategory, number[]>
+
   for (const r of results) {
     byCategory[r.category].push(r.score)
+    byCategoryLlm[r.category].push(r.llm_judge_score)
   }
 
-  const categoryAvg = Object.fromEntries(
-    CATEGORIES.map((c) => {
-      const scores = byCategory[c]
-      return [c, scores.length > 0 ? scores.reduce((a, b) => a + b, 0) / scores.length : 0]
-    }),
-  ) as Record<QACategory, number>
-
-  const categoryCount = Object.fromEntries(
-    CATEGORIES.map(c => [c, byCategory[c].length]),
-  ) as Record<QACategory, number>
-
-  const allScores = results.map(r => r.score)
-  const overall = allScores.length > 0
-    ? allScores.reduce((a, b) => a + b, 0) / allScores.length
-    : 0
-
   return {
-    by_category: categoryAvg,
-    by_category_count: categoryCount,
-    overall,
+    by_category: Object.fromEntries(CATEGORIES.map(c => [c, avg(byCategory[c])])) as Record<QACategory, number>,
+    by_category_count: Object.fromEntries(CATEGORIES.map(c => [c, byCategory[c].length])) as Record<QACategory, number>,
+    by_category_llm: Object.fromEntries(CATEGORIES.map(c => [c, avg(byCategoryLlm[c])])) as Record<QACategory, number>,
+    overall: avg(results.map(r => r.score)),
+    overall_llm: avg(results.map(r => r.llm_judge_score)),
     total: results.length,
   }
 }
 
 export const printStats = (stats: BenchmarkStats): void => {
   process.stdout.write('\n── Results ──────────────────────────────────\n')
-  process.stdout.write(`Overall F1:  ${(stats.overall * 100).toFixed(2)}%  (n=${stats.total})\n`)
+  process.stdout.write(`Overall F1:   ${(stats.overall * 100).toFixed(2)}%  (n=${stats.total})\n`)
+  process.stdout.write(`Overall LLM:  ${(stats.overall_llm * 100).toFixed(2)}%\n`)
   process.stdout.write('\n')
   for (const c of CATEGORIES) {
-    const avg = stats.by_category[c]
+    const f1 = stats.by_category[c]
+    const llm = stats.by_category_llm[c]
     const count = stats.by_category_count[c]
     if (count > 0) {
       process.stdout.write(
-        `  Cat ${c} (${CATEGORY_NAMES[c].padEnd(12)}):  ${(avg * 100).toFixed(2)}%  (n=${count})\n`,
+        `  Cat ${c} (${CATEGORY_NAMES[c].padEnd(12)}):  F1=${(f1 * 100).toFixed(2)}%  LLM=${(llm * 100).toFixed(2)}%  (n=${count})\n`,
       )
     }
   }

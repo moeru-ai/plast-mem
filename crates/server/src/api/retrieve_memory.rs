@@ -12,7 +12,7 @@ use crate::utils::AppState;
 // --- Shared ---
 
 const fn default_episodic_limit() -> u64 {
-  5
+  10
 }
 const fn default_semantic_limit() -> u64 {
   20
