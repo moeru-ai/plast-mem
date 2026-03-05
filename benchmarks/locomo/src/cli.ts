@@ -59,7 +59,7 @@ const parseCliArgs = (): Args => {
     },
   })
 
-  const concurrency = Number.parseInt(values.concurrency ?? '4', 10)
+  const concurrency = Number.parseInt(values.concurrency, 10)
 
   const sampleIdStr = values['sample-ids'] ?? ''
 
@@ -68,8 +68,8 @@ const parseCliArgs = (): Args => {
     dataFile: values['data-file'] ?? resolve(__dirname, '../data/locomo10.json'),
     outFile: values['out-file'] ?? resolve(__dirname, `../results/${new Date().toISOString().replace(/[:.]/g, '-')}.json`),
     sampleIds: sampleIdStr.length > 0 ? sampleIdStr.split(',').map(s => s.trim()) : null,
-    skipIngest: values['skip-ingest'] ?? false,
-    useLlmJudge: values['use-llm-judge'] ?? false,
+    skipIngest: values['skip-ingest'],
+    useLlmJudge: values['use-llm-judge'],
   }
 }
 
