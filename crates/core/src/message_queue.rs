@@ -134,6 +134,46 @@ impl MessageQueue {
     Self::check(id, trigger_count, db).await
   }
 
+  /// Push a batch of messages to the queue and return the new message count.
+  pub async fn push_batch(
+    id: Uuid,
+    messages: Vec<Message>,
+    db: &DatabaseConnection,
+  ) -> Result<i32, AppError> {
+    Self::get_or_create_model(id, db).await?;
+
+    if messages.is_empty() {
+      let result = PushResult::find_by_statement(Statement::from_sql_and_values(
+        DbBackend::Postgres,
+        "SELECT COALESCE(jsonb_array_length(messages), 0)::int AS msg_count FROM message_queue WHERE id = $1",
+        [id.into()],
+      ))
+      .one(db)
+      .await?;
+      return Ok(result.map_or(0, |r| r.msg_count));
+    }
+
+    let message_json = serde_json::to_value(messages)?;
+    let sql = "UPDATE message_queue \
+               SET messages = messages || $1::jsonb \
+               WHERE id = $2 \
+               RETURNING jsonb_array_length(messages) AS msg_count";
+
+    let result = PushResult::find_by_statement(Statement::from_sql_and_values(
+      DbBackend::Postgres,
+      sql,
+      [message_json.into(), id.into()],
+    ))
+    .one(db)
+    .await?;
+
+    let trigger_count = result
+      .ok_or_else(|| AppError::from(anyhow!("Queue not found after push_batch")))?
+      .msg_count;
+
+    Ok(trigger_count)
+  }
+
   /// Atomically removes the first `count` messages from the queue.
   pub async fn drain(id: Uuid, count: usize, db: &DatabaseConnection) -> Result<(), AppError> {
     let sql = format!(

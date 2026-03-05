@@ -8,7 +8,7 @@ use plastmem_ai::{
 };
 use plastmem_core::{EpisodicMemory, SemanticMemory};
 
-const CONSOLIDATION_EPISODE_THRESHOLD: u64 = 3;
+const CONSOLIDATION_EPISODE_THRESHOLD: u64 = 1;
 use plastmem_entities::{episodic_memory, semantic_memory};
 use plastmem_shared::AppError;
 use schemars::JsonSchema;
@@ -28,6 +28,10 @@ use uuid::Uuid;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SemanticConsolidationJob {
   pub conversation_id: Uuid,
+  /// Specific episodic memories this job should consolidate.
+  /// Empty means "fallback to all unconsolidated episodes" (backward compatibility).
+  #[serde(default)]
+  pub episode_ids: Vec<Uuid>,
   /// If true, consolidate even if below the episode threshold (e.g., flashbulb trigger).
   pub force: bool,
 }
@@ -86,11 +90,12 @@ against existing semantic memory to extract and update long-term knowledge.
 ## Rules
 1. Only extract durable facts. Skip transient states (\"I'm tired today\" → ignore).
 2. Write facts as concise natural language sentences (\"User lives in Tokyo\").
-3. keywords: 2-5 entity names and key nouns from the fact, e.g. [\"user\", \"Tokyo\"].
-4. For guideline: describe specific AI behavior rules (\"AI should use casual tone\").
-5. Multiple episodes confirming the same fact → one \"new\", not duplicates.
-6. New episode contradicts existing fact → \"update\" or \"invalidate\", not \"new\".
-7. If nothing lasting found → return empty facts array.";
+3. Preserve specific dates, locations, and names when available; do not invent missing details.
+4. keywords: 2-5 entity names and key nouns from the fact, e.g. [\"user\", \"Tokyo\"]. If a date, location, or named entity appears, include it.
+5. For guideline: describe specific AI behavior rules (\"AI should use casual tone\").
+6. Multiple episodes confirming the same fact → one \"new\", not duplicates.
+7. New episode contradicts existing fact → \"update\" or \"invalidate\", not \"new\".
+8. If nothing lasting found → return empty facts array.";
 
 // ──────────────────────────────────────────────────
 // Consolidation helpers
@@ -302,10 +307,14 @@ pub async fn process_semantic_consolidation(
 ) -> Result<(), AppError> {
   let db = &*db;
 
-  let episodes = fetch_unconsolidated(job.conversation_id, db).await?;
+  let episodes = fetch_target_episodes(&job, db).await?;
 
   if episodes.is_empty() {
-    tracing::debug!(conversation_id = %job.conversation_id, "No unconsolidated episodes, skipping consolidation");
+    tracing::debug!(
+      conversation_id = %job.conversation_id,
+      requested_episodes = job.episode_ids.len(),
+      "No unconsolidated episodes, skipping consolidation"
+    );
     return Ok(());
   }
 
@@ -449,6 +458,26 @@ async fn fetch_unconsolidated(
     .order_by_asc(episodic_memory::Column::CreatedAt)
     .all(db)
     .await?;
+  models.into_iter().map(EpisodicMemory::from_model).collect()
+}
+
+async fn fetch_target_episodes(
+  job: &SemanticConsolidationJob,
+  db: &DatabaseConnection,
+) -> Result<Vec<EpisodicMemory>, AppError> {
+  if job.episode_ids.is_empty() {
+    return fetch_unconsolidated(job.conversation_id, db).await;
+  }
+
+  let requested_ids = job.episode_ids.iter().copied().collect::<Vec<_>>();
+  let models = episodic_memory::Entity::find()
+    .filter(episodic_memory::Column::ConsolidatedAt.is_null())
+    .filter(episodic_memory::Column::ConversationId.eq(job.conversation_id))
+    .filter(episodic_memory::Column::Id.is_in(requested_ids))
+    .order_by_asc(episodic_memory::Column::CreatedAt)
+    .all(db)
+    .await?;
+
   models.into_iter().map(EpisodicMemory::from_model).collect()
 }
 

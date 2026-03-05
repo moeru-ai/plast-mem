@@ -1,7 +1,8 @@
 use apalis::prelude::TaskSink;
 use axum::{Json, extract::{Query, State}};
+use chrono::Utc;
 use plastmem_core::MessageQueue;
-use plastmem_shared::AppError;
+use plastmem_shared::{AppError, Message};
 use plastmem_worker::EventSegmentationJob;
 use sea_orm::{DatabaseConnection, DbBackend, FromQueryResult, Statement};
 use serde::{Deserialize, Serialize};
@@ -9,6 +10,8 @@ use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::utils::AppState;
+
+use super::add_message::AddMessageMessage;
 
 // ──────────────────────────────────────────────────
 // Flush
@@ -23,6 +26,100 @@ pub struct BenchmarkFlush {
 pub struct BenchmarkFlushResult {
   /// Whether a flush job was enqueued (false if queue was already empty).
   pub enqueued: bool,
+}
+
+fn default_force_process() -> bool {
+  true
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct BenchmarkAddMessages {
+  pub conversation_id: Uuid,
+  pub messages: Vec<AddMessageMessage>,
+  /// Enqueue forced segmentation immediately after append.
+  #[serde(default = "default_force_process")]
+  pub force_process: bool,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct BenchmarkAddMessagesResult {
+  pub accepted: usize,
+  pub enqueued: bool,
+}
+
+/// Append a batch of messages and optionally enqueue segmentation immediately.
+/// Intended for benchmark ingestion to avoid per-message API round-trips.
+#[utoipa::path(
+  post,
+  path = "/api/v0/benchmark/add_messages",
+  request_body = BenchmarkAddMessages,
+  responses(
+    (status = 200, description = "Batch add result", body = BenchmarkAddMessagesResult),
+    (status = 400, description = "Invalid request")
+  )
+)]
+#[axum::debug_handler]
+#[tracing::instrument(skip(state), fields(conversation_id = %payload.conversation_id, messages = payload.messages.len()))]
+pub async fn benchmark_add_messages(
+  State(state): State<AppState>,
+  Json(payload): Json<BenchmarkAddMessages>,
+) -> Result<Json<BenchmarkAddMessagesResult>, AppError> {
+  let BenchmarkAddMessages {
+    conversation_id: id,
+    messages,
+    force_process,
+  } = payload;
+
+  let mut normalized = Vec::with_capacity(messages.len());
+  for msg in messages {
+    if msg.content.is_empty() {
+      return Err(AppError::new(anyhow::anyhow!(
+        "Message content cannot be empty"
+      )));
+    }
+
+    normalized.push(Message {
+      role: msg.role,
+      content: msg.content,
+      timestamp: msg.timestamp.unwrap_or_else(Utc::now),
+    });
+  }
+
+  let accepted = normalized.len();
+  let msg_count = MessageQueue::push_batch(id, normalized, &state.db).await?;
+  let mut enqueued = false;
+
+  if msg_count > 0 {
+    if force_process {
+      // Force-claim the current queue for immediate segmentation.
+      MessageQueue::clear_fence(id, &state.db).await?;
+      if MessageQueue::try_set_fence(id, msg_count, &state.db).await? {
+        let mut job_storage = state.job_storage.clone();
+        job_storage
+          .push(EventSegmentationJob {
+            conversation_id: id,
+            fence_count: msg_count,
+            force_process: true,
+            keep_tail_segment: false,
+          })
+          .await?;
+      }
+      enqueued = true;
+    } else if let Some(check) = MessageQueue::check(id, msg_count, &state.db).await? {
+      let mut job_storage = state.job_storage.clone();
+      job_storage
+        .push(EventSegmentationJob {
+          conversation_id: id,
+          fence_count: check.fence_count,
+          force_process: check.force_process,
+          keep_tail_segment: false,
+        })
+        .await?;
+      enqueued = true;
+    }
+  }
+
+  Ok(Json(BenchmarkAddMessagesResult { accepted, enqueued }))
 }
 
 /// Force-flush the message queue for a conversation.
@@ -69,6 +166,7 @@ pub async fn benchmark_flush(
       conversation_id: id,
       fence_count: msg_count,
       force_process: true,
+      keep_tail_segment: false,
     })
     .await?;
 

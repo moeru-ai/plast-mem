@@ -2,5 +2,6 @@
   "extends": "@moeru/tsconfig",
   "compilerOptions": {
     "noEmit": true
-  }
+  },
+  "include": ["src/**/*.ts"]
 }

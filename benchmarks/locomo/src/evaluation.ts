@@ -23,8 +23,8 @@ const normalizeAnswer = (s: number | string): string =>
 // ──────────────────────────────────────────────────
 
 const tokenF1 = (prediction: string, groundTruth: string): number => {
-  const predTokens = normalizeAnswer(prediction).split(' ').filter(Boolean)
-  const goldTokens = normalizeAnswer(groundTruth).split(' ').filter(Boolean)
+  const predTokens = normalizeAnswer(prediction).split(' ').filter(token => token.length > 0)
+  const goldTokens = normalizeAnswer(groundTruth).split(' ').filter(token => token.length > 0)
 
   if (predTokens.length === 0 && goldTokens.length === 0)
     return 1.0
@@ -61,7 +61,7 @@ const tokenF1 = (prediction: string, groundTruth: string): number => {
  * Score = mean over sub-answers of max F1 against each prediction token.
  */
 const scoreCategory1 = (prediction: string, goldAnswer: string): number => {
-  const subAnswers = goldAnswer.split(',').map(s => s.trim()).filter(Boolean)
+  const subAnswers = goldAnswer.split(',').map(s => s.trim()).filter(sub => sub.length > 0)
   if (subAnswers.length === 0)
     return 0.0
   const scores = subAnswers.map(sub => tokenF1(prediction, sub))

@@ -8,7 +8,7 @@ const SYSTEM_PROMPT
   = 'You are a helpful assistant answering questions about a person based on their conversation history stored in memory.'
 
 const buildPrompt = (context: string, question: string, category: QACategory): string => {
-  const contextSection = context
+  const contextSection = context.length > 0
     ? `Conversation memories:\n${context}\n\n`
     : ''
 

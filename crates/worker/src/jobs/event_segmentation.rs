@@ -9,8 +9,10 @@ use plastmem_ai::{
 };
 use plastmem_core::MessageQueue;
 
-const CONSOLIDATION_EPISODE_THRESHOLD: u64 = 3;
+const CONSOLIDATION_EPISODE_THRESHOLD: u64 = 1;
 const FLASHBULB_SURPRISE_THRESHOLD: f32 = 0.85;
+// Keep this in sync with `crates/core/src/message_queue.rs` WINDOW_MAX.
+const FORCE_SINGLE_SEGMENT_QUEUE_LEN: usize = 40;
 use plastmem_entities::episodic_memory;
 use plastmem_shared::{AppError, Message};
 use schemars::JsonSchema;
@@ -31,6 +33,14 @@ pub struct EventSegmentationJob {
   pub fence_count: i32,
   /// Whether processing is forced (reached max window).
   pub force_process: bool,
+  /// Whether to keep the last segment in queue for cross-window stitching.
+  /// `true` for streaming ingestion, `false` for batch benchmark ingestion.
+  #[serde(default = "default_keep_tail_segment")]
+  pub keep_tail_segment: bool,
+}
+
+const fn default_keep_tail_segment() -> bool {
+  true
 }
 
 // ──────────────────────────────────────────────────
@@ -63,6 +73,7 @@ struct BatchSegment {
 }
 
 struct CreatedEpisode {
+  id: Uuid,
   surprise: f32,
 }
 
@@ -107,8 +118,13 @@ When in doubt, prefer finer granularity (split rather than merge).
 
 # Field Guidelines (Adhere strictly to the JSON schema)
 
-- **title:** 5-15 words capturing the core theme.
-- **summary:** ≤50 words, third-person narrative (e.g., "The user asked X; the assistant explained Y...").
+- **title:** 5-15 words capturing concrete topic + key entity/event (not generic labels).
+- **summary:** ≤50 words, third-person narrative that states:
+  - who was involved (use explicit names/roles from messages when available),
+  - what happened (key actions/events),
+  - when/where if available in the messages.
+  Avoid generic "user/assistant talked about X" wording when names or concrete details exist.
+  Do not invent missing names, times, or places.
 - **surprise_level:** Measure how abruptly the segment begins relative to the *preceding* segment (First segment is `low` unless continuing from a prior episode):
   - `low`: Gradual or routine transition.
   - `high`: Noticeable discontinuity (unexpected emotion, intent reversal, domain change).
@@ -285,7 +301,7 @@ async fn create_episode(
     "Episode created"
   );
 
-  Ok(Some(CreatedEpisode { surprise }))
+  Ok(Some(CreatedEpisode { id, surprise }))
 }
 
 async fn create_episodes_batch(
@@ -332,8 +348,11 @@ pub async fn process_event_segmentation(
   let conversation_id = job.conversation_id;
   let fence_count = usize::try_from(job.fence_count).unwrap_or(0);
   let force_process = job.force_process;
+  let keep_tail_segment = job.keep_tail_segment;
 
   let current_messages = MessageQueue::get(conversation_id, db).await?.messages;
+  let force_due_to_backlog = current_messages.len() >= FORCE_SINGLE_SEGMENT_QUEUE_LEN;
+  let should_force_single_segment = force_process || force_due_to_backlog;
 
   // Stale job check
   if current_messages.len() < fence_count {
@@ -352,31 +371,43 @@ pub async fn process_event_segmentation(
   let segments = batch_segment(batch_messages, prev_summary.as_deref()).await?;
 
   // Single segment and not forced: defer processing and wait for more messages
-  if segments.len() == 1 && !force_process {
+  if segments.len() == 1 && !should_force_single_segment {
     tracing::info!(conversation_id = %conversation_id, "No split detected — deferring for more messages");
     MessageQueue::clear_fence(conversation_id, db).await?;
     return Ok(());
   }
 
   // Determine which segments to drain and the summary for the next iteration
-  let (drain_segments, new_prev_summary): (&[BatchSegment], Option<String>) = if segments.len() == 1
-  {
+  let (drain_segments, new_prev_summary): (&[BatchSegment], Option<String>) = if segments.len() == 1 {
     tracing::info!(
       conversation_id = %conversation_id,
       messages = fence_count,
-      "Force processing as single episode (reached max window)"
+      force_process = force_process,
+      force_due_to_backlog = force_due_to_backlog,
+      queue_len = current_messages.len(),
+      "Force processing as single episode"
     );
     (&segments[..], None)
-  } else {
+  } else if keep_tail_segment {
     let to_drain = &segments[..segments.len() - 1];
     let last_summary = Some(to_drain.last().expect("non-empty").summary.clone());
     tracing::info!(
       conversation_id = %conversation_id,
       total_segments = segments.len(),
       draining = to_drain.len(),
+      keep_tail_segment,
       "Batch segmentation complete"
     );
     (to_drain, last_summary)
+  } else {
+    tracing::info!(
+      conversation_id = %conversation_id,
+      total_segments = segments.len(),
+      draining = segments.len(),
+      keep_tail_segment,
+      "Batch segmentation complete (drain all for batch mode)"
+    );
+    (&segments[..], None)
   };
 
   // Calculate total messages to drain
@@ -392,10 +423,8 @@ pub async fn process_event_segmentation(
   // Then create episodes (if crash here, messages already gone - no duplicates on retry)
   let episodes = create_episodes_batch(conversation_id, drain_segments, db).await?;
 
-  // Enqueue semantic consolidation jobs
-  for episode in episodes {
-    enqueue_semantic_consolidation(conversation_id, episode, db, &semantic_storage).await?;
-  }
+  // Enqueue at most one semantic consolidation job per segmentation batch.
+  enqueue_semantic_consolidation(conversation_id, &episodes, db, &semantic_storage).await?;
 
   Ok(())
 }
@@ -424,23 +453,32 @@ async fn enqueue_pending_reviews(
 
 async fn enqueue_semantic_consolidation(
   conversation_id: Uuid,
-  episode: CreatedEpisode,
+  episodes: &[CreatedEpisode],
   db: &DatabaseConnection,
   semantic_storage: &PostgresStorage<SemanticConsolidationJob>,
 ) -> Result<(), AppError> {
-  let is_flashbulb = episode.surprise >= FLASHBULB_SURPRISE_THRESHOLD;
+  if episodes.is_empty() {
+    return Ok(());
+  }
+
+  let is_flashbulb = episodes
+    .iter()
+    .any(|episode| episode.surprise >= FLASHBULB_SURPRISE_THRESHOLD);
   let unconsolidated_count = count_unconsolidated(conversation_id, db).await?;
   let threshold_reached = unconsolidated_count >= CONSOLIDATION_EPISODE_THRESHOLD;
 
   if is_flashbulb || threshold_reached {
+    let episode_ids = episodes.iter().map(|episode| episode.id).collect();
     let job = SemanticConsolidationJob {
       conversation_id,
+      episode_ids,
       force: is_flashbulb,
     };
     let mut storage = semantic_storage.clone();
     storage.push(job).await?;
     tracing::info!(
       conversation_id = %conversation_id,
+      created_episodes = episodes.len(),
       unconsolidated_count,
       is_flashbulb,
       "Enqueued semantic consolidation job"
