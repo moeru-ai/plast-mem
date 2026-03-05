@@ -65,6 +65,7 @@ pub async fn add_message(
         conversation_id: payload.conversation_id,
         fence_count: check.fence_count,
         force_process: check.force_process,
+        keep_tail_segment: true,
       })
       .await?;
   }

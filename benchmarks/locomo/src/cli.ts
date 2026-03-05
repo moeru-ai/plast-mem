@@ -6,7 +6,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { scoreAnswer } from './evaluation'
+import { llmJudge, scoreAnswer } from './evaluation'
 import { ingestAll, loadConversationIds, saveConversationIds } from './ingest'
 import { generateAnswer } from './llm'
 import { getContext } from './retrieve'
@@ -20,11 +20,12 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 // ──────────────────────────────────────────────────
 
 interface Args {
+  concurrency: number
   dataFile: string
   outFile: string
   sampleIds: null | string[]
   skipIngest: boolean
-  skipWait: boolean
+  useLlmJudge: boolean
 }
 
 const parseArgs = (): Args => {
@@ -35,14 +36,52 @@ const parseArgs = (): Args => {
       return fallback
     return argv[i + 1]
   }
+  const getInt = (flag: string, fallback: number): number => {
+    const raw = get(flag, String(fallback))
+    const value = Number.parseInt(raw, 10)
+    return Number.isFinite(value) && value > 0 ? value : fallback
+  }
   const sampleIdStr = get('--sample-ids', '')
   return {
+    concurrency: getInt('--concurrency', 4),
     dataFile: get('--data-file', resolve(__dirname, '../data/locomo10.json')),
     outFile: get('--out-file', resolve(__dirname, `../results/${new Date().toISOString().replace(/[:.]/g, '-')}.json`)),
     sampleIds: sampleIdStr.length > 0 ? sampleIdStr.split(',').map(s => s.trim()) : null,
     skipIngest: argv.includes('--skip-ingest'),
-    skipWait: argv.includes('--skip-wait'),
+    useLlmJudge: argv.includes('--use-llm-judge'),
   }
+}
+
+const runWithConcurrency = async (
+  tasks: Array<() => Promise<void>>,
+  concurrency: number,
+): Promise<void> => {
+  if (tasks.length === 0)
+    return
+
+  const limit = Math.max(1, Math.floor(concurrency))
+  let nextIndex = 0
+
+  const worker = async (): Promise<void> => {
+    while (true) {
+      const i = nextIndex
+      nextIndex += 1
+      if (i >= tasks.length)
+        return
+      await tasks[i]()
+    }
+  }
+
+  await Promise.all(Array.from(
+    { length: Math.min(limit, tasks.length) },
+    async () => {
+      await worker()
+    },
+  ))
+}
+
+const writeLine = (line: string): void => {
+  process.stdout.write(`${line}\n`)
 }
 
 // ──────────────────────────────────────────────────
@@ -65,12 +104,14 @@ const main = async () => {
     process.exit(1)
   }
 
-  console.log('LoCoMo Benchmark for plast-mem')
-  console.log(`  data:    ${args.dataFile}`)
-  console.log(`  out:     ${args.outFile}`)
-  console.log(`  model:   ${model}`)
-  console.log(`  baseUrl: ${baseUrl}`)
-  console.log('')
+  writeLine('LoCoMo Benchmark for plast-mem')
+  writeLine(`  data:    ${args.dataFile}`)
+  writeLine(`  out:     ${args.outFile}`)
+  writeLine(`  model:   ${model}`)
+  writeLine(`  baseUrl: ${baseUrl}`)
+  writeLine(`  concurrency: ${args.concurrency}`)
+  writeLine(`  llmJudge: ${args.useLlmJudge ? 'on' : 'off'}`)
+  writeLine('')
 
   const raw = readFileSync(args.dataFile, 'utf-8')
   const allSamples = JSON.parse(raw) as LoCoMoSample[]
@@ -79,36 +120,33 @@ const main = async () => {
     ? allSamples.filter(s => sampleIds.includes(s.sample_id))
     : allSamples
 
-  console.log(`Loaded ${samples.length} sample(s).`)
+  writeLine(`Loaded ${samples.length} sample(s).`)
 
   const idsFile = resolve(__dirname, '../data/conversation_ids.json')
 
   // Step 1: Ingest
   let conversationIds: Record<string, string>
   if (!args.skipIngest) {
-    console.log('\n── Step 1: Ingesting conversations ──')
+    writeLine('\n── Step 1: Ingesting conversations ──')
     conversationIds = await ingestAll(samples, baseUrl)
     saveConversationIds(idsFile, conversationIds)
-    console.log('Ingestion complete.')
+    writeLine('Ingestion complete.')
   }
   else {
-    console.log('Skipping ingestion (--skip-ingest).')
+    writeLine('Skipping ingestion (--skip-ingest).')
     conversationIds = loadConversationIds(idsFile)
   }
 
   // Step 2: Wait
-  const ids = samples.map(s => conversationIds[s.sample_id]).filter(Boolean)
-  if (!args.skipWait) {
-    console.log('\n── Step 2: Waiting for background processing ──')
-    await waitForAll(baseUrl, ids)
-    console.log('All conversations processed.')
-  }
-  else {
-    console.log('Skipping wait (--skip-wait).')
-  }
+  writeLine('\n── Step 2: Waiting for background processing ──')
+  const activeConversationIds = samples
+    .map(sample => conversationIds[sample.sample_id])
+    .filter((id): id is string => id != null && id.length > 0)
+  await waitForAll(activeConversationIds, baseUrl)
+  writeLine('Background processing complete.')
 
   // Step 3: Evaluate
-  console.log('\n── Step 3: Evaluating QA ──')
+  writeLine('\n── Step 3: Evaluating QA ──')
   const results: QAResult[] = []
 
   for (const sample of samples) {
@@ -119,37 +157,61 @@ const main = async () => {
     }
 
     const qaCount = sample.qa.length
-    console.log(`  Sample ${sample.sample_id}: ${qaCount} questions`)
+    writeLine(`  Sample ${sample.sample_id}: ${qaCount} questions`)
 
-    // Prefetch all contexts in parallel (HTTP to plast-mem, not Ollama)
+    // Prefetch contexts with bounded concurrency to avoid overloading embedding backend.
     process.stdout.write(`  Prefetching ${qaCount} contexts...`)
-    const contexts = await Promise.all(sample.qa.map(async qa => getContext(conversationId, qa.question, baseUrl)))
+    const contexts: string[] = Array.from({ length: qaCount }, () => '')
+    const contextTasks = sample.qa.map((qa, index) => async () => {
+      contexts[index] = await getContext(conversationId, qa.question, baseUrl)
+    })
+    await runWithConcurrency(contextTasks, args.concurrency)
     process.stdout.write(' done\n')
 
-    for (let i = 0; i < sample.qa.length; i++) {
-      const qa = sample.qa[i]
-      const context = contexts[i] ?? ''
-      process.stdout.write(`    [${i + 1}/${qaCount}] generating...`)
+    const buffered: Array<null | {
+      context: string
+      llmScore: number
+      prediction: string
+      qa: (typeof sample.qa)[number]
+      score: number
+    }> = Array.from({ length: qaCount }, () => null)
+    let nextToPrint = 0
 
+    const flush = () => {
+      while (nextToPrint < qaCount && buffered[nextToPrint] != null) {
+        const { context, llmScore, prediction, qa, score } = buffered[nextToPrint]!
+        process.stdout.write(`    [${nextToPrint + 1}/${qaCount}] generating... f1=${score.toFixed(2)}\n`)
+
+        results.push({
+          category: qa.category,
+          context_retrieved: context,
+          evidence: qa.evidence,
+          gold_answer: qa.answer as string,
+          llm_judge_score: llmScore,
+          prediction,
+          question: qa.question,
+          sample_id: sample.sample_id,
+          score,
+        })
+
+        buffered[nextToPrint] = null
+        nextToPrint++
+      }
+    }
+
+    const tasks = sample.qa.map((qa, index) => async () => {
+      const context = contexts[index] ?? ''
       const prediction = await generateAnswer(context, qa.question, qa.category, model)
       const score = scoreAnswer(prediction, qa.answer, qa.category)
-      // const llmScore = await llmJudge(prediction, qa.answer, qa.question, model)
-      const llmScore = 0
+      const llmScore = args.useLlmJudge && qa.category !== 5
+        ? await llmJudge(prediction, qa.answer, qa.question, model)
+        : 0
+      buffered[index] = { context, llmScore, prediction, qa, score }
+      flush()
+    })
 
-      process.stdout.write(` f1=${score.toFixed(2)}\n`)
-
-      results.push({
-        category: qa.category,
-        context_retrieved: context,
-        evidence: qa.evidence,
-        gold_answer: qa.answer as string,
-        llm_judge_score: llmScore,
-        prediction,
-        question: qa.question,
-        sample_id: sample.sample_id,
-        score,
-      })
-    }
+    await runWithConcurrency(tasks, args.concurrency)
+    flush()
   }
 
   // Step 4: Stats
@@ -164,7 +226,7 @@ const main = async () => {
 
   mkdirSync(dirname(args.outFile), { recursive: true })
   writeFileSync(args.outFile, JSON.stringify(output, null, 2))
-  console.log(`Results written to: ${args.outFile}`)
+  writeLine(`Results written to: ${args.outFile}`)
 }
 
 // eslint-disable-next-line @masknet/no-top-level

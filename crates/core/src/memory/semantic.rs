@@ -96,9 +96,9 @@ impl SemanticMemory {
       LIMIT $3
     ),
     rrf AS (
-      SELECT id, 1.0 / (60 + r) AS s FROM fulltext
+      SELECT id, 1.0 / (30 + r) AS s FROM fulltext
       UNION ALL
-      SELECT id, 1.0 / (60 + r) AS s FROM semantic
+      SELECT id, 1.0 / (30 + r) AS s FROM semantic
     ),
     rrf_score AS (
       SELECT id, SUM(s)::float8 AS score

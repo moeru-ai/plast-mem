@@ -87,7 +87,8 @@ impl EpisodicMemory {
     fulltext AS (
       SELECT id, ROW_NUMBER() OVER (ORDER BY pdb.score(id) DESC) AS r
       FROM episodic_memory
-      WHERE summary ||| $1 AND conversation_id = $2
+      WHERE search_text ||| $1
+        AND conversation_id = $2
       LIMIT $3
     ),
     semantic AS (
@@ -97,9 +98,9 @@ impl EpisodicMemory {
       LIMIT $3
     ),
     rrf AS (
-      SELECT id, 1.0 / (60 + r) AS s FROM fulltext
+      SELECT id, 1.0 / (30 + r) AS s FROM fulltext
       UNION ALL
-      SELECT id, 1.0 / (60 + r) AS s FROM semantic
+      SELECT id, 1.0 / (30 + r) AS s FROM semantic
     ),
     rrf_score AS (
       SELECT id, SUM(s)::float8 AS score

@@ -11,7 +11,7 @@ export const getContext = async (
       conversation_id: conversationId,
       episodic_limit: 10,
       query: question,
-      semantic_limit: 20,
+      semantic_limit: 5,
     },
     throwOnError: true,
   })

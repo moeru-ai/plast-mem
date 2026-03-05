@@ -15,6 +15,20 @@ export type AddMessageMessage = {
     timestamp?: string | null;
 };
 
+export type BenchmarkAddMessages = {
+    conversation_id: string;
+    /**
+     * Enqueue forced segmentation immediately after append.
+     */
+    force_process?: boolean;
+    messages: Array<AddMessageMessage>;
+};
+
+export type BenchmarkAddMessagesResult = {
+    accepted: number;
+    enqueued: boolean;
+};
+
 export type BenchmarkFlush = {
     conversation_id: string;
 };
@@ -182,6 +196,29 @@ export type AddMessageResponses = {
      */
     200: unknown;
 };
+
+export type BenchmarkAddMessagesData = {
+    body: BenchmarkAddMessages;
+    path?: never;
+    query?: never;
+    url: '/api/v0/benchmark/add_messages';
+};
+
+export type BenchmarkAddMessagesErrors = {
+    /**
+     * Invalid request
+     */
+    400: unknown;
+};
+
+export type BenchmarkAddMessagesResponses = {
+    /**
+     * Batch add result
+     */
+    200: BenchmarkAddMessagesResult;
+};
+
+export type BenchmarkAddMessagesResponse = BenchmarkAddMessagesResponses[keyof BenchmarkAddMessagesResponses];
 
 export type BenchmarkFlushData = {
     body: BenchmarkFlush;

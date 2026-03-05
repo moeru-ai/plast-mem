@@ -21,14 +21,11 @@ OPENAI_CHAT_MODEL=qwen3:8b
 ## Usage
 
 ```bash
-# full run: ingest → wait → evaluate
+# full run: ingest → evaluate
 pnpm --filter @plastmem/benchmark-locomo start
 
 # skip ingestion (reuse previously ingested conversations)
 pnpm --filter @plastmem/benchmark-locomo start -- --skip-ingest
-
-# skip wait phase (conversations already processed)
-pnpm --filter @plastmem/benchmark-locomo start -- --skip-ingest --skip-wait
 
 # run specific samples only
 pnpm --filter @plastmem/benchmark-locomo start -- --sample-ids sample_1,sample_2
@@ -43,9 +40,8 @@ pnpm --filter @plastmem/benchmark-locomo start -- \
 
 ```
 1. Ingest    — replay each conversation turn-by-turn into plast-mem via addMessage
-2. Wait      — 3-phase: sleep 5 min → poll job_status → force-flush + poll again
-3. Evaluate  — for each QA pair: context_pre_retrieve → LLM answer → F1 score
-4. Output    — write results JSON + print per-category summary
+2. Evaluate  — for each QA pair: retrieveMemory context → LLM answer → F1 score
+3. Output    — write results JSON + print per-category summary
 ```
 
 ## QA Categories
@@ -86,8 +82,7 @@ Results are written to `results/<timestamp>.json`:
 |------|---------|
 | `cli.ts` | Entry point, argument parsing, orchestration |
 | `ingest.ts` | Replay conversations into plast-mem |
-| `wait.ts` | Poll until background jobs finish |
-| `retrieve.ts` | `context_pre_retrieve` call |
+| `retrieve.ts` | `retrieve_memory` call |
 | `llm.ts` | LLM answer generation via `@xsai/generate-text` |
 | `evaluation.ts` | Per-category F1 scoring |
 | `stats.ts` | Aggregate stats and formatted output |
