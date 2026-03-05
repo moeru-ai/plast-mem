@@ -1,7 +1,5 @@
 import type { BenchmarkStats, QACategory, QAResult } from './types'
 
-import { stdout } from 'node:process'
-
 const CATEGORIES: QACategory[] = [1, 2, 3, 4, 5]
 const CATEGORY_NAMES: Record<QACategory, string> = {
   1: 'multi-hop',
@@ -39,19 +37,19 @@ export const computeStats = (results: QAResult[]): BenchmarkStats => {
 }
 
 export const printStats = (stats: BenchmarkStats): void => {
-  stdout.write('\n── Results ──────────────────────────────────\n')
-  stdout.write(`Overall F1:   ${(stats.overall * 100).toFixed(2)}%  (n=${stats.total})\n`)
-  stdout.write(`Overall LLM:  ${(stats.overall_llm * 100).toFixed(2)}%\n`)
-  stdout.write('\n')
+  console.log('\n── Results ──────────────────────────────────')
+  console.log(`Overall F1:   ${(stats.overall * 100).toFixed(2)}%  (n=${stats.total})`)
+  console.log(`Overall LLM:  ${(stats.overall_llm * 100).toFixed(2)}%`)
+  console.log()
   for (const c of CATEGORIES) {
     const f1 = stats.by_category[c]
     const llm = stats.by_category_llm[c]
     const count = stats.by_category_count[c]
     if (count > 0) {
-      stdout.write(
-        `  Cat ${c} (${CATEGORY_NAMES[c].padEnd(12)}):  F1=${(f1 * 100).toFixed(2)}%  LLM=${(llm * 100).toFixed(2)}%  (n=${count})\n`,
+      console.log(
+        `  Cat ${c} (${CATEGORY_NAMES[c].padEnd(12)}):  F1=${(f1 * 100).toFixed(2)}%  LLM=${(llm * 100).toFixed(2)}%  (n=${count})`,
       )
     }
   }
-  stdout.write('──────────────────────────────────────────────\n\n')
+  console.log('──────────────────────────────────────────────\n')
 }
