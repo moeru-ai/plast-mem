@@ -1,3 +1,4 @@
+/* eslint-disable no-console */
 import { sleep } from '@moeru/std'
 import { benchmarkJobStatus } from 'plastmem'
 

@@ -1,3 +1,4 @@
+/* eslint-disable no-console */
 import type { BenchmarkStats, QACategory, QAResult } from './types'
 
 const CATEGORIES: QACategory[] = [1, 2, 3, 4, 5]
