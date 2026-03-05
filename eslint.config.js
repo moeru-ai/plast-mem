@@ -7,6 +7,7 @@ const rootDir = fileURLToPath(new URL('.', import.meta.url))
 const tsconfigPath = resolve(rootDir, 'tsconfig.eslint.json')
 
 export default defineConfig({
+  pnpm: { sort: true },
   react: true,
   typescript: {
     parserOptions: {

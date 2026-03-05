@@ -3,31 +3,30 @@
   "type": "module",
   "version": "0.0.1",
   "private": true,
-  "packageManager": "pnpm@10.30.0",
   "scripts": {
     "dev": "tsx src/index.tsx",
     "dev:hmr": "vite-node -w src/index.tsx",
     "test": "vitest"
   },
   "dependencies": {
-    "@insel-null/uuid": "^0.0.1",
-    "@pnpm/find-workspace-dir": "^1000.1.4",
-    "@xsai/generate-text": "^0.4.3",
-    "@xsai/shared-chat": "^0.4.3",
-    "@xsai/tool": "^0.4.3",
-    "figlet": "^1.10.0",
-    "ink": "^6.8.0",
-    "ink-ascii": "^0.0.4",
-    "ink-spinner": "^5.0.0",
-    "ink-text-input": "^6.0.0",
+    "@insel-null/uuid": "catalog:",
+    "@pnpm/find-workspace-dir": "catalog:",
+    "@xsai/generate-text": "catalog:",
+    "@xsai/shared-chat": "catalog:",
+    "@xsai/tool": "catalog:",
+    "figlet": "catalog:",
+    "ink": "catalog:",
+    "ink-ascii": "catalog:",
+    "ink-spinner": "catalog:",
+    "ink-text-input": "catalog:",
     "plastmem": "workspace:*",
-    "react": "^19.2.4",
-    "swr": "^2.4.0",
-    "temporal-polyfill": "^0.3.0",
-    "zod": "^4.3.6"
+    "react": "catalog:",
+    "swr": "catalog:",
+    "temporal-polyfill": "catalog:",
+    "zod": "catalog:"
   },
   "devDependencies": {
-    "@types/react": "^19.2.14",
-    "vitest": "^4.0.18"
+    "@types/react": "catalog:",
+    "vitest": "catalog:"
   }
 }

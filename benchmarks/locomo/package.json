@@ -7,12 +7,12 @@
     "start": "tsx src/cli.ts"
   },
   "dependencies": {
-    "@insel-null/uuid": "^0.0.1",
-    "@moeru/std": "0.1.0-beta.16",
-    "@xsai/generate-text": "^0.4.3",
-    "@xsai/tool": "^0.4.3",
+    "@insel-null/uuid": "catalog:",
+    "@moeru/std": "catalog:",
+    "@xsai/generate-text": "catalog:",
+    "@xsai/tool": "catalog:",
     "picospinner": "^3.0.0",
     "plastmem": "workspace:*",
-    "zod": "^4.3.6"
+    "zod": "catalog:"
   }
 }
