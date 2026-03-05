@@ -4,13 +4,8 @@
     "noEmit": true
   },
   "include": [
-    "benchmarks/**/*.ts",
-    "benchmarks/**/*.tsx",
-    "examples/**/*.ts",
-    "examples/**/*.tsx",
-    "packages/**/*.ts",
-    "packages/**/*.tsx",
-    "src/**/*.ts",
-    "src/**/*.tsx"
+    "benchmarks/**/src",
+    "examples/**/src",
+    "packages/**/src"
   ]
 }

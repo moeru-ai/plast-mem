@@ -9,15 +9,17 @@ const tsconfigPath = resolve(rootDir, 'tsconfig.eslint.json')
 export default defineConfig({
   react: true,
   typescript: {
-    tsconfigPath,
     parserOptions: {
       // Ensure project-service resolves relative paths against repo root,
       // not VSCode ESLint's sometimes-changing CWD.
       tsconfigRootDir: rootDir,
     },
+    tsconfigPath,
   },
 }).append({
   rules: {
     'toml/padding-line-between-pairs': 'off',
   },
+}).append({
+  ignores: ['**/*.gen.ts'],
 })

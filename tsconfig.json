@@ -1,8 +1,7 @@
 {
-    "files": [],
-    "references": [{
-        "path": "./examples/haru/tsconfig.json"
-    }, {
-        "path": "./benchmarks/locomo/tsconfig.json"
-    }]
+  "references": [
+    { "path": "./examples/haru/tsconfig.json" },
+    { "path": "./benchmarks/locomo/tsconfig.json" }
+  ],
+  "files": []
 }
