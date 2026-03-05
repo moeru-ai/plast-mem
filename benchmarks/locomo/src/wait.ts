@@ -1,5 +1,6 @@
 import { stdout } from 'node:process'
 
+import { sleep } from '@moeru/std'
 import { benchmarkJobStatus } from 'plastmem'
 
 const INITIAL_WAIT_MS = 2 * 60_000
@@ -11,12 +12,6 @@ interface ConversationStatus {
   fence_active: boolean
   messages_pending: number
 }
-
-const sleep = async (ms: number): Promise<void> =>
-  new Promise<void>((resolve) => {
-    const timer = setTimeout(resolve, ms)
-    void timer
-  })
 
 const getStatus = async (
   baseUrl: string,
