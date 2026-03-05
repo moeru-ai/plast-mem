@@ -1,6 +1,6 @@
 import type { QACategory } from './types'
 
-import process from 'node:process'
+import { env } from 'node:process'
 
 import { generateText } from '@xsai/generate-text'
 
@@ -132,8 +132,8 @@ Is the predicted answer correct? Guidelines:
 Respond with exactly one word: CORRECT or WRONG`
 
   const { text } = await generateText({
-    apiKey: process.env.OPENAI_API_KEY ?? '',
-    baseURL: process.env.OPENAI_BASE_URL ?? 'https://api.openai.com/v1',
+    apiKey: env.OPENAI_API_KEY ?? '',
+    baseURL: env.OPENAI_BASE_URL ?? 'https://api.openai.com/v1',
     maxTokens: 10,
     messages: [{ content: prompt, role: 'user' }],
     model,

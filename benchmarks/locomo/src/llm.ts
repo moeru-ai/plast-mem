@@ -1,6 +1,6 @@
 import type { QACategory } from './types'
 
-import process from 'node:process'
+import { env } from 'node:process'
 
 import { generateText } from '@xsai/generate-text'
 
@@ -31,8 +31,8 @@ export const generateAnswer = async (
   const prompt = buildPrompt(context, question, category)
 
   const { text } = await generateText({
-    apiKey: process.env.OPENAI_API_KEY ?? '',
-    baseURL: process.env.OPENAI_BASE_URL ?? 'https://api.openai.com/v1',
+    apiKey: env.OPENAI_API_KEY ?? '',
+    baseURL: env.OPENAI_BASE_URL ?? 'https://api.openai.com/v1',
     maxTokens: 200,
     messages: [
       { content: SYSTEM_PROMPT, role: 'system' },

@@ -2,9 +2,8 @@ import type { BenchmarkAddMessages } from 'plastmem'
 
 import type { DialogTurn, LoCoMoSample } from './types'
 
-import process from 'node:process'
-
 import { readFile, writeFile } from 'node:fs/promises'
+import { stdout } from 'node:process'
 
 import { uuid } from '@insel-null/uuid'
 import { benchmarkAddMessages } from 'plastmem'
@@ -161,16 +160,16 @@ export const ingestAll = async (
     const conversationId = uuid.v7()
     ids[sample.sample_id] = conversationId
 
-    process.stdout.write(`  Ingesting sample ${sample.sample_id} (${conversationId})...`)
+    stdout.write(`  Ingesting sample ${sample.sample_id} (${conversationId})...`)
     let lastPct = 0
     await ingestSample(sample, conversationId, baseUrl, (done, total) => {
       const pct = Math.floor((done / total) * 100)
       if (pct >= lastPct + 20) {
-        process.stdout.write(` ${pct}%`)
+        stdout.write(` ${pct}%`)
         lastPct = pct
       }
     })
-    process.stdout.write(' done\n')
+    stdout.write(' done\n')
   }
 
   return ids

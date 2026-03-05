@@ -1,4 +1,4 @@
-import process from 'node:process'
+import { stdout } from 'node:process'
 
 import { benchmarkJobStatus } from 'plastmem'
 
@@ -44,7 +44,7 @@ export const waitForAll = async (
   if (uniqueIds.length === 0)
     return
 
-  process.stdout.write('  Waiting 2 minutes before polling background jobs...\n')
+  stdout.write('  Waiting 2 minutes before polling background jobs...\n')
   await sleep(INITIAL_WAIT_MS)
 
   const pendingIds = new Set(uniqueIds)
@@ -56,7 +56,7 @@ export const waitForAll = async (
     }))
 
     const line = statuses.map(({ id, status }) => renderStatus(id, status)).join(' | ')
-    process.stdout.write(`  [wait] ${line}\n`)
+    stdout.write(`  [wait] ${line}\n`)
 
     for (const { id, status } of statuses) {
       if (status.done)
