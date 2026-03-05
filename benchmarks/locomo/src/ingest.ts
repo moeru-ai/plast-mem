@@ -4,7 +4,7 @@ import type { DialogTurn, LoCoMoSample } from './types'
 
 import process from 'node:process'
 
-import { readFileSync, writeFileSync } from 'node:fs'
+import { readFile, writeFile } from 'node:fs/promises'
 
 import { uuid } from '@insel-null/uuid'
 import { benchmarkAddMessages } from 'plastmem'
@@ -176,15 +176,16 @@ export const ingestAll = async (
   return ids
 }
 
-export const loadConversationIds = (path: string): Record<string, string> => {
+export const loadConversationIds = async (path: string): Promise<Record<string, string>> => {
   try {
-    return JSON.parse(readFileSync(path, 'utf-8')) as Record<string, string>
+    const content = await readFile(path, 'utf-8')
+    return JSON.parse(content) as Record<string, string>
   }
   catch {
     return {}
   }
 }
 
-export const saveConversationIds = (path: string, ids: Record<string, string>): void => {
-  writeFileSync(path, JSON.stringify(ids, null, 2))
+export const saveConversationIds = async (path: string, ids: Record<string, string>): Promise<void> => {
+  await writeFile(path, JSON.stringify(ids, null, 2))
 }

@@ -2,7 +2,7 @@ import type { BenchmarkOutput, LoCoMoSample, QAResult } from './types'
 
 import process from 'node:process'
 
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -113,7 +113,7 @@ const main = async () => {
   writeLine(`  llmJudge: ${args.useLlmJudge ? 'on' : 'off'}`)
   writeLine('')
 
-  const raw = readFileSync(args.dataFile, 'utf-8')
+  const raw = await readFile(args.dataFile, 'utf-8')
   const allSamples = JSON.parse(raw) as LoCoMoSample[]
   const sampleIds = args.sampleIds
   const samples = sampleIds != null
@@ -129,12 +129,12 @@ const main = async () => {
   if (!args.skipIngest) {
     writeLine('\n── Step 1: Ingesting conversations ──')
     conversationIds = await ingestAll(samples, baseUrl)
-    saveConversationIds(idsFile, conversationIds)
+    await saveConversationIds(idsFile, conversationIds)
     writeLine('Ingestion complete.')
   }
   else {
     writeLine('Skipping ingestion (--skip-ingest).')
-    conversationIds = loadConversationIds(idsFile)
+    conversationIds = await loadConversationIds(idsFile)
   }
 
   // Step 2: Wait
@@ -224,8 +224,8 @@ const main = async () => {
     stats,
   }
 
-  mkdirSync(dirname(args.outFile), { recursive: true })
-  writeFileSync(args.outFile, JSON.stringify(output, null, 2))
+  await mkdir(dirname(args.outFile), { recursive: true })
+  await writeFile(args.outFile, JSON.stringify(output, null, 2))
   writeLine(`Results written to: ${args.outFile}`)
 }
 
