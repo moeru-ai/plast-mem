@@ -1,10 +1,10 @@
 /* eslint-disable @masknet/jsx-no-logical */
 import { exit } from 'node:process'
 
-import uuid from '@insel-null/uuid'
 import Spinner from 'ink-spinner'
 import TextInput from 'ink-text-input'
 
+import { uuid } from '@insel-null/uuid'
 import { Box, Text } from 'ink'
 import { useCallback, useMemo, useState } from 'react'
 

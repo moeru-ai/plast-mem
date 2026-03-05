@@ -6,8 +6,8 @@ import process from 'node:process'
 
 import { readFileSync, writeFileSync } from 'node:fs'
 
+import { uuid } from '@insel-null/uuid'
 import { benchmarkAddMessages } from 'plastmem'
-import { v7 as uuidv7 } from 'uuid'
 
 // Minutes between consecutive turns within a session
 const TURN_INTERVAL_MINS = 1
@@ -158,7 +158,7 @@ export const ingestAll = async (
   const ids: Record<string, string> = {}
 
   for (const sample of samples) {
-    const conversationId = uuidv7()
+    const conversationId = uuid.v7()
     ids[sample.sample_id] = conversationId
 
     process.stdout.write(`  Ingesting sample ${sample.sample_id} (${conversationId})...`)

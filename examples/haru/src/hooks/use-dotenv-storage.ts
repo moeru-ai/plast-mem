@@ -1,5 +1,4 @@
-import uuid from '@insel-null/uuid'
-
+import { uuid } from '@insel-null/uuid'
 import { useCallback, useState } from 'react'
 
 import { dotenvStorage } from '../utils/dotenv-storage'
