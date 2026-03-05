@@ -1,4 +1,5 @@
 import type { BenchmarkAddMessages } from 'plastmem'
+
 import type { DialogTurn, LoCoMoSample } from './types'
 
 import process from 'node:process'
@@ -10,13 +11,13 @@ import { v7 as uuidv7 } from 'uuid'
 
 // Minutes between consecutive turns within a session
 const TURN_INTERVAL_MINS = 1
-interface OrderedSession { date: Date | null, turns: DialogTurn[] }
-type SpeakerRole = 'assistant' | 'user'
 interface BatchMessage {
   content: string
   role: SpeakerRole
   timestamp?: number
 }
+interface OrderedSession { date: Date | null, turns: DialogTurn[] }
+type SpeakerRole = 'assistant' | 'user'
 
 const SESSION_DATE_RE = /^(\d{1,2}):(\d{2})\s*(am|pm)\s+on\s+(\d{1,2})\s+(\w+),\s+(\d{4})$/i
 const MONTH_INDEX_BY_NAME: Record<string, number> = {
@@ -46,13 +47,13 @@ const parseSessionDate = (dateStr: string): Date | null => {
   const monthIndex = MONTH_INDEX_BY_NAME[monthStr.toLowerCase()]
   if (monthIndex == null)
     return null
-  let hours = Number.parseInt(hStr ?? '0', 10)
-  const mins = Number.parseInt(minStr ?? '0', 10)
+  let hours = Number.parseInt(hStr, 10)
+  const mins = Number.parseInt(minStr, 10)
   if (meridiem.toLowerCase() === 'pm' && hours !== 12)
     hours += 12
   if (meridiem.toLowerCase() === 'am' && hours === 12)
     hours = 0
-  return new Date(Date.UTC(Number.parseInt(yearStr ?? '0', 10), monthIndex, Number.parseInt(dStr ?? '1', 10), hours, mins))
+  return new Date(Date.UTC(Number.parseInt(yearStr, 10), monthIndex, Number.parseInt(dStr, 10), hours, mins))
 }
 
 const addMessagesInBulk = async (

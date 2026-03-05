@@ -64,13 +64,12 @@ fn has_four_digit_year(text: &str) -> bool {
 }
 
 fn contains_time_cue(text: &str) -> bool {
-  let lower = text.to_lowercase();
-  let words: Vec<&str> = lower
+  if text
+    .to_lowercase()
     .split(|c: char| !c.is_ascii_alphanumeric())
     .filter(|w| !w.is_empty())
-    .collect();
-
-  if words.iter().any(|w| TIME_CUE_WORDS.contains(w)) {
+    .any(|w| TIME_CUE_WORDS.contains(&w))
+  {
     return true;
   }
 
