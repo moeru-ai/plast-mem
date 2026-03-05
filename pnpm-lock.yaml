@@ -65,25 +65,12 @@ importers:
       '@xsai/tool':
         specifier: ^0.4.3
         version: 0.4.3(zod@4.3.6)
-      dotenv:
-        specifier: ^16.5.0
-        version: 16.6.1
       plastmem:
         specifier: workspace:*
         version: link:../../packages/plastmem
       zod:
         specifier: ^4.3.6
         version: 4.3.6
-    devDependencies:
-      '@moeru/tsconfig':
-        specifier: 0.1.0-beta.16
-        version: 0.1.0-beta.16
-      tsx:
-        specifier: ^4.19.4
-        version: 4.21.0
-      typescript:
-        specifier: ^5.8.3
-        version: 5.9.3
 
   examples/haru:
     dependencies:
@@ -1476,10 +1463,6 @@ packages:
   diff-sequences@29.6.3:
     resolution: {integrity: sha512-EjePK1srD3P08o2j4f0ExnylqRs5B9tJjcp9t1krH2qRi8CCdsYfwe9JgSLurFBWwq4uOlipzfk5fHNvwFKr8Q==}
     engines: {node: ^14.15.0 || ^16.10.0 || >=18.0.0}
-
-  dotenv@16.6.1:
-    resolution: {integrity: sha512-uBq4egWHTcTt33a72vpSG0z3HnPuIl6NqYcTrKEg2azoEyl2hpW0zqlxysq2pK9HlDIHyHyakeYaYnSAwd8bow==}
-    engines: {node: '>=12'}
 
   electron-to-chromium@1.5.286:
     resolution: {integrity: sha512-9tfDXhJ4RKFNerfjdCcZfufu49vg620741MNs26a9+bhLThdB+plgMeou98CAaHu/WATj2iHOOHTp1hWtABj2A==}
@@ -4169,8 +4152,6 @@ snapshots:
   diff-sequences@27.5.1: {}
 
   diff-sequences@29.6.3: {}
-
-  dotenv@16.6.1: {}
 
   electron-to-chromium@1.5.286: {}
 
