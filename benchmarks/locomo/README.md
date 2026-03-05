@@ -6,7 +6,7 @@ Evaluates plast-mem's long-term memory retrieval quality using the [LoCoMo datas
 
 ```bash
 # from workspace root
-pnpm install
+pnpm i
 
 # place the dataset
 cp locomo10.json benchmarks/locomo/data/
@@ -22,16 +22,16 @@ OPENAI_CHAT_MODEL=qwen3:8b
 
 ```bash
 # full run: ingest → evaluate
-pnpm --filter @plastmem/benchmark-locomo start
+pnpm -F @plastmem/benchmark-locomo start
 
 # skip ingestion (reuse previously ingested conversations)
-pnpm --filter @plastmem/benchmark-locomo start -- --skip-ingest
+pnpm -F @plastmem/benchmark-locomo start -- --skip-ingest
 
 # run specific samples only
-pnpm --filter @plastmem/benchmark-locomo start -- --sample-ids sample_1,sample_2
+pnpm -F @plastmem/benchmark-locomo start -- --sample-ids sample_1,sample_2
 
 # custom input/output paths
-pnpm --filter @plastmem/benchmark-locomo start -- \
+pnpm -F @plastmem/benchmark-locomo start -- \
   --data-file ./data/locomo10.json \
   --out-file ./results/run-1.json
 ```
@@ -63,14 +63,19 @@ Results are written to `results/<timestamp>.json`:
   "meta": { "model": "...", "base_url": "...", "timestamp": "..." },
   "stats": {
     "overall": 0.42,
-    "by_category": { "1": 0.38, "2": 0.51, ... },
-    "by_category_count": { "1": 120, "2": 340, ... }
+    "by_category": { "1": 0.38, "2": 0.51, "3": "..." },
+    "by_category_count": { "1": 120, "2": 340, "3": "..." }
   },
   "results": [
     {
-      "sample_id": "...", "category": 2, "question": "...",
-      "gold_answer": "...", "prediction": "...", "score": 0.8,
-      "context_retrieved": "...", "evidence": [...]
+      "sample_id": "...",
+      "category": 2,
+      "question": "...",
+      "gold_answer": "...",
+      "prediction": "...",
+      "score": 0.8,
+      "context_retrieved": "...",
+      "evidence": ["..."]
     }
   ]
 }
