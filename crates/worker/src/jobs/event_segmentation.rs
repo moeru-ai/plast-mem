@@ -459,27 +459,27 @@ async fn enqueue_predict_calibrate_jobs(
     return Ok(());
   }
 
-  // Real-time learning: enqueue a PredictCalibrateJob for each new episode
-  let mut storage = semantic_storage.clone();
-  let mut job_count = 0;
+  // Enqueue jobs in parallel for better performance
+  let futures: Vec<_> = episodes
+    .iter()
+    .map(|episode| {
+      let is_flashbulb = episode.surprise >= FLASHBULB_SURPRISE_THRESHOLD;
+      let job = PredictCalibrateJob {
+        conversation_id,
+        episode_id: episode.id,
+        force: is_flashbulb,
+      };
+      let mut storage = semantic_storage.clone();
+      async move { storage.push(job).await }
+    })
+    .collect();
 
-  for episode in episodes {
-    let is_flashbulb = episode.surprise >= FLASHBULB_SURPRISE_THRESHOLD;
-
-    // Always enqueue for now (real-time learning)
-    // In the future, could add logic to skip low-surprise episodes
-    let job = PredictCalibrateJob {
-      conversation_id,
-      episode_id: episode.id,
-      force: is_flashbulb,
-    };
-    storage.push(job).await?;
-    job_count += 1;
-  }
+  let results: Result<Vec<_>, _> = futures::future::join_all(futures).await.into_iter().collect();
+  results?;
 
   tracing::info!(
     conversation_id = %conversation_id,
-    created_jobs = job_count,
+    created_jobs = episodes.len(),
     "Enqueued predict-calibrate jobs for new episodes"
   );
 

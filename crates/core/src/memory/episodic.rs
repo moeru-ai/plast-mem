@@ -173,10 +173,10 @@ impl EpisodicMemory {
   ) -> Result<Option<Self>, AppError> {
     use sea_orm::EntityTrait;
 
-    let result = episodic_memory::Entity::find_by_id(id).one(db).await?;
-    match result {
-      Some(model) => Ok(Some(Self::from_model(model)?)),
-      None => Ok(None),
-    }
+    episodic_memory::Entity::find_by_id(id)
+      .one(db)
+      .await?
+      .map(Self::from_model)
+      .transpose()
   }
 }

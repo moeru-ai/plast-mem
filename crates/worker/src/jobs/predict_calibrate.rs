@@ -273,7 +273,7 @@ async fn predict_calibrate_extraction(
   existing_facts: &[(SemanticMemory, f64)],
 ) -> Result<Vec<String>, AppError> {
   // Step 1: PREDICT - Generate prediction from stratified facts (guidelines prioritized)
-  let facts = select_relevant_facts(episode, existing_facts);
+  let facts = select_relevant_facts(existing_facts);
   let prediction = predict_episode(&episode.title, &facts).await?;
   tracing::debug!(episode_id = %episode.id, prediction_len = prediction.len(), "Generated prediction");
 
@@ -412,7 +412,7 @@ fn infer_category(statement: &str) -> &'static str {
 fn extract_keywords(statement: &str) -> Vec<String> {
   statement
     .split_whitespace()
-    .filter(|w| w.len() > 4)
+    .filter(|w| w.len() > 2) // Allow short technical terms like "Rust", "AI", "Go"
     .take(5)
     .map(|w| {
       w.to_lowercase()
@@ -428,7 +428,6 @@ fn extract_keywords(statement: &str) -> Vec<String> {
 // ──────────────────────────────────────────────────
 
 fn select_relevant_facts<'a>(
-  _episode: &EpisodicMemory,
   facts: &'a [(SemanticMemory, f64)],
 ) -> Vec<&'a SemanticMemory> {
   // Stratified: guidelines first (affect AI style), then other high-relevance facts
