@@ -340,10 +340,10 @@ async fn consolidate_statements(
   for (stmt, emb) in statements.iter().zip(embeddings) {
     if let Some(existing) = find_duplicate(&emb, source.conversation_id, db).await? {
       merge_with_existing(&existing, source.id, db).await?;
-      tracing::debug!(existing_id = %existing.id, statement = %stmt, "Merged duplicate");
+      tracing::debug!(existing_id = %existing.id, "Merged duplicate fact");
     } else {
       insert_new_fact(stmt, emb, source, db).await?;
-      tracing::debug!(statement = %stmt, "Inserted new semantic fact");
+      tracing::debug!("Inserted new semantic fact");
     }
   }
   Ok(())
@@ -427,7 +427,7 @@ fn infer_category(statement: &str) -> &'static str {
 fn extract_keywords(statement: &str) -> Vec<String> {
   statement
     .split_whitespace()
-    .filter(|w| w.len() > 2) // Allow short technical terms like "Rust", "AI", "Go"
+    .filter(|w| w.len() >= 2) // Allow short technical terms like "Rust", "AI", "Go", "C++"
     .take(5)
     .map(|w| {
       w.to_lowercase()
