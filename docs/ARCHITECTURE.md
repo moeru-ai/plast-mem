@@ -66,7 +66,7 @@ Background tasks worker
 
 - `event_segmentation.rs`: Dispatches to core's boundary detection, episode creation, and consolidation trigger
 - `memory_review.rs`: LLM-based review of retrieved memories, updates FSRS parameters
-- `semantic_consolidation.rs`: Runs the CLS consolidation pipeline (episodes → semantic facts)
+- `predict_calibrate.rs`: Runs the Predict-Calibrate Learning pipeline (episodes → semantic facts)
 
 ### 8. plastmem_server
 

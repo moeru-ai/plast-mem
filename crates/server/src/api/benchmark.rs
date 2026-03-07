@@ -191,7 +191,7 @@ pub struct BenchmarkJobStatus {
   /// Whether a segmentation job fence is currently active.
   pub fence_active: bool,
   /// Number of active (Pending or Running) Apalis jobs for this conversation.
-  /// Covers EventSegmentationJob and SemanticConsolidationJob.
+  /// Covers EventSegmentationJob and PredictCalibrateJob.
   pub apalis_active: i64,
   /// True when the message queue is empty, no fence is active, and no Apalis jobs are active.
   pub done: bool,
