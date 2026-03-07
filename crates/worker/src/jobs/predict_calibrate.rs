@@ -1,17 +1,14 @@
 use apalis::prelude::Data;
 use chrono::Utc;
-use plastmem_ai::{
-  ChatCompletionRequestMessage, embed_many, generate_object, generate_text,
-};
+use plastmem_ai::{ChatCompletionRequestMessage, embed_many, generate_object, generate_text};
 use plastmem_core::{EpisodicMemory, SemanticMemory};
 
 use plastmem_entities::{episodic_memory, semantic_memory};
 use plastmem_shared::AppError;
 use schemars::JsonSchema;
 use sea_orm::{
-  ActiveModelTrait, ConnectionTrait, DatabaseConnection, DbBackend, EntityTrait,
-  FromQueryResult, IntoActiveModel, Set, Statement,
-  prelude::PgVector,
+  ActiveModelTrait, ConnectionTrait, DatabaseConnection, DbBackend, EntityTrait, FromQueryResult,
+  IntoActiveModel, Set, Statement, prelude::PgVector,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -162,7 +159,7 @@ pub async fn process_predict_calibrate(
   let db = &*db;
 
   // Load the target episode
-  let episode = match EpisodicMemory::get_by_id(job.episode_id, db).await? {
+  let episode = match EpisodicMemory::get(job.episode_id, db).await? {
     Some(ep) => ep,
     None => {
       tracing::warn!(
@@ -239,15 +236,21 @@ pub async fn process_predict_calibrate(
 
 // Helper: format episode messages for prompts
 fn format_messages(episode: &EpisodicMemory) -> String {
-  episode.messages.iter().enumerate()
+  episode
+    .messages
+    .iter()
+    .enumerate()
     .map(|(i, m)| format!("Message {} [{}]: {}", i + 1, m.role, m.content))
-    .collect::<Vec<_>>().join("\n")
+    .collect::<Vec<_>>()
+    .join("\n")
 }
 
 async fn cold_start_extraction(episode: &EpisodicMemory) -> Result<Vec<String>, AppError> {
   let user_content = format!(
     "Episode Title: {}\nEpisode Summary: {}\n\nMessages:\n{}",
-    episode.title, episode.summary, format_messages(episode)
+    episode.title,
+    episode.summary,
+    format_messages(episode)
   );
 
   tracing::debug!(episode_id = %episode.id, "Cold-start extraction");
@@ -259,7 +262,8 @@ async fn cold_start_extraction(episode: &EpisodicMemory) -> Result<Vec<String>, 
     ],
     "pcl_cold_start".to_owned(),
     Some("Extract high-value knowledge from first episode".to_owned()),
-  ).await?;
+  )
+  .await?;
 
   Ok(output.statements)
 }
@@ -280,7 +284,9 @@ async fn predict_calibrate_extraction(
   // Step 2: CALIBRATE - Compare prediction with actual messages
   let user_content = format!(
     "## Episode Title\n{}\n\n## PREDICTED Content\n{}\n\n## ACTUAL Messages\n{}",
-    episode.title, prediction, format_messages(episode)
+    episode.title,
+    prediction,
+    format_messages(episode)
   );
 
   tracing::debug!(episode_id = %episode.id, "Extracting knowledge from gaps");
@@ -292,7 +298,8 @@ async fn predict_calibrate_extraction(
     ],
     "pcl_calibrate".to_owned(),
     Some("Extract knowledge from prediction-actual comparison".to_owned()),
-  ).await?;
+  )
+  .await?;
 
   Ok(output.statements)
 }
@@ -302,13 +309,21 @@ async fn predict_episode(title: &str, facts: &[&SemanticMemory]) -> Result<Strin
     return Ok(format!("No knowledge available to predict '{}'.", title));
   }
 
-  let facts_text = facts.iter().map(|f| format!("- [{}] {}", f.category, f.fact)).collect::<Vec<_>>().join("\n");
-  let user_content = format!("Episode Title: {}\n\nExisting Knowledge:\n{}", title, facts_text);
+  let facts_text = facts
+    .iter()
+    .map(|f| format!("- [{}] {}", f.category, f.fact))
+    .collect::<Vec<_>>()
+    .join("\n");
+  let user_content = format!(
+    "Episode Title: {}\n\nExisting Knowledge:\n{}",
+    title, facts_text
+  );
 
   generate_text(vec![
     ChatCompletionRequestMessage::System(PREDICTION_SYSTEM_PROMPT.into()),
     ChatCompletionRequestMessage::User(user_content.into()),
-  ]).await
+  ])
+  .await
 }
 
 // ──────────────────────────────────────────────────
@@ -427,9 +442,7 @@ fn extract_keywords(statement: &str) -> Vec<String> {
 // Helpers
 // ──────────────────────────────────────────────────
 
-fn select_relevant_facts<'a>(
-  facts: &'a [(SemanticMemory, f64)],
-) -> Vec<&'a SemanticMemory> {
+fn select_relevant_facts<'a>(facts: &'a [(SemanticMemory, f64)]) -> Vec<&'a SemanticMemory> {
   // Stratified: guidelines first (affect AI style), then other high-relevance facts
   let guidelines: Vec<_> = facts
     .iter()
@@ -463,9 +476,13 @@ async fn load_related_facts(
   db: &DatabaseConnection,
 ) -> Result<Vec<(SemanticMemory, f64)>, AppError> {
   let results = SemanticMemory::retrieve(
-    &episode.summary, MAX_STATEMENTS_FOR_PREDICTION as i64,
-    episode.conversation_id, db, None,
-  ).await?;
+    &episode.summary,
+    MAX_STATEMENTS_FOR_PREDICTION as i64,
+    episode.conversation_id,
+    db,
+    None,
+  )
+  .await?;
 
   let max_score = results.first().map(|(_, s)| *s).unwrap_or(0.0);
   tracing::debug!(

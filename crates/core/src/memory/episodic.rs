@@ -5,7 +5,8 @@ use plastmem_entities::episodic_memory;
 use plastmem_shared::{AppError, Message};
 
 use sea_orm::{
-  ConnectionTrait, DatabaseConnection, DbBackend, FromQueryResult, Statement, prelude::PgVector,
+  ConnectionTrait, DatabaseConnection, DbBackend, EntityTrait, FromQueryResult, Statement,
+  prelude::PgVector,
 };
 use serde::Serialize;
 use utoipa::ToSchema;
@@ -166,13 +167,7 @@ impl EpisodicMemory {
     Ok(results)
   }
 
-  /// Get an episodic memory by ID.
-  pub async fn get_by_id(
-    id: Uuid,
-    db: &DatabaseConnection,
-  ) -> Result<Option<Self>, AppError> {
-    use sea_orm::EntityTrait;
-
+  pub async fn get(id: Uuid, db: &DatabaseConnection) -> Result<Option<Self>, AppError> {
     episodic_memory::Entity::find_by_id(id)
       .one(db)
       .await?
