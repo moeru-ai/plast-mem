@@ -282,11 +282,11 @@ impl SurpriseProfile {
 
 ```rust
 // crates/worker/src/jobs/event_segmentation.rs
-pub async fn enqueue_semantic_consolidation(
+pub async fn enqueue_predict_calibrate(
     conversation_id: Uuid,
     episode: plastmem_core::CreatedEpisode,
     db: &DatabaseConnection,
-    semantic_storage: &PostgresStorage<SemanticConsolidationJob>,
+    semantic_storage: &PostgresStorage<PredictCalibrateJob>,
 ) -> Result<(), AppError> {
     // Load or initialize per-conversation surprise profile
     let mut profile = SurpriseProfile::load(conversation_id, db).await?
@@ -306,7 +306,7 @@ pub async fn enqueue_semantic_consolidation(
     let threshold_reached = unconsolidated_count >= CONSOLIDATION_EPISODE_THRESHOLD;
 
     if is_flashbulb || threshold_reached {
-        let job = SemanticConsolidationJob {
+        let job = PredictCalibrateJob {
             conversation_id,
             force: is_flashbulb,
         };
@@ -510,7 +510,7 @@ Inferred facts are marked but included naturally:
 
 1. Add `semantic_note` table migration
 2. Create entity and CRUD operations
-3. Implement generation trigger in `SemanticConsolidationJob` (batch generation after consolidation)
+3. Implement generation trigger in `PredictCalibrateJob` (after each episode consolidation)
 4. Implement incremental update check (≥ 3 new facts OR ≥ 20% change OR invalidation → regenerate)
 5. Implement cross-subject linking via shared objects
 6. Modify retrieval to include notes

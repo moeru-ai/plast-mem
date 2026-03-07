@@ -9,18 +9,17 @@ use plastmem_ai::{
 };
 use plastmem_core::MessageQueue;
 
-const CONSOLIDATION_EPISODE_THRESHOLD: u64 = 1;
 const FLASHBULB_SURPRISE_THRESHOLD: f32 = 0.85;
 // Keep this in sync with `crates/core/src/message_queue.rs` WINDOW_MAX.
 const FORCE_SINGLE_SEGMENT_QUEUE_LEN: usize = 40;
 use plastmem_entities::episodic_memory;
 use plastmem_shared::{AppError, Message};
 use schemars::JsonSchema;
-use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter};
+use sea_orm::{DatabaseConnection, EntityTrait};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::{MemoryReviewJob, SemanticConsolidationJob};
+use super::{MemoryReviewJob, PredictCalibrateJob};
 
 // ──────────────────────────────────────────────────
 // Job definition
@@ -342,7 +341,7 @@ pub async fn process_event_segmentation(
   job: EventSegmentationJob,
   db: Data<DatabaseConnection>,
   review_storage: Data<PostgresStorage<MemoryReviewJob>>,
-  semantic_storage: Data<PostgresStorage<SemanticConsolidationJob>>,
+  semantic_storage: Data<PostgresStorage<PredictCalibrateJob>>,
 ) -> Result<(), AppError> {
   let db = &*db;
   let conversation_id = job.conversation_id;
@@ -423,8 +422,8 @@ pub async fn process_event_segmentation(
   // Then create episodes (if crash here, messages already gone - no duplicates on retry)
   let episodes = create_episodes_batch(conversation_id, drain_segments, db).await?;
 
-  // Enqueue at most one semantic consolidation job per segmentation batch.
-  enqueue_semantic_consolidation(conversation_id, &episodes, db, &semantic_storage).await?;
+  // Enqueue predict-calibrate jobs for real-time learning from each episode.
+  enqueue_predict_calibrate_jobs(conversation_id, &episodes, &semantic_storage).await?;
 
   Ok(())
 }
@@ -451,57 +450,39 @@ async fn enqueue_pending_reviews(
   Ok(())
 }
 
-async fn enqueue_semantic_consolidation(
+async fn enqueue_predict_calibrate_jobs(
   conversation_id: Uuid,
   episodes: &[CreatedEpisode],
-  db: &DatabaseConnection,
-  semantic_storage: &PostgresStorage<SemanticConsolidationJob>,
+  semantic_storage: &PostgresStorage<PredictCalibrateJob>,
 ) -> Result<(), AppError> {
   if episodes.is_empty() {
     return Ok(());
   }
 
-  let is_flashbulb = episodes
-    .iter()
-    .any(|episode| episode.surprise >= FLASHBULB_SURPRISE_THRESHOLD);
-  let unconsolidated_count = count_unconsolidated(conversation_id, db).await?;
-  let threshold_reached = unconsolidated_count >= CONSOLIDATION_EPISODE_THRESHOLD;
+  // Real-time learning: enqueue a PredictCalibrateJob for each new episode
+  let mut storage = semantic_storage.clone();
+  let mut job_count = 0;
 
-  if is_flashbulb || threshold_reached {
-    let episode_ids = episodes.iter().map(|episode| episode.id).collect();
-    let job = SemanticConsolidationJob {
+  for episode in episodes {
+    let is_flashbulb = episode.surprise >= FLASHBULB_SURPRISE_THRESHOLD;
+
+    // Always enqueue for now (real-time learning)
+    // In the future, could add logic to skip low-surprise episodes
+    let job = PredictCalibrateJob {
       conversation_id,
-      episode_ids,
+      episode_id: episode.id,
       force: is_flashbulb,
     };
-    let mut storage = semantic_storage.clone();
     storage.push(job).await?;
-    tracing::info!(
-      conversation_id = %conversation_id,
-      created_episodes = episodes.len(),
-      unconsolidated_count,
-      is_flashbulb,
-      "Enqueued semantic consolidation job"
-    );
-  } else {
-    tracing::debug!(
-      conversation_id = %conversation_id,
-      unconsolidated_count,
-      "Accumulating episode for later consolidation"
-    );
+    job_count += 1;
   }
+
+  tracing::info!(
+    conversation_id = %conversation_id,
+    created_jobs = job_count,
+    "Enqueued predict-calibrate jobs for new episodes"
+  );
 
   Ok(())
 }
 
-async fn count_unconsolidated(
-  conversation_id: Uuid,
-  db: &DatabaseConnection,
-) -> Result<u64, AppError> {
-  let count = episodic_memory::Entity::find()
-    .filter(episodic_memory::Column::ConsolidatedAt.is_null())
-    .filter(episodic_memory::Column::ConversationId.eq(conversation_id))
-    .count(db)
-    .await?;
-  Ok(count)
-}

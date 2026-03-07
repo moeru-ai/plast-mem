@@ -54,7 +54,7 @@ API endpoint → Server handler → Core service → Entity/DB
 - **plastmem_worker**: Background tasks worker
   - `event_segmentation.rs` - job dispatch, episode creation, consolidation trigger
   - `memory_review.rs` - LLM-based review and FSRS update
-  - `semantic_consolidation.rs` - CLS consolidation pipeline (episodes → long-term facts)
+  - `predict_calibrate.rs` - Predict-Calibrate Learning pipeline (episodes → semantic facts)
 - **plastmem_server**: HTTP server and API handlers
   - `api/add_message.rs` - message ingestion
   - `api/recent_memory.rs` - recent memories (raw JSON and markdown)
@@ -63,7 +63,7 @@ API endpoint → Server handler → Core service → Entity/DB
 ## Key Runtime Flows
 
 - **Memory creation**: `crates/server/src/api/add_message.rs` → `MessageQueue::push` (RETURNING trigger_count) → `check()` (count/time trigger + CAS fence) → `EventSegmentationJob` → `batch_segment()` (single LLM call: title + summary + surprise_level per segment) → drain + finalize → `create_episode_from_segment` (parallel, embed + FSRS init) → `EpisodicMemory` with surprise-based FSRS stability boost
-- **Semantic consolidation**: after episode creation → `enqueue_semantic_consolidation` (if ≥3 unconsolidated episodes or flashbulb surprise ≥0.85) → `SemanticConsolidationJob` → load related facts → LLM consolidation call → new/reinforce/update/invalidate facts → mark episodes consolidated
+- **Predict-Calibrate Learning**: after each episode creation → `enqueue_predict_calibrate_jobs` → `PredictCalibrateJob` per episode → load related facts → PREDICT (generate prediction) → CALIBRATE (compare with actual, extract knowledge) → consolidate facts → mark episode consolidated
 - **Memory retrieval**: `crates/server/src/api/retrieve_memory.rs` → parallel: `SemanticMemory::retrieve` (BM25 + vector RRF) + `EpisodicMemory::retrieve` (BM25 + vector RRF × FSRS retrievability) → records pending review in `MessageQueue`
 - **Pre-retrieval context**: `POST /api/v0/context_pre_retrieve` → `SemanticMemory::retrieve` only → returns markdown for system prompt injection; no pending review recorded
 - **FSRS review update**: segmentation triggers `MemoryReviewJob` when pending reviews exist → LLM evaluates relevance (Again/Hard/Good/Easy) → FSRS parameter update in `crates/worker/src/jobs/memory_review.rs`
@@ -123,7 +123,7 @@ When implementing new features:
 | `crates/core/src/message_queue.rs` | Queue push/drain/get, PendingReview, SegmentationCheck |
 | `crates/worker/src/jobs/memory_review.rs` | LLM review and FSRS updates |
 | `crates/worker/src/jobs/event_segmentation.rs` | Event segmentation, episode creation, consolidation trigger |
-| `crates/worker/src/jobs/semantic_consolidation.rs` | CLS consolidation pipeline |
+| `crates/worker/src/jobs/predict_calibrate.rs` | Predict-Calibrate Learning pipeline |
 | `crates/server/src/api/add_message.rs` | Message ingestion API |
 | `crates/server/src/api/retrieve_memory.rs` | Memory retrieval API (semantic + episodic); `context_pre_retrieve` for semantic-only pre-LLM injection |
 | `crates/server/src/api/recent_memory.rs` | Recent episodic memories API |

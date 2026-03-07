@@ -13,7 +13,7 @@ Conversation Messages → Event Segmentation → EpisodicMemory (with FSRS state
                               ↓
                    Stability Boost (1.0 + surprise × 0.5)
                               ↓
-                   (if threshold/flashbulb) → SemanticConsolidation
+                   (real-time per episode) → PredictCalibrate
 ```
 
 ## Schema
@@ -84,7 +84,7 @@ See [Memory Review](memory_review.md) and [FSRS](fsrs.md) for details.
 
 ### 5. Semantic Consolidation
 
-After creation, if `consolidated_at IS NULL` and the unconsolidated episode count reaches the threshold (or surprise triggers a flashbulb), a `SemanticConsolidationJob` extracts long-term facts. On completion, `consolidated_at` is set.
+After creation, a `PredictCalibrateJob` is immediately enqueued for real-time knowledge extraction. On completion, `consolidated_at` is set.
 
 See [Semantic Memory](semantic_memory.md) for details.
 
@@ -178,10 +178,10 @@ FSRS models retrievability—how likely you are to recall something given when y
 └─────────────────┘     └──────────────────┘     └─────────────────┘
                                                            │
                            ┌───────────────────────────────┤
-                           │                               │ (threshold/flashbulb)
+                           │                               │ (real-time per episode)
                            ▼                               ▼
                     ┌─────────────────┐     ┌──────────────────────┐
-                    │ retrieve_memory │◀─── │ SemanticConsolidation│
+                    │ retrieve_memory │◀─── │ PredictCalibrate     │
                     │ (hybrid search) │     │ (facts extraction)   │
                     └─────────────────┘     └──────────────────────┘
                            │

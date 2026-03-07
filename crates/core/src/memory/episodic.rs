@@ -165,4 +165,18 @@ impl EpisodicMemory {
 
     Ok(results)
   }
+
+  /// Get an episodic memory by ID.
+  pub async fn get_by_id(
+    id: Uuid,
+    db: &DatabaseConnection,
+  ) -> Result<Option<Self>, AppError> {
+    use sea_orm::EntityTrait;
+
+    let result = episodic_memory::Entity::find_by_id(id).one(db).await?;
+    match result {
+      Some(model) => Ok(Some(Self::from_model(model)?)),
+      None => Ok(None),
+    }
+  }
 }

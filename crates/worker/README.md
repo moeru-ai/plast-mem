@@ -8,7 +8,7 @@ Runs three background job processors:
 
 1. **Event Segmentation** - Batch-segments message queues and creates episodic memories
 2. **Memory Review** - Evaluates retrieved memories and updates FSRS parameters
-3. **Semantic Consolidation** - Extracts long-term facts from episodic memories
+3. **Predict-Calibrate** - Real-time knowledge learning from episodic memories
 
 Uses [Apalis](https://github.com/apalis-rs/apalis) for job queue management with PostgreSQL storage.
 
@@ -24,7 +24,7 @@ Processing flow:
 2. Run `batch_segment(messages[0..fence_count])` — single LLM call
 3. **Drain + finalize first** (crash-safe: loss preferred over duplicate)
 4. Create episodes for drained segments in parallel (`try_join_all`)
-5. Enqueue `SemanticConsolidationJob` per episode if threshold reached
+5. Enqueue `PredictCalibrateJob` for each new episode
 
 Window doubling: if LLM returns 1 segment and window not yet doubled → double window, clear fence, wait for more messages.
 
@@ -38,18 +38,21 @@ Processing flow:
 2. Call LLM to evaluate relevance (Again/Hard/Good/Easy)
 3. Update FSRS parameters based on rating
 
-### [SemanticConsolidationJob](src/jobs/semantic_consolidation.rs)
+### [PredictCalibrateJob](src/jobs/predict_calibrate.rs)
 
-Triggered after episode creation when unconsolidated episode count ≥ threshold (3) or surprise ≥ 0.85.
+Triggered immediately after each episode is created for real-time learning.
 
 Processing flow:
 
-1. Fetch unconsolidated episodes for the conversation
-2. Check threshold (skip if below, unless `force=true`)
-3. Load related existing facts as context
-4. Single LLM call → fact actions (new/reinforce/update/invalidate)
-5. Embed new facts, apply actions in a transaction
-6. Mark episodes as consolidated
+1. Load the newly created episode
+2. Check if episode is already consolidated (skip if yes)
+3. Load related existing semantic facts via hybrid search
+4. If no existing knowledge → cold start extraction
+5. Otherwise:
+   - PREDICT: Generate content prediction from relevant facts (guidelines prioritized)
+   - CALIBRATE: Compare prediction with actual messages, extract knowledge from gaps
+6. Consolidate extracted facts (deduplicate, categorize, embed)
+7. Mark episode as consolidated
 
 ## Usage
 
@@ -67,7 +70,7 @@ This runs indefinitely until SIGINT (Ctrl+C) is received.
 
 Each worker has:
 
-- **Name**: "event-segmentation", "memory-review", or "semantic-consolidation"
+- **Name**: "event-segmentation", "memory-review", or "predict-calibrate"
 - **Tracing**: Enabled via `enable_tracing()`
 - **Shutdown timeout**: 5 seconds
 
@@ -81,5 +84,5 @@ Internal errors are `AppError`, converted at the job boundary.
 - `jobs/mod.rs` - Job definitions and error types
 - `jobs/event_segmentation.rs` - Segmentation job implementation
 - `jobs/memory_review.rs` - Review job implementation
-- `jobs/semantic_consolidation.rs` - Consolidation job implementation
+- `jobs/predict_calibrate.rs` - Predict-Calibrate Learning job implementation
 - `lib.rs` - Worker registration and monitor setup

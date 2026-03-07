@@ -73,7 +73,7 @@ Add FSRS-based confidence tracking to semantic memory. Uses `stability` as confi
 ## Phase 4: Integration Points
 
 ### Consolidation Trigger
-- [ ] **Modify `crates/worker/src/jobs/semantic_consolidation.rs`**
+- [ ] **Modify `crates/worker/src/jobs/predict_calibrate.rs`**
   - When LLM returns `update` or `invalidate` action:
     - Enqueue `SemanticReviewJob` for the old fact (if it exists)
   - When inserting new fact:

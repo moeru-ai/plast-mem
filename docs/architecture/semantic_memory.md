@@ -5,19 +5,32 @@ Semantic memory stores long-term facts and behavioral guidelines extracted from 
 ## Overview
 
 ```
-EpisodicMemory (unconsolidated)
+EpisodicMemory (created)
         │
-        │  threshold: 3+ episodes, or flashbulb surprise ≥ 0.85
+        │  real-time trigger: each new episode
         ▼
-SemanticConsolidationJob
+PredictCalibrateJob (per episode)
         │
-        │  1. Load related existing facts  (predict)
-        │  2. LLM consolidation call       (calibrate)
-        │  3. Process fact actions         (write)
-        │  4. Mark episodes consolidated
+        │  1. PREDICT: Generate content prediction from existing knowledge
+        │  2. CALIBRATE: Compare prediction with actual messages
+        │  3. Extract high-value knowledge from gaps
+        │  4. Consolidate with existing facts
+        │  5. Mark episode consolidated
         ▼
 SemanticMemory (categorized facts)
 ```
+
+### Predict-Calibrate Learning (PCL)
+
+This implementation follows Nemori's Predict-Calibrate Learning principle ([arXiv:2508.03341](https://arxiv.org/abs/2508.03341), [GitHub](https://github.com/nemori-ai/nemori)):
+
+**PREDICT Phase**: Generate a prediction of episode content from existing semantic knowledge. The system predicts what the conversation should contain based on known facts.
+
+**CALIBRATE Phase**: Compare the predicted content with actual messages to identify knowledge gaps. High-value facts are extracted from prediction errors (where reality differed from expectations).
+
+**Cold Start**: When no existing knowledge exists, the system uses a specialized extraction prompt to identify high-value facts directly from the first episode.
+
+This approach treats prediction errors as learning signals—when the system's expectations don't match reality, it extracts new knowledge from these discrepancies.
 
 ## Schema
 
@@ -63,52 +76,55 @@ Every fact is assigned exactly one category. These replace the old SPO predicate
 
 ## Lifecycle
 
-### 1. Consolidation Trigger
+### 1. Real-Time Learning Trigger
 
-After each new episode is created, `event_segmentation.rs` checks whether to enqueue a `SemanticConsolidationJob`:
+After each new episode is created in `event_segmentation.rs`, a `PredictCalibrateJob` is immediately enqueued for that episode:
 
-| Condition | Trigger type | `force` flag |
-|-----------|-------------|-------------|
-| `surprise ≥ 0.85` (flashbulb memory) | Immediate | `true` |
-| `unconsolidated_count ≥ 3` | Standard threshold | `false` |
+**Code**: `enqueue_predict_calibrate_jobs()` in `crates/worker/src/jobs/event_segmentation.rs`
 
-**Code**: `enqueue_semantic_consolidation()` in `crates/worker/src/jobs/event_segmentation.rs`
+Unlike the previous batch-based approach, this implements **real-time learning** where each episode is processed as soon as it's created.
 
-### 2. Consolidation Pipeline
+### 2. Predict-Calibrate Pipeline
 
-Implemented in `SemanticConsolidationJob` (`crates/worker/src/jobs/semantic_consolidation.rs`):
+Implemented in `PredictCalibrateJob` (`crates/worker/src/jobs/predict_calibrate.rs`):
 
-#### Step 1 — Predict: Load Related Facts
+#### Cold Start Mode (No Existing Knowledge)
 
-Fetch existing active facts semantically related to the unconsolidated episodes. Uses `embed_many()` on episode summaries, then `SemanticMemory::retrieve_by_embedding()` per episode, deduplicated by fact ID.
+When no semantic knowledge exists yet, the system uses a specialized high-value extraction prompt:
 
-- Limit: 20 related facts presented to the LLM as context
-- Only searches active facts (`invalid_at IS NULL`) in the same conversation
+- **Persistence Test**: Will this still be true in 6 months?
+- **Specificity Test**: Does it contain concrete, searchable information?
+- **Utility Test**: Can this help predict future user needs?
+- **Independence Test**: Can this be understood without conversation context?
 
-#### Step 2 — Calibrate: LLM Consolidation Call
+#### Normal Mode (With Existing Knowledge)
 
-Single `generate_object::<ConsolidationOutput>()` call with:
+**Step 1 — PREDICT**: Generate content prediction
 
-- **System**: `CONSOLIDATION_SYSTEM_PROMPT` (8 category descriptions + action taxonomy)
-- **User**: Existing knowledge (formatted as `[ID: …] [category] fact`) + episode summaries + messages
+- Input: Episode title + existing relevant facts
+- Output: Predicted episode content (free-form text)
+- Function: `predict_episode()`
+- Uses LLM to generate what the conversation "should" contain
 
-Output structure:
+**Step 2 — CALIBRATE**: Compare and extract knowledge
 
-```rust
-ConsolidationOutput {
-    facts: Vec<ConsolidatedFact {
-        action: FactAction,          // new | reinforce | update | invalidate
-        existing_fact_id: Option<String>,
-        category: String,            // one of 8 categories
-        fact: String,                // natural language sentence
-        keywords: Vec<String>,       // key entity names / nouns
-    }>
-}
-```
+- Input: Predicted content + Actual messages
+- Output: List of high-value knowledge statements
+- Function: `predict_calibrate_extraction()`
 
-#### Step 3 — Write: Process Fact Actions
+Extracts knowledge statements that explain prediction errors:
+- What couldn't be predicted (missing knowledge)
+- What contradicted existing knowledge
+- What refined vague existing knowledge
 
-All fact sentences are batch-embedded via `embed_many()` before the transaction opens.
+**Step 3 — Consolidate**: Merge with existing knowledge
+
+- Deduplication via embedding similarity (≥0.95)
+- Category inference from statement content
+- Simple keyword extraction
+- Source episode tracking
+
+All statements are embedded via `embed_many()` before consolidation.
 
 Embed input format: `"{category}: {fact} {keywords.join(" ")}"` — category prefix biases the vector toward the semantic domain.
 
@@ -127,9 +143,9 @@ Then, inside a single DB transaction:
 - `DEDUPE_THRESHOLD = 0.95` — cosine similarity above which facts are considered true duplicates
 - `DUPLICATE_CANDIDATE_LIMIT = 5` — candidate facts checked per dedup query
 
-#### Step 4 — Mark Consolidated
+#### Step 4 — Mark Episode Consolidated
 
-All episode IDs are marked `consolidated_at = now()` in the same transaction, preventing re-processing.
+The episode is marked `consolidated_at = now()`, preventing re-processing.
 
 ### 3. Temporal Validity
 
@@ -266,11 +282,9 @@ Hard-deleting invalidated facts would lose history. Soft deletes via `invalid_at
 
 | Constant | Value | Location |
 |----------|-------|----------|
-| `CONSOLIDATION_EPISODE_THRESHOLD` | 3 | `crates/worker/src/jobs/semantic_consolidation.rs` |
 | `FLASHBULB_SURPRISE_THRESHOLD` | 0.85 | `crates/worker/src/jobs/event_segmentation.rs` |
-| `DEDUPE_THRESHOLD` | 0.95 | `crates/worker/src/jobs/semantic_consolidation.rs` |
-| `DUPLICATE_CANDIDATE_LIMIT` | 5 | `crates/worker/src/jobs/semantic_consolidation.rs` |
-| `RELATED_FACTS_LIMIT` | 20 | `crates/worker/src/jobs/semantic_consolidation.rs` |
+| `DEDUPE_THRESHOLD` | 0.95 | `crates/worker/src/jobs/predict_calibrate.rs` |
+| `MAX_STATEMENTS_FOR_PREDICTION` | 10 | `crates/worker/src/jobs/predict_calibrate.rs` |
 | `RETRIEVAL_CANDIDATE_LIMIT` | 100 | `crates/core/src/memory/semantic.rs` |
 
 ## Relationships
@@ -278,14 +292,14 @@ Hard-deleting invalidated facts would lose history. Soft deletes via `invalid_at
 ```
 ┌──────────────────┐    creates   ┌──────────────────┐
 │ EventSegmentation│─────────────▶│  EpisodicMemory  │
-│     Job          │              │  (unconsolidated) │
+│     Job          │              │    (created)     │
 └──────────────────┘              └──────────────────┘
          │                                 │
-         │ enqueues (if threshold/          │ batch input
-         │ flashbulb)                       ▼
+         │ enqueues (real-time,            │ single episode
+         │ per episode)                    ▼
          │                    ┌──────────────────────┐
-         └───────────────────▶│SemanticConsolidation │
-                              │       Job            │
+         └───────────────────▶│  PredictCalibrateJob │
+                              │  (per episode)       │
                               └──────────────────────┘
                                          │
                               ┌──────────┴──────────┐
