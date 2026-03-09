@@ -8,8 +8,8 @@ Evaluates plast-mem's long-term memory retrieval quality using the [LoCoMo datas
 # from workspace root
 pnpm i
 
-# place the dataset
-cp locomo10.json benchmarks/locomo/data/
+# download dataset
+curl -L https://github.com/snap-research/locomo/raw/main/data/locomo10.json --create-dirs -o benchmarks/locomo/data/locomo10.json
 
 # configure env (root .env is loaded automatically)
 PLASTMEM_BASE_URL=http://localhost:3000
