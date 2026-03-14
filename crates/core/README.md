@@ -42,16 +42,16 @@ Tracks memories retrieved for later FSRS review.
 ### Episodic Retrieval
 
 ```rust
-let results = EpisodicMemory::retrieve(query, limit, conversation_id, db).await?;
+let embedding = embed(query).await?;
+let results = EpisodicMemory::retrieve_by_embedding(
+    query, embedding, limit, conversation_id, db
+).await?;
 ```
 
 ### Semantic Retrieval
 
 ```rust
-// Full hybrid search (BM25 on search_text + vector), optional category filter
-let results = SemanticMemory::retrieve(query, limit, conversation_id, db, category).await?;
-
-// Pre-embedded variant (used inside consolidation to avoid re-embedding)
+let embedding = embed(query).await?;
 let results = SemanticMemory::retrieve_by_embedding(
     query, embedding, limit, conversation_id, db, category
 ).await?;

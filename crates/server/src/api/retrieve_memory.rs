@@ -81,6 +81,25 @@ async fn fetch_memory(
   Ok((semantic, episodic))
 }
 
+async fn fetch_semantic_memory(
+  state: &AppState,
+  conversation_id: Uuid,
+  query: &str,
+  semantic_limit: u64,
+  category: Option<&str>,
+) -> Result<Vec<(SemanticMemory, f64)>, AppError> {
+  let query_embedding = embed(query).await?;
+  SemanticMemory::retrieve_by_embedding(
+    query,
+    query_embedding,
+    sanitize_limit(semantic_limit),
+    conversation_id,
+    &state.db,
+    category,
+  )
+  .await
+}
+
 // --- Pre-retrieval context endpoint (no pending review) ---
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -116,11 +135,11 @@ pub async fn context_pre_retrieve(
   if payload.query.is_empty() {
     return Err(AppError::new(anyhow::anyhow!("Query cannot be empty")));
   }
-  let semantic = SemanticMemory::retrieve(
-    &payload.query,
-    sanitize_limit(payload.semantic_limit),
+  let semantic = fetch_semantic_memory(
+    &state,
     payload.conversation_id,
-    &state.db,
+    &payload.query,
+    payload.semantic_limit,
     payload.category.as_deref(),
   )
   .await?;

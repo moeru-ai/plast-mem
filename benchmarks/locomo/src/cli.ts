@@ -27,14 +27,14 @@ interface Args {
   useLlmJudge: boolean
 }
 
+type ArtifactOutput = Omit<BenchmarkOutput, 'results'> & {
+  results: ArtifactResult[]
+}
+
 type ArtifactResult = Omit<QAResult, 'llm_judge_score' | 'nemori_f1_score' | 'score'> & {
   llm_judge_score: null | number
   nemori_f1_score: null | number
   score: null | number
-}
-
-type ArtifactOutput = Omit<BenchmarkOutput, 'results'> & {
-  results: ArtifactResult[]
 }
 
 const parseCliArgs = (): Args => {
