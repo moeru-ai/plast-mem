@@ -1,5 +1,4 @@
 use chrono::{DateTime, Utc};
-use plastmem_ai::embed;
 use plastmem_entities::semantic_memory;
 use plastmem_shared::AppError;
 use sea_orm::{
@@ -56,18 +55,8 @@ impl SemanticMemory {
   }
 
   /// Retrieve semantic facts using hybrid BM25 + vector search with RRF.
-  pub async fn retrieve(
-    query: &str,
-    limit: i64,
-    conversation_id: Uuid,
-    db: &DatabaseConnection,
-    category: Option<&str>,
-  ) -> Result<Vec<(Self, f64)>, AppError> {
-    let query_embedding = embed(query).await?;
-    Self::retrieve_by_embedding(query, query_embedding, limit, conversation_id, db, category).await
-  }
-
-  /// Like `retrieve`, but accepts a pre-computed embedding to avoid redundant API calls.
+  ///
+  /// Accepts a pre-computed embedding so callers can reuse one embedding across retrieval paths.
   pub async fn retrieve_by_embedding(
     query: &str,
     query_embedding: PgVector,

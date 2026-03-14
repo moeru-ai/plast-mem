@@ -3610,6 +3610,7 @@ dependencies = [
  "axum",
  "chrono",
  "chrono-humanize",
+ "plastmem_ai",
  "plastmem_core",
  "plastmem_entities",
  "plastmem_shared",

@@ -164,7 +164,7 @@ This preserves history and avoids information loss.
 
 ### Hybrid BM25 + Vector Search
 
-**Code**: `SemanticMemory::retrieve()` and `SemanticMemory::retrieve_by_embedding()` in `crates/core/src/memory/semantic.rs`
+**Code**: `SemanticMemory::retrieve_by_embedding()` in `crates/core/src/memory/semantic.rs`
 
 ```sql
 WITH
@@ -195,7 +195,7 @@ RRF formula: `score = Σ 1.0 / (60 + rank)`
 
 ### Category Filter
 
-Both `retrieve()` and `retrieve_by_embedding()` accept `category: Option<&str>`. When `Some("guideline")` is passed, only guideline facts are returned. Callers (including the API) pass `None` for a full search.
+`retrieve_by_embedding()` accepts `category: Option<&str>`. When `Some("guideline")` is passed, only guideline facts are returned. Callers pass `None` for a full search.
 
 ### In Tool Results
 
@@ -232,7 +232,6 @@ There is **no direct write API** for semantic memory. All facts are created excl
 
 | Operation | Location |
 |-----------|----------|
-| `SemanticMemory::retrieve(query, limit, conversation_id, db, category)` | `crates/core/src/memory/semantic.rs` |
 | `SemanticMemory::retrieve_by_embedding(query, embedding, limit, conversation_id, db, category)` | `crates/core/src/memory/semantic.rs` |
 
 ## Migration Notes

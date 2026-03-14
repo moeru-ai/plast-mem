@@ -1,4 +1,5 @@
 use axum::{Json, extract::State};
+use plastmem_ai::embed;
 use plastmem_core::{
   DetailLevel, EpisodicMemory, MessageQueue, SemanticMemory, format_tool_result,
 };
@@ -54,15 +55,23 @@ async fn fetch_memory(
   semantic_limit: u64,
   category: Option<&str>,
 ) -> Result<(Vec<(SemanticMemory, f64)>, Vec<(EpisodicMemory, f64)>), AppError> {
+  let query_embedding = embed(query).await?;
   let (semantic, episodic) = tokio::try_join!(
-    SemanticMemory::retrieve(
+    SemanticMemory::retrieve_by_embedding(
       query,
+      query_embedding.clone(),
       sanitize_limit(semantic_limit),
       conversation_id,
       &state.db,
       category,
     ),
-    EpisodicMemory::retrieve(query, episodic_limit, conversation_id, &state.db),
+    EpisodicMemory::retrieve_by_embedding(
+      query,
+      query_embedding,
+      episodic_limit,
+      conversation_id,
+      &state.db,
+    ),
   )?;
   if !episodic.is_empty() {
     let memory_ids = episodic.iter().map(|(m, _)| m.id).collect();
@@ -70,6 +79,25 @@ async fn fetch_memory(
       .await?;
   }
   Ok((semantic, episodic))
+}
+
+async fn fetch_semantic_memory(
+  state: &AppState,
+  conversation_id: Uuid,
+  query: &str,
+  semantic_limit: u64,
+  category: Option<&str>,
+) -> Result<Vec<(SemanticMemory, f64)>, AppError> {
+  let query_embedding = embed(query).await?;
+  SemanticMemory::retrieve_by_embedding(
+    query,
+    query_embedding,
+    sanitize_limit(semantic_limit),
+    conversation_id,
+    &state.db,
+    category,
+  )
+  .await
 }
 
 // --- Pre-retrieval context endpoint (no pending review) ---
@@ -107,11 +135,11 @@ pub async fn context_pre_retrieve(
   if payload.query.is_empty() {
     return Err(AppError::new(anyhow::anyhow!("Query cannot be empty")));
   }
-  let semantic = SemanticMemory::retrieve(
-    &payload.query,
-    sanitize_limit(payload.semantic_limit),
+  let semantic = fetch_semantic_memory(
+    &state,
     payload.conversation_id,
-    &state.db,
+    &payload.query,
+    payload.semantic_limit,
     payload.category.as_deref(),
   )
   .await?;

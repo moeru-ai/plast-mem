@@ -134,7 +134,7 @@ See [retrieve_memory](retrieve_memory.md) for endpoint details.
 
 | Operation | Location |
 |-----------|----------|
-| `EpisodicMemory::retrieve()` | `crates/core/src/memory/episodic.rs` |
+| `EpisodicMemory::retrieve_by_embedding()` | `crates/core/src/memory/episodic.rs` |
 | `EpisodicMemory::from_model()` | `crates/core/src/memory/episodic.rs` |
 | `EpisodicMemory::to_model()` | `crates/core/src/memory/episodic.rs` |
 

@@ -1,6 +1,5 @@
 use chrono::{DateTime, Utc};
 use fsrs::{DEFAULT_PARAMETERS, FSRS, FSRS6_DEFAULT_DECAY, MemoryState};
-use plastmem_ai::embed;
 use plastmem_entities::episodic_memory;
 use plastmem_shared::{AppError, Message};
 
@@ -73,14 +72,14 @@ impl EpisodicMemory {
 
   /// Retrieve episodic memories using hybrid BM25 + vector search with FSRS re-ranking.
   ///
-  /// Only memories from the specified conversation are searched.
-  pub async fn retrieve(
+  /// Accepts a pre-computed embedding so callers can reuse one embedding across retrieval paths.
+  pub async fn retrieve_by_embedding(
     query: &str,
+    query_embedding: PgVector,
     limit: u64,
     conversation_id: Uuid,
     db: &DatabaseConnection,
   ) -> Result<Vec<(Self, f64)>, AppError> {
-    let query_embedding = embed(query).await?;
     let fsrs = FSRS::new(Some(&DEFAULT_PARAMETERS))?;
 
     let retrieve_sql = r"

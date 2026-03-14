@@ -22,17 +22,24 @@ export const computeStats = (results: QAResult[]): BenchmarkStats => {
     CATEGORIES.map(c => [c, [] as number[]]),
   ) as Record<QACategory, number[]>
 
+  const byCategoryNemoriF1 = Object.fromEntries(
+    CATEGORIES.map(c => [c, [] as number[]]),
+  ) as Record<QACategory, number[]>
+
   for (const r of results) {
     byCategory[r.category].push(r.score)
     byCategoryLlm[r.category].push(r.llm_judge_score)
+    byCategoryNemoriF1[r.category].push(r.nemori_f1_score)
   }
 
   return {
     by_category: Object.fromEntries(CATEGORIES.map(c => [c, avg(byCategory[c])])) as Record<QACategory, number>,
     by_category_count: Object.fromEntries(CATEGORIES.map(c => [c, byCategory[c].length])) as Record<QACategory, number>,
     by_category_llm: Object.fromEntries(CATEGORIES.map(c => [c, avg(byCategoryLlm[c])])) as Record<QACategory, number>,
+    by_category_nemori_f1: Object.fromEntries(CATEGORIES.map(c => [c, avg(byCategoryNemoriF1[c])])) as Record<QACategory, number>,
     overall: avg(results.map(r => r.score)),
     overall_llm: avg(results.map(r => r.llm_judge_score)),
+    overall_nemori_f1: avg(results.map(r => r.nemori_f1_score)),
     total: results.length,
   }
 }
@@ -40,15 +47,17 @@ export const computeStats = (results: QAResult[]): BenchmarkStats => {
 export const printStats = (stats: BenchmarkStats): void => {
   console.log('\n── Results ──────────────────────────────────')
   console.log(`Overall F1:   ${(stats.overall * 100).toFixed(2)}%  (n=${stats.total})`)
+  console.log(`Overall Nemori F1: ${(stats.overall_nemori_f1 * 100).toFixed(2)}%`)
   console.log(`Overall LLM:  ${(stats.overall_llm * 100).toFixed(2)}%`)
   console.log()
   for (const c of CATEGORIES) {
     const f1 = stats.by_category[c]
     const llm = stats.by_category_llm[c]
+    const nemoriF1 = stats.by_category_nemori_f1[c]
     const count = stats.by_category_count[c]
     if (count > 0) {
       console.log(
-        `  Cat ${c} (${CATEGORY_NAMES[c].padEnd(12)}):  F1=${(f1 * 100).toFixed(2)}%  LLM=${(llm * 100).toFixed(2)}%  (n=${count})`,
+        `  Cat ${c} (${CATEGORY_NAMES[c].padEnd(12)}):  F1=${(f1 * 100).toFixed(2)}%  NemoriF1=${(nemoriF1 * 100).toFixed(2)}%  LLM=${(llm * 100).toFixed(2)}%  (n=${count})`,
       )
     }
   }

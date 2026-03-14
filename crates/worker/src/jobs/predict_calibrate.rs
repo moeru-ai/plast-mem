@@ -1,6 +1,6 @@
 use apalis::prelude::Data;
 use chrono::Utc;
-use plastmem_ai::{ChatCompletionRequestMessage, embed_many, generate_object, generate_text};
+use plastmem_ai::{ChatCompletionRequestMessage, embed, embed_many, generate_object, generate_text};
 use plastmem_core::{EpisodicMemory, SemanticMemory};
 
 use plastmem_entities::{episodic_memory, semantic_memory};
@@ -475,8 +475,10 @@ async fn load_related_facts(
   episode: &EpisodicMemory,
   db: &DatabaseConnection,
 ) -> Result<Vec<(SemanticMemory, f64)>, AppError> {
-  let results = SemanticMemory::retrieve(
+  let summary_embedding = embed(&episode.summary).await?;
+  let results = SemanticMemory::retrieve_by_embedding(
     &episode.summary,
+    summary_embedding,
     MAX_STATEMENTS_FOR_PREDICTION as i64,
     episode.conversation_id,
     db,
