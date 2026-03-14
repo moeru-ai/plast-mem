@@ -52,6 +52,48 @@ const tokenF1 = (prediction: string, groundTruth: string): number => {
 }
 
 // ──────────────────────────────────────────────────
+// Nemori-style F1
+// ──────────────────────────────────────────────────
+
+const simpleTokenizeNemori = (text: string): string[] =>
+  text
+    .toLowerCase()
+    .replace(/[.,!?]/g, ' ')
+    .split(/\s+/)
+    .filter(token => token.length > 0)
+
+export const scoreAnswerNemoriF1 = (
+  prediction: string,
+  goldAnswer: number | string,
+): number => {
+  const normalizedPrediction = String(prediction).trim()
+  const normalizedGold = String(goldAnswer).trim()
+
+  if (normalizedPrediction.length === 0 || normalizedGold.length === 0)
+    return 0.0
+
+  const predTokens = new Set(simpleTokenizeNemori(normalizedPrediction))
+  const goldTokens = new Set(simpleTokenizeNemori(normalizedGold))
+
+  if (predTokens.size === 0 || goldTokens.size === 0)
+    return 0.0
+
+  let commonCount = 0
+  for (const token of predTokens) {
+    if (goldTokens.has(token))
+      commonCount += 1
+  }
+
+  if (commonCount === 0)
+    return 0.0
+
+  const precision = commonCount / predTokens.size
+  const recall = commonCount / goldTokens.size
+
+  return (2 * precision * recall) / (precision + recall)
+}
+
+// ──────────────────────────────────────────────────
 // Per-category scoring (mirrors LobeHub evaluation.py)
 // ──────────────────────────────────────────────────
 

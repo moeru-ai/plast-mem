@@ -81,6 +81,17 @@ impl EpisodicMemory {
     db: &DatabaseConnection,
   ) -> Result<Vec<(Self, f64)>, AppError> {
     let query_embedding = embed(query).await?;
+    Self::retrieve_by_embedding(query, query_embedding, limit, conversation_id, db).await
+  }
+
+  /// Like `retrieve`, but accepts a pre-computed embedding to avoid redundant API calls.
+  pub async fn retrieve_by_embedding(
+    query: &str,
+    query_embedding: PgVector,
+    limit: u64,
+    conversation_id: Uuid,
+    db: &DatabaseConnection,
+  ) -> Result<Vec<(Self, f64)>, AppError> {
     let fsrs = FSRS::new(Some(&DEFAULT_PARAMETERS))?;
 
     let retrieve_sql = r"

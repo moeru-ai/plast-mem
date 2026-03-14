@@ -16,8 +16,10 @@ export interface BenchmarkStats {
   by_category: Record<QACategory, number>
   by_category_count: Record<QACategory, number>
   by_category_llm: Record<QACategory, number>
+  by_category_nemori_f1: Record<QACategory, number>
   overall: number
   overall_llm: number
+  overall_nemori_f1: number
   total: number
 }
 // 1 = multi-hop, 2 = single-hop, 3 = temporal, 4 = open-domain, 5 = adversarial
@@ -48,13 +50,14 @@ export interface QAPair {
   question: string
 }
 
-// Result record written to the output JSON file
+// Final result record written to the output JSON file
 export interface QAResult {
   category: QACategory
   context_retrieved: string
   evidence: string[]
-  gold_answer: string
+  gold_answer: number | string
   llm_judge_score: number
+  nemori_f1_score: number
   prediction: string
   question: string
   sample_id: string

@@ -43,7 +43,7 @@ export type BenchmarkFlushResult = {
 export type BenchmarkJobStatus = {
     /**
      * Number of active (Pending or Running) Apalis jobs for this conversation.
-     * Covers EventSegmentationJob and SemanticConsolidationJob.
+     * Covers EventSegmentationJob and PredictCalibrateJob.
      */
     apalis_active: number;
     /**
