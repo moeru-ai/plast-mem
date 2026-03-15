@@ -31,12 +31,12 @@ export interface LongMemEvalResult {
 }
 
 export interface LongMemEvalSample {
-  answer: string
+  answer: number | string
   answer_session_ids: string[]
   haystack_dates: string[]
   haystack_session_ids: string[]
   haystack_sessions: LongMemEvalTurn[][]
-  improved_answer?: string
+  improved_answer?: number | string
   improved_question?: string
   improvement_note?: string
   question: string

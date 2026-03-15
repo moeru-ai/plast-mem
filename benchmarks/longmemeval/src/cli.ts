@@ -431,7 +431,7 @@ const main = async () => {
     results.push({
       context,
       conversation_id: conversationId,
-      gold_answer: sample.improved_answer ?? sample.answer,
+      gold_answer: String(sample.improved_answer ?? sample.answer),
       prediction,
       question: sample.improved_question ?? sample.question,
       question_id: sample.question_id,

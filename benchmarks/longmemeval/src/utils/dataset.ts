@@ -20,13 +20,15 @@ const longMemEvalTurnSchema = z.object({
   role: z.enum(['assistant', 'user']),
 })
 
+const answerSchema = z.union([z.number(), z.string()])
+
 const longMemEvalSampleSchema = z.object({
-  answer: z.string(),
+  answer: answerSchema,
   answer_session_ids: z.array(z.string()),
   haystack_dates: z.array(z.string()),
   haystack_session_ids: z.array(z.string()),
   haystack_sessions: z.array(z.array(longMemEvalTurnSchema)),
-  improved_answer: z.string().optional(),
+  improved_answer: answerSchema.optional(),
   improved_question: z.string().optional(),
   improvement_note: z.string().optional(),
   question: z.string(),
