@@ -12,7 +12,7 @@ const TURN_INTERVAL_MINS = 1
 interface BatchMessage {
   content: string
   role: LongMemEvalTurn['role']
-  timestamp?: string
+  timestamp?: number
 }
 
 type ConversationIdMap = Record<string, string>
@@ -24,11 +24,11 @@ const parseSessionDate = (dateStr: string): Date | null => {
   return new Date(timestamp)
 }
 
-const getTurnTimestamp = (sessionDate: Date | null, turnIndex: number): string | undefined => {
+const getTurnTimestamp = (sessionDate: Date | null, turnIndex: number): number | undefined => {
   if (sessionDate == null)
     return undefined
 
-  return new Date(sessionDate.getTime() + turnIndex * TURN_INTERVAL_MINS * 60 * 1000).toISOString()
+  return sessionDate.getTime() + turnIndex * TURN_INTERVAL_MINS * 60 * 1000
 }
 
 const buildMessages = (sample: LongMemEvalSample): BatchMessage[] => {
