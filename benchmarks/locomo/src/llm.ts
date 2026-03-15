@@ -4,8 +4,9 @@ import { env } from 'node:process'
 
 import { generateText } from '@xsai/generate-text'
 
-const SYSTEM_PROMPT
-  = 'You are a helpful assistant answering questions about a person based on their conversation history stored in memory.'
+const SYSTEM_PROMPT = [
+  'You answer questions by reading retrieved conversation memories and extracting the most accurate supported answer.',
+].join('\n')
 
 const buildPrompt = (context: string, question: string, category: QACategory): string => {
   const contextSection = context.length > 0
@@ -13,10 +14,40 @@ const buildPrompt = (context: string, question: string, category: QACategory): s
     : ''
 
   if (category === 5) {
-    return `${contextSection}Answer the following question using only the memories above. If this topic is not mentioned anywhere in the memories, respond with exactly: "No information available"\n\nQuestion: ${question}\nShort answer:`
+    return `${contextSection}Answer the question using only the retrieved memories above.
+- If the topic does not appear anywhere in those memories, reply exactly: "No information available"
+- Keep the answer under 5-6 words
+
+Question: ${question}
+Short answer:`
   }
 
-  return `${contextSection}Answer the following question based on the memories above.\n- Answer in a short phrase (under 10 words)\n- Use exact words from the memories when possible\n- Memories include timestamps; use them to resolve relative time expressions (e.g., if a memory says "yesterday" in a session dated "8 May 2023", the answer is "7 May 2023")\n\nQuestion: ${question}\nShort answer:`
+  return `${contextSection}# Context
+The memories come from a conversation between two speakers.
+Some of them include timestamps that may matter for answering the question.
+
+# Instructions
+1. Read all retrieved memories from both speakers carefully.
+2. Pay close attention to timestamps when the answer depends on time.
+3. If the question asks about a specific event or fact, look for direct support in the memories.
+4. If the memories conflict, prefer the one with the more recent timestamp.
+5. When a memory uses a relative time phrase such as "last year" or "two months ago", resolve it against that memory's timestamp.
+   Example: if a memory dated 4 May 2022 says "went to India last year," then the trip happened in 2021.
+6. Convert relative time references into a specific date, month, or year in the final answer. Do not answer with the relative phrase itself.
+7. Base the answer only on the memory content from both speakers. If a name appears inside a memory, do not assume that person is the speaker who created it.
+8. Keep the final answer under 6-7 words.
+
+# Approach
+1. Identify the memories that are relevant to the question.
+2. Examine their timestamps and content carefully.
+3. Look for explicit mentions of dates, times, locations, or events that answer the question.
+4. If a calculation is required, work it out before answering.
+5. Write a precise, concise answer supported only by the memories.
+6. Check that the answer directly addresses the question.
+7. Make sure the final answer is specific and avoids vague time references.
+
+Question: ${question}
+Short answer:`
 }
 
 /**

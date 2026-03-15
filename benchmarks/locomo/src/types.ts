@@ -12,7 +12,7 @@ export interface BenchmarkOutput {
   stats: BenchmarkStats
 }
 
-export interface BenchmarkStats {
+export interface BenchmarkScoreSummary {
   by_category: Record<QACategory, number>
   by_category_count: Record<QACategory, number>
   by_category_llm: Record<QACategory, number>
@@ -21,6 +21,11 @@ export interface BenchmarkStats {
   overall_llm: number
   overall_nemori_f1: number
   total: number
+}
+
+export interface BenchmarkStats {
+  by_sample: Record<string, BenchmarkScoreSummary>
+  overall: BenchmarkScoreSummary
 }
 // 1 = multi-hop, 2 = single-hop, 3 = temporal, 4 = open-domain, 5 = adversarial
 
