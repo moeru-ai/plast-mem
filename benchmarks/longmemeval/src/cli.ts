@@ -7,7 +7,7 @@ import type {
 
 import process, { env, loadEnvFile } from 'node:process'
 
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
@@ -200,6 +200,30 @@ const logFirstSampleSummary = (dataset: LongMemEvalDataset): void => {
   p.log.info(`first question: ${firstSample.question}`)
 }
 
+const loadArtifact = async (path: string): Promise<LongMemEvalOutput | null> => {
+  try {
+    const content = await readFile(path, 'utf-8')
+    return JSON.parse(content) as LongMemEvalOutput
+  }
+  catch {
+    return null
+  }
+}
+
+const promptReuseArtifact = async (existingCount: number): Promise<boolean> => {
+  const reuseExisting = await p.confirm({
+    initialValue: true,
+    message: `Reuse ${existingCount} completed results from the latest artifact?`,
+  })
+
+  if (p.isCancel(reuseExisting)) {
+    p.cancel('Operation cancelled.')
+    process.exit(0)
+  }
+
+  return reuseExisting
+}
+
 const promptReuseConversationIds = async (
   reusableCount: number,
   totalCount: number,
@@ -262,62 +286,6 @@ const resolveConversationIds = async (
   return conversationIds
 }
 
-const evaluateSamples = async (
-  dataset: LongMemEvalDataset,
-  baseUrl: string,
-  model: string,
-): Promise<LongMemEvalResult[]> => {
-  const conversationIds = await resolveConversationIds(dataset, baseUrl)
-
-  const waitSpinner = p.spinner()
-  for (const sample of dataset) {
-    const conversationId = conversationIds[sample.question_id]
-    if (conversationId == null || conversationId.length === 0) {
-      throw new Error(`Missing conversation id for question ${sample.question_id}`)
-    }
-    await waitForConversation(conversationId, baseUrl, waitSpinner)
-  }
-
-  const runSpinner = p.spinner()
-  runSpinner.start(`Running retrieval and evaluation for ${dataset.length} samples`)
-  const results: LongMemEvalResult[] = []
-
-  for (const [index, sample] of dataset.entries()) {
-    const conversationId = conversationIds[sample.question_id]
-    if (conversationId == null || conversationId.length === 0) {
-      throw new Error(`Missing conversation id for question ${sample.question_id}`)
-    }
-
-    runSpinner.message(
-      `Evaluating ${index + 1}/${dataset.length} `
-      + `${sample.question_id} (${sample.question_type})`,
-    )
-
-    const context = await getSampleContext(sample, conversationId, baseUrl)
-    const prediction = await generateSampleAnswer(sample, context, model)
-    const judged = await judgeAnswer({
-      model,
-      prediction,
-      sample,
-    })
-
-    results.push({
-      context,
-      conversation_id: conversationId,
-      gold_answer: sample.improved_answer ?? sample.answer,
-      prediction,
-      question: sample.improved_question ?? sample.question,
-      question_id: sample.question_id,
-      question_type: sample.question_type,
-      score: judged.score,
-      verdict: judged.verdict,
-    })
-  }
-
-  runSpinner.stop(`Evaluated ${dataset.length} samples`)
-  return results
-}
-
 const formatStatsSummary = (results: LongMemEvalResult[]): string => {
   const stats = computeStats(results)
   const byQuestionType = Object.entries(stats.by_question_type)
@@ -352,6 +320,43 @@ const writeArtifact = async (
   await writeFile(outFile, JSON.stringify(output, null, 2))
 }
 
+const resolveRunState = async (
+  dataset: LongMemEvalDataset,
+  outFile: string,
+): Promise<{
+  pendingDataset: LongMemEvalDataset
+  results: LongMemEvalResult[]
+}> => {
+  const artifact = await loadArtifact(outFile)
+  if (artifact == null || artifact.results.length === 0) {
+    return {
+      pendingDataset: dataset,
+      results: [],
+    }
+  }
+
+  const reuseExisting = await promptReuseArtifact(artifact.results.length)
+  if (!reuseExisting) {
+    return {
+      pendingDataset: dataset,
+      results: [],
+    }
+  }
+
+  const completedQuestionIds = new Set(artifact.results.map(result => result.question_id))
+  const pendingDataset = dataset.filter(sample => !completedQuestionIds.has(sample.question_id))
+
+  p.note([
+    `completed results reused: ${artifact.results.length}`,
+    `remaining samples: ${pendingDataset.length}/${dataset.length}`,
+  ].join('\n'), 'Resume Summary')
+
+  return {
+    pendingDataset,
+    results: artifact.results,
+  }
+}
+
 const main = async () => {
   loadWorkspaceEnv()
 
@@ -371,11 +376,67 @@ const main = async () => {
   p.log.info(`question types: ${summarizeQuestionTypes(dataset)}`)
 
   const filteredDataset = await selectSamples(dataset)
-  logFirstSampleSummary(filteredDataset)
-
-  const results = await evaluateSamples(filteredDataset, baseUrl, model)
-
   const outFile = buildOutputPath()
+  const runState = await resolveRunState(filteredDataset, outFile)
+
+  if (runState.pendingDataset.length === 0) {
+    p.note([
+      formatStatsSummary(runState.results),
+      `results file: ${outFile}`,
+    ].join('\n'), 'Results')
+    p.outro('LongMemEval run complete.')
+    return
+  }
+
+  logFirstSampleSummary(runState.pendingDataset)
+
+  const results = [...runState.results]
+  const conversationIds = await resolveConversationIds(runState.pendingDataset, baseUrl)
+  const waitSpinner = p.spinner()
+  for (const sample of runState.pendingDataset) {
+    const conversationId = conversationIds[sample.question_id]
+    if (conversationId == null || conversationId.length === 0) {
+      throw new Error(`Missing conversation id for question ${sample.question_id}`)
+    }
+    await waitForConversation(conversationId, baseUrl, waitSpinner)
+  }
+
+  const runSpinner = p.spinner()
+  runSpinner.start(`Running retrieval and evaluation for ${runState.pendingDataset.length} samples`)
+  for (const [index, sample] of runState.pendingDataset.entries()) {
+    const conversationId = conversationIds[sample.question_id]
+    if (conversationId == null || conversationId.length === 0) {
+      throw new Error(`Missing conversation id for question ${sample.question_id}`)
+    }
+
+    runSpinner.message(
+      `Evaluating ${index + 1}/${runState.pendingDataset.length} `
+      + `${sample.question_id} (${sample.question_type})`,
+    )
+
+    const context = await getSampleContext(sample, conversationId, baseUrl)
+    const prediction = await generateSampleAnswer(sample, context, model)
+    const judged = await judgeAnswer({
+      model,
+      prediction,
+      sample,
+    })
+
+    results.push({
+      context,
+      conversation_id: conversationId,
+      gold_answer: sample.improved_answer ?? sample.answer,
+      prediction,
+      question: sample.improved_question ?? sample.question,
+      question_id: sample.question_id,
+      question_type: sample.question_type,
+      score: judged.score,
+      verdict: judged.verdict,
+    })
+    await writeArtifact(outFile, baseUrl, model, results)
+  }
+  runSpinner.stop(`Evaluated ${runState.pendingDataset.length} samples`)
+
   await writeArtifact(outFile, baseUrl, model, results)
 
   p.note([
