@@ -38,7 +38,7 @@ const buildJudgePrompt = (
   `Question type: ${sample.question_type}`,
   `Question date: ${sample.question_date}`,
   `Question: ${sample.improved_question ?? sample.question}`,
-  `Gold answer: ${sample.improved_answer ?? sample.answer}`,
+  `Gold answer: ${String(sample.improved_answer ?? sample.answer)}`,
   `Predicted answer: ${prediction}`,
 ].join('\n')
 
