@@ -2,6 +2,7 @@
   "references": [
     { "path": "./examples/haru/tsconfig.json" },
     { "path": "./benchmarks/locomo/tsconfig.json" },
+    { "path": "./benchmarks/longmemeval/tsconfig.json" },
     { "path": "./packages/plastmem/tsconfig.json" }
   ],
   "files": []

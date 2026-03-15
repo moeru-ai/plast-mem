@@ -50,6 +50,7 @@ words:
   - vitejs
   - vitest
   - waifu
+  - xiaowu
   - xsai
 ignoreWords: []
 import: []

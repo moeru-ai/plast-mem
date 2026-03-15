@@ -1,0 +1,21 @@
+{
+  "name": "@plastmem/longmemeval",
+  "type": "module",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "start": "tsx src/cli.ts"
+  },
+  "dependencies": {
+    "@clack/prompts": "catalog:",
+    "@huggingface/hub": "catalog:",
+    "@insel-null/uuid": "catalog:",
+    "@moeru/std": "catalog:",
+    "@xsai/generate-text": "catalog:",
+    "@xsai/tool": "catalog:",
+    "picospinner": "catalog:",
+    "plastmem": "workspace:*",
+    "tinyrainbow": "catalog:",
+    "zod": "catalog:"
+  }
+}
