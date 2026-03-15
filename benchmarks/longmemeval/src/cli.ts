@@ -140,6 +140,9 @@ const waitForConversation = async (
 const buildOutputPath = (): string =>
   resolve(__dirname, `../results/${new Date().toISOString().replace(/[:.]/g, '-')}.json`)
 
+const buildLatestOutputPath = (): string =>
+  resolve(__dirname, '../results/latest.json')
+
 const buildConversationIdsPath = (): string =>
   resolve(__dirname, '../results/conversation-ids.json')
 
@@ -302,6 +305,7 @@ const formatStatsSummary = (results: LongMemEvalResult[]): string => {
 
 const writeArtifact = async (
   outFile: string,
+  latestOutFile: string,
   baseUrl: string,
   model: string,
   results: LongMemEvalResult[],
@@ -318,16 +322,17 @@ const writeArtifact = async (
 
   await mkdir(dirname(outFile), { recursive: true })
   await writeFile(outFile, JSON.stringify(output, null, 2))
+  await writeFile(latestOutFile, JSON.stringify(output, null, 2))
 }
 
 const resolveRunState = async (
   dataset: LongMemEvalDataset,
-  outFile: string,
+  latestOutFile: string,
 ): Promise<{
   pendingDataset: LongMemEvalDataset
   results: LongMemEvalResult[]
 }> => {
-  const artifact = await loadArtifact(outFile)
+  const artifact = await loadArtifact(latestOutFile)
   if (artifact == null || artifact.results.length === 0) {
     return {
       pendingDataset: dataset,
@@ -377,12 +382,13 @@ const main = async () => {
 
   const filteredDataset = await selectSamples(dataset)
   const outFile = buildOutputPath()
-  const runState = await resolveRunState(filteredDataset, outFile)
+  const latestOutFile = buildLatestOutputPath()
+  const runState = await resolveRunState(filteredDataset, latestOutFile)
 
   if (runState.pendingDataset.length === 0) {
     p.note([
       formatStatsSummary(runState.results),
-      `results file: ${outFile}`,
+      `results file: ${latestOutFile}`,
     ].join('\n'), 'Results')
     p.outro('LongMemEval run complete.')
     return
@@ -433,15 +439,16 @@ const main = async () => {
       score: judged.score,
       verdict: judged.verdict,
     })
-    await writeArtifact(outFile, baseUrl, model, results)
+    await writeArtifact(outFile, latestOutFile, baseUrl, model, results)
   }
   runSpinner.stop(`Evaluated ${runState.pendingDataset.length} samples`)
 
-  await writeArtifact(outFile, baseUrl, model, results)
+  await writeArtifact(outFile, latestOutFile, baseUrl, model, results)
 
   p.note([
     formatStatsSummary(results),
-    `results file: ${outFile}`,
+    `latest results: ${latestOutFile}`,
+    `timestamped results: ${outFile}`,
   ].join('\n'), 'Results')
 
   p.outro('LongMemEval run complete.')
