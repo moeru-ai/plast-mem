@@ -5,12 +5,45 @@ import { readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { env } from 'node:process'
 
+import z from 'zod'
+
 import { downloadFileToCacheDir, getHFHubCachePath, getRepoFolderName } from '@huggingface/hub'
 
 import * as p from '@clack/prompts'
 
 const REPO_ID = 'xiaowu0162/longmemeval-cleaned'
 const FILE_ID = 'longmemeval_m_cleaned.json'
+
+const longMemEvalTurnSchema = z.object({
+  content: z.string(),
+  has_answer: z.boolean().optional(),
+  role: z.enum(['assistant', 'user']),
+})
+
+const longMemEvalSampleSchema = z.object({
+  answer: z.string(),
+  answer_session_ids: z.array(z.string()),
+  haystack_dates: z.array(z.string()),
+  haystack_session_ids: z.array(z.string()),
+  haystack_sessions: z.array(z.array(longMemEvalTurnSchema)),
+  improved_answer: z.string().optional(),
+  improved_question: z.string().optional(),
+  improvement_note: z.string().optional(),
+  question: z.string(),
+  question_date: z.string(),
+  question_id: z.string(),
+  question_type: z.enum([
+    'knowledge-update',
+    'multi-session',
+    'single-session-assistant',
+    'single-session-preference',
+    'single-session-user',
+    'temporal-reasoning',
+  ]),
+  requires_retry: z.boolean().optional(),
+})
+
+const longMemEvalDatasetSchema = z.array(longMemEvalSampleSchema).min(1, 'LongMemEval dataset is empty.')
 
 export const checkDataset = async (): Promise<string | undefined> => {
   const cacheDir = getHFHubCachePath()
@@ -66,9 +99,5 @@ export const loadDataset = async (path: string): Promise<LongMemEvalDataset> => 
   const raw = await readFile(path, 'utf-8')
   const parsed: unknown = JSON.parse(raw)
 
-  if (!Array.isArray(parsed)) {
-    throw new TypeError(`Expected ${FILE_ID} to be a JSON array.`)
-  }
-
-  return parsed as LongMemEvalDataset
+  return longMemEvalDatasetSchema.parse(parsed) as LongMemEvalDataset
 }
