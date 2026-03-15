@@ -12,7 +12,7 @@ import { downloadFileToCacheDir, getHFHubCachePath, getRepoFolderName } from '@h
 import * as p from '@clack/prompts'
 
 const REPO_ID = 'xiaowu0162/longmemeval-cleaned'
-const FILE_ID = 'longmemeval_m_cleaned.json'
+const FILE_ID = 'longmemeval_s_cleaned.json'
 
 const longMemEvalTurnSchema = z.object({
   content: z.string(),
