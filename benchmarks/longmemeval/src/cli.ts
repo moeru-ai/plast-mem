@@ -20,7 +20,7 @@ import * as p from '@clack/prompts'
 
 import { name } from '../package.json'
 import { judgeAnswer } from './evaluation'
-import { ingestAll } from './ingest'
+import { ingestAll, loadConversationIds, saveConversationIds } from './ingest'
 import { generateSampleAnswer } from './llm'
 import { getSampleContext } from './retrieve'
 import { computeStats } from './stats'
@@ -30,6 +30,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 
 const INITIAL_WAIT_MS = 10_000
 const POLL_INTERVAL_MS = 10_000
+
+type ConversationIdMap = Record<string, string>
 
 interface ConversationStatus {
   apalis_active: number
@@ -138,6 +140,9 @@ const waitForConversation = async (
 const buildOutputPath = (): string =>
   resolve(__dirname, `../results/${new Date().toISOString().replace(/[:.]/g, '-')}.json`)
 
+const buildConversationIdsPath = (): string =>
+  resolve(__dirname, '../results/conversation-ids.json')
+
 const resolveDatasetPath = async (): Promise<string> => {
   const cachedPath = await checkDataset()
   if (cachedPath != null)
@@ -195,15 +200,74 @@ const logFirstSampleSummary = (dataset: LongMemEvalDataset): void => {
   p.log.info(`first question: ${firstSample.question}`)
 }
 
+const promptReuseConversationIds = async (
+  reusableCount: number,
+  totalCount: number,
+): Promise<boolean> => {
+  const reuseExisting = await p.confirm({
+    initialValue: true,
+    message: `Reuse ${reusableCount}/${totalCount} existing conversation ids?`,
+  })
+
+  if (p.isCancel(reuseExisting)) {
+    p.cancel('Operation cancelled.')
+    process.exit(0)
+  }
+
+  return reuseExisting
+}
+
+const resolveConversationIds = async (
+  dataset: LongMemEvalDataset,
+  baseUrl: string,
+): Promise<ConversationIdMap> => {
+  const conversationIdsPath = buildConversationIdsPath()
+  const cachedConversationIds = await loadConversationIds(conversationIdsPath)
+  const reusableEntries = Object.fromEntries(
+    dataset
+      .map(sample => [sample.question_id, cachedConversationIds[sample.question_id]])
+      .filter(([, conversationId]) => conversationId != null && conversationId.length > 0),
+  ) as ConversationIdMap
+
+  let conversationIds: ConversationIdMap = {}
+  if (Object.keys(reusableEntries).length > 0) {
+    const reuseExisting = await promptReuseConversationIds(
+      Object.keys(reusableEntries).length,
+      dataset.length,
+    )
+    if (reuseExisting)
+      conversationIds = reusableEntries
+  }
+
+  const pendingSamples = dataset.filter((sample) => {
+    const conversationId = conversationIds[sample.question_id]
+    return conversationId == null || conversationId.length === 0
+  })
+
+  if (pendingSamples.length > 0) {
+    const ingestSpinner = p.spinner()
+    ingestSpinner.start(`Ingesting ${pendingSamples.length} samples`)
+    const ingestedConversationIds = await ingestAll(pendingSamples, baseUrl)
+    ingestSpinner.stop(`Ingested ${pendingSamples.length} samples`)
+    conversationIds = {
+      ...conversationIds,
+      ...ingestedConversationIds,
+    }
+    await saveConversationIds(conversationIdsPath, {
+      ...cachedConversationIds,
+      ...conversationIds,
+    })
+  }
+
+  return conversationIds
+}
+
 const evaluateSamples = async (
   dataset: LongMemEvalDataset,
   baseUrl: string,
   model: string,
 ): Promise<LongMemEvalResult[]> => {
-  const ingestSpinner = p.spinner()
-  ingestSpinner.start(`Ingesting ${dataset.length} samples`)
-  const conversationIds = await ingestAll(dataset, baseUrl)
-  ingestSpinner.stop(`Ingested ${dataset.length} samples`)
+  const conversationIds = await resolveConversationIds(dataset, baseUrl)
 
   const waitSpinner = p.spinner()
   for (const sample of dataset) {
