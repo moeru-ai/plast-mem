@@ -2,7 +2,8 @@ import type { BenchmarkAddMessages } from 'plastmem'
 
 import type { LongMemEvalSample, LongMemEvalTurn } from './types'
 
-import { readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { dirname } from 'node:path'
 
 import { uuid } from '@insel-null/uuid'
 import { benchmarkAddMessages } from 'plastmem'
@@ -104,5 +105,6 @@ export const loadConversationIds = async (path: string): Promise<ConversationIdM
 }
 
 export const saveConversationIds = async (path: string, ids: ConversationIdMap): Promise<void> => {
+  await mkdir(dirname(path), { recursive: true })
   await writeFile(path, JSON.stringify(ids, null, 2))
 }
