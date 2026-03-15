@@ -9,7 +9,7 @@ import * as p from '@clack/prompts'
 import { name } from '../package.json'
 import { checkDataset, downloadDataset, loadDataset } from './utils/dataset'
 
-const summarizeQuestionTypes = (dataset: LongMemEvalDataset): string => {
+const buildQuestionTypeCounts = (dataset: LongMemEvalDataset): Record<LongMemEvalQuestionType, number> => {
   const counts: Record<LongMemEvalQuestionType, number> = {
     'knowledge-update': 0,
     'multi-session': 0,
@@ -22,10 +22,38 @@ const summarizeQuestionTypes = (dataset: LongMemEvalDataset): string => {
   for (const sample of dataset)
     counts[sample.question_type] += 1
 
-  return Object.entries(counts)
+  return counts
+}
+
+const summarizeQuestionTypes = (dataset: LongMemEvalDataset): string =>
+  Object.entries(buildQuestionTypeCounts(dataset))
     .filter(([, count]) => count > 0)
     .map(([type, count]) => `${type}=${count}`)
     .join(', ')
+
+const promptQuestionTypes = async (dataset: LongMemEvalDataset): Promise<LongMemEvalQuestionType[]> => {
+  const counts = buildQuestionTypeCounts(dataset)
+  const selected = await p.multiselect({
+    initialValues: Object.entries(counts)
+      .filter(([, count]) => count > 0)
+      .map(([type]) => type),
+    message: 'Choose question types to run',
+    options: Object.entries(counts)
+      .filter(([, count]) => count > 0)
+      .map(([type, count]) => ({
+        hint: `${count} samples`,
+        label: type,
+        value: type,
+      })),
+    required: false,
+  })
+
+  if (p.isCancel(selected)) {
+    p.cancel('Operation cancelled.')
+    process.exit(0)
+  }
+
+  return selected as LongMemEvalQuestionType[]
 }
 
 const main = async () => {
@@ -66,7 +94,16 @@ const main = async () => {
   p.log.info(`loaded samples: ${dataset.length}`)
   p.log.info(`question types: ${summarizeQuestionTypes(dataset)}`)
 
-  const firstSample = dataset[0]
+  const selectedQuestionTypes = await promptQuestionTypes(dataset)
+  const filteredDataset = dataset.filter(sample => selectedQuestionTypes.includes(sample.question_type))
+
+  p.note([
+    `selected question types: ${selectedQuestionTypes.join(', ')}`,
+    `filtered samples: ${filteredDataset.length}/${dataset.length}`,
+    `filtered type counts: ${summarizeQuestionTypes(filteredDataset)}`,
+  ].join('\n'), 'Run Summary')
+
+  const firstSample = filteredDataset[0]
   if (firstSample != null) {
     const sessionCount = firstSample.haystack_sessions.length
     const turnCount = firstSample.haystack_sessions.reduce((total, session) => total + session.length, 0)
