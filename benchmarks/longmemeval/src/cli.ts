@@ -5,7 +5,7 @@ import c from 'tinyrainbow'
 import * as p from '@clack/prompts'
 
 import { name } from '../package.json'
-import { checkDataset, downloadDataset } from './utils/dataset'
+import { checkDataset, downloadDataset, loadDataset } from './utils/dataset'
 
 const main = async () => {
   console.clear()
@@ -39,9 +39,18 @@ const main = async () => {
     }
   }
 
-  p.log.info(`file path: ${path}`)
+  const dataset = await loadDataset(path)
 
-  p.outro('You\'re all set!')
+  p.log.info(`file path: ${path}`)
+  p.log.info(`loaded samples: ${dataset.length}`)
+
+  const firstSample = dataset[0]
+  if (firstSample != null) {
+    const keys = Object.keys(firstSample)
+    p.log.info(`first sample keys: ${keys.join(', ')}`)
+  }
+
+  p.outro('Dataset is ready. Next step is wiring ingest / retrieve / eval around this schema.')
 }
 
 // eslint-disable-next-line @masknet/no-top-level
