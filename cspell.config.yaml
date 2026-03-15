@@ -47,6 +47,7 @@ words:
   - vite
   - vitest
   - waifu
+  - xiaowu
   - xsai
 ignoreWords: []
 import: []

@@ -4,6 +4,7 @@
   "private": true,
   "packageManager": "pnpm@10.30.0",
   "scripts": {
+    "bench:longmemeval": "pnpm -F @plastmem/longmemeval start",
     "build": "pnpm -r build",
     "client:gen": "pnpm dlx @hey-api/openapi-ts -i http://localhost:3000/openapi.json -o packages/plastmem/src",
     "dev": "pnpm -rF @plastmem/haru dev",
