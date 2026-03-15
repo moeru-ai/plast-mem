@@ -1,3 +1,5 @@
+import type { LongMemEvalDataset } from '../types'
+
 import { existsSync } from 'node:fs'
 import { readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -60,6 +62,13 @@ export const downloadDataset = async () => {
   })
 }
 
-export const loadDataset = async (): Promise<undefined> => {
+export const loadDataset = async (path: string): Promise<LongMemEvalDataset> => {
+  const raw = await readFile(path, 'utf-8')
+  const parsed: unknown = JSON.parse(raw)
 
+  if (!Array.isArray(parsed)) {
+    throw new TypeError(`Expected ${FILE_ID} to be a JSON array.`)
+  }
+
+  return parsed as LongMemEvalDataset
 }
