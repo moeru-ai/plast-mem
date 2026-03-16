@@ -102,6 +102,31 @@ const promptQuestionTypes = async (dataset: LongMemEvalDataset): Promise<LongMem
   return selected as LongMemEvalQuestionType[]
 }
 
+const promptSampleLimit = async (availableCount: number): Promise<number> => {
+  const selected = await p.select({
+    initialValue: '5',
+    message: 'How many examples should this run use?',
+    options: [
+      { hint: 'fastest smoke test', label: '1', value: '1' },
+      { hint: 'recommended quick check', label: '5', value: '5' },
+      { hint: 'small batch', label: '10', value: '10' },
+      { hint: 'larger sample', label: '20', value: '20' },
+      { hint: `${availableCount} available`, label: 'all', value: 'all' },
+    ],
+  })
+
+  if (p.isCancel(selected)) {
+    p.cancel('Operation cancelled.')
+    process.exit(0)
+  }
+
+  if (selected === 'all')
+    return availableCount
+
+  const parsed = Number.parseInt(selected, 10)
+  return Math.min(parsed, availableCount)
+}
+
 const getStatus = async (
   baseUrl: string,
   conversationId: string,
@@ -183,13 +208,17 @@ const selectSamples = async (dataset: LongMemEvalDataset): Promise<LongMemEvalDa
     process.exit(0)
   }
 
+  const sampleLimit = await promptSampleLimit(filteredDataset.length)
+  const limitedDataset = filteredDataset.slice(0, sampleLimit)
+
   p.note([
     `selected question types: ${selectedQuestionTypes.join(', ')}`,
     `filtered samples: ${filteredDataset.length}/${dataset.length}`,
-    `filtered type counts: ${summarizeQuestionTypes(filteredDataset)}`,
+    `selected examples: ${limitedDataset.length}/${filteredDataset.length}`,
+    `selected type counts: ${summarizeQuestionTypes(limitedDataset)}`,
   ].join('\n'), 'Run Summary')
 
-  return filteredDataset
+  return limitedDataset
 }
 
 const logFirstSampleSummary = (dataset: LongMemEvalDataset): void => {
