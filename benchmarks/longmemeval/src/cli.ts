@@ -143,19 +143,18 @@ const getStatus = async (
 const waitForConversation = async (
   conversationId: string,
   baseUrl: string,
-  spinner: ReturnType<typeof p.spinner>,
+  onStatus: (message: string) => void,
 ): Promise<void> => {
-  spinner.start(`Waiting for background jobs ${conversationId.slice(0, 8)}`)
+  onStatus(`Waiting for background jobs ${conversationId.slice(0, 8)}`)
   await sleep(INITIAL_WAIT_MS)
 
   while (true) {
     const status = await getStatus(baseUrl, conversationId)
     if (status.done) {
-      spinner.stop(`Background jobs completed ${conversationId.slice(0, 8)}`)
       return
     }
 
-    spinner.message(
+    onStatus(
       `Waiting ${conversationId.slice(0, 8)} `
       + `pending=${status.messages_pending} fence=${status.fence_active ? 1 : 0} apalis=${status.apalis_active}`,
     )
@@ -314,6 +313,7 @@ const ensureConversationId = async (
   sample: LongMemEvalDataset[number],
   baseUrl: string,
   conversationIds: ConversationIdMap,
+  onStatus: (message: string) => void,
 ): Promise<string> => {
   const existingConversationId = conversationIds[sample.question_id]
   if (existingConversationId != null && existingConversationId.length > 0)
@@ -321,10 +321,8 @@ const ensureConversationId = async (
 
   const conversationId = uuid.v7()
   const conversationIdsPath = buildConversationIdsPath()
-  const ingestSpinner = p.spinner()
-  ingestSpinner.start(`Ingesting ${sample.question_id}`)
+  onStatus(`Ingesting ${sample.question_id}`)
   await ingestSample(sample, conversationId, baseUrl)
-  ingestSpinner.stop(`Ingested ${sample.question_id}`)
 
   conversationIds[sample.question_id] = conversationId
   await saveConversationIds(conversationIdsPath, conversationIds)
@@ -443,17 +441,21 @@ const main = async () => {
   const runSpinner = p.spinner()
   runSpinner.start(`Running retrieval and evaluation for ${runState.pendingDataset.length} samples`)
   for (const [index, sample] of runState.pendingDataset.entries()) {
-    runSpinner.message(
-      `Evaluating ${index + 1}/${runState.pendingDataset.length} `
-      + `${sample.question_id} (${sample.question_type})`,
-    )
+    const setStage = (stage: string) => {
+      runSpinner.message(
+        `[${index + 1}/${runState.pendingDataset.length}] ${stage} `
+        + `${sample.question_id} (${sample.question_type})`,
+      )
+    }
 
-    const conversationId = await ensureConversationId(sample, baseUrl, conversationIds)
-    const waitSpinner = p.spinner()
-    await waitForConversation(conversationId, baseUrl, waitSpinner)
+    const conversationId = await ensureConversationId(sample, baseUrl, conversationIds, setStage)
+    await waitForConversation(conversationId, baseUrl, setStage)
 
+    setStage('Retrieving')
     const context = await getSampleContext(sample, conversationId, baseUrl)
+    setStage('Answering')
     const prediction = await generateSampleAnswer(sample, context, model)
+    setStage('Judging')
     const judged = await judgeAnswer({
       model,
       prediction,
@@ -471,6 +473,7 @@ const main = async () => {
       score: judged.score,
       verdict: judged.verdict,
     })
+    setStage('Saving')
     await writeArtifact(outFile, latestOutFile, baseUrl, model, results)
   }
   runSpinner.stop(`Evaluated ${runState.pendingDataset.length} samples`)
