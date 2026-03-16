@@ -247,9 +247,9 @@ fn format_messages(episode: &EpisodicMemory) -> String {
 
 async fn cold_start_extraction(episode: &EpisodicMemory) -> Result<Vec<String>, AppError> {
   let user_content = format!(
-    "Episode Title: {}\nEpisode Summary: {}\n\nMessages:\n{}",
+    "Episode Title: {}\nEpisode Content: {}\n\nMessages:\n{}",
     episode.title,
-    episode.summary,
+    episode.content,
     format_messages(episode)
   );
 
@@ -475,10 +475,10 @@ async fn load_related_facts(
   episode: &EpisodicMemory,
   db: &DatabaseConnection,
 ) -> Result<Vec<(SemanticMemory, f64)>, AppError> {
-  let summary_embedding = embed(&episode.summary).await?;
+  let content_embedding = embed(&episode.content).await?;
   let results = SemanticMemory::retrieve_by_embedding(
-    &episode.summary,
-    summary_embedding,
+    &episode.content,
+    content_embedding,
     MAX_STATEMENTS_FOR_PREDICTION as i64,
     episode.conversation_id,
     db,

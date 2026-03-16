@@ -16,8 +16,8 @@ pub struct Model {
   pub in_progress_fence: Option<i32>,
   // When the fence was set (for TTL-based stale job recovery)
   pub in_progress_since: Option<DateTimeWithTimeZone>,
-  // Summary of the last drained episode; reference for next batch's first segment surprise_level
-  pub prev_episode_summary: Option<String>,
+  // Content of the last drained episode; reference for next batch's first segment surprise_level
+  pub prev_episode_content: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

@@ -153,13 +153,12 @@ pub fn format_tool_result(
     );
 
     // When
-    // Use event time relative to now (past events should read as "... ago", not "in ...").
     let relative = HumanTime::from(mem.end_at.signed_duration_since(now));
     let absolute = mem.end_at.format("%Y-%m-%d %H:%M UTC");
     let _ = writeln!(out, "**Conversation Time:** {absolute} ({relative})");
 
-    // Summary
-    let _ = writeln!(out, "**Summary:** {}", mem.summary);
+    // Content
+    let _ = writeln!(out, "**Content:** {}", mem.content);
 
     // Always surface explicit temporal evidence for top-ranked memories.
     if rank <= 2 {

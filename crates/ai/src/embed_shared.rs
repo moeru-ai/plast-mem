@@ -1,24 +1,24 @@
 use plastmem_shared::AppError;
 
-/// Target dimension for embeddings.
-const TARGET_DIM: usize = 1024;
+/// Default embedding dimension used across the AI integration.
+pub const EMBEDDING_DIM: usize = 1024;
 /// Threshold for determining if L2 normalization is needed.
 const L2_NORM_TOLERANCE: f32 = 1e-6;
 
-/// Process embedding vector to ensure it's L2 normalized with exactly 1024 dimensions.
+/// Process embedding vector to ensure it's L2 normalized with exactly EMBEDDING_DIM dimensions.
 ///
-/// - If dim > 1024: truncate to 1024 and L2 normalize
-/// - If dim == 1024: check if already L2 normalized, normalize if not
-/// - If dim < 1024: return error
+/// - If dim > EMBEDDING_DIM: truncate to EMBEDDING_DIM and L2 normalize
+/// - If dim == EMBEDDING_DIM: check if already L2 normalized, normalize if not
+/// - If dim < EMBEDDING_DIM: return error
 pub fn process_embedding(mut vec: Vec<f32>) -> Result<Vec<f32>, AppError> {
   match vec.len() {
-    d if d > TARGET_DIM => {
-      // Truncate to 1024 and L2 normalize
-      vec.truncate(TARGET_DIM);
+    d if d > EMBEDDING_DIM => {
+      // Truncate to the configured dimension and L2 normalize
+      vec.truncate(EMBEDDING_DIM);
       l2_normalize(&mut vec, None);
       Ok(vec)
     }
-    d if d == TARGET_DIM => {
+    d if d == EMBEDDING_DIM => {
       // Check if already L2 normalized
       let norm_sq: f32 = vec.iter().map(|x| x * x).sum();
       if (norm_sq - 1.0).abs() > L2_NORM_TOLERANCE {
@@ -27,7 +27,7 @@ pub fn process_embedding(mut vec: Vec<f32>) -> Result<Vec<f32>, AppError> {
       Ok(vec)
     }
     d => Err(AppError::new(anyhow::anyhow!(
-      "embedding dimension {d} is less than required {TARGET_DIM}"
+      "embedding dimension {d} is less than required {EMBEDDING_DIM}"
     ))),
   }
 }

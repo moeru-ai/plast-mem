@@ -3,7 +3,7 @@ use async_openai::{Client, config::OpenAIConfig, types::embeddings::CreateEmbedd
 use plastmem_shared::{APP_ENV, AppError};
 use sea_orm::prelude::PgVector;
 
-use crate::embed_shared::process_embedding;
+use crate::embed_shared::{EMBEDDING_DIM, process_embedding};
 
 pub async fn embed(input: &str) -> Result<PgVector, AppError> {
   let config = OpenAIConfig::new()
@@ -15,7 +15,7 @@ pub async fn embed(input: &str) -> Result<PgVector, AppError> {
   let request = CreateEmbeddingRequestArgs::default()
     .model(&APP_ENV.openai_embedding_model)
     .input(input)
-    .dimensions(1024u32)
+    .dimensions(EMBEDDING_DIM as u32)
     .build()?;
 
   let embedding = client

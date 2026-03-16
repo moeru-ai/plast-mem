@@ -70,7 +70,7 @@ Consider:
 /// Build the markdown user message for the reviewer LLM.
 fn build_review_user_message(
   context_messages: &[Message],
-  memories: &[(Uuid, String, Vec<String>)], // (id, summary, matched_queries)
+  memories: &[(Uuid, String, Vec<String>)], // (id, content, matched_queries)
 ) -> String {
   let mut out = String::new();
 
@@ -80,9 +80,9 @@ fn build_review_user_message(
   }
 
   let _ = writeln!(out, "\n## Retrieved Memories\n");
-  for (id, summary, queries) in memories {
+  for (id, content, queries) in memories {
     let _ = writeln!(out, "### Memory {id}");
-    let _ = writeln!(out, "**Summary:** {summary}");
+    let _ = writeln!(out, "**Content:** {content}");
     let queries_str = queries
       .iter()
       .map(|q| format!("\"{q}\""))
@@ -151,7 +151,7 @@ pub async fn process_memory_review(
       continue;
     }
 
-    memories_for_review.push((*memory_id, model.summary.clone(), queries.clone()));
+    memories_for_review.push((*memory_id, model.content.clone(), queries.clone()));
     models_by_id.insert(*memory_id, model);
   }
 

@@ -3,7 +3,7 @@ use async_openai::{Client, config::OpenAIConfig, types::embeddings::CreateEmbedd
 use plastmem_shared::{APP_ENV, AppError};
 use sea_orm::prelude::PgVector;
 
-use crate::embed_shared::process_embedding;
+use crate::embed_shared::{EMBEDDING_DIM, process_embedding};
 
 /// Embed multiple texts in a single API call.
 ///
@@ -22,7 +22,7 @@ pub async fn embed_many(inputs: &[String]) -> Result<Vec<PgVector>, AppError> {
   let request = CreateEmbeddingRequestArgs::default()
     .model(&APP_ENV.openai_embedding_model)
     .input(inputs.to_vec())
-    .dimensions(1024u32)
+    .dimensions(EMBEDDING_DIM as u32)
     .build()?;
 
   let response = client.embeddings().create(request).await?;

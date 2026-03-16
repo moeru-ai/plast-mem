@@ -3,7 +3,7 @@ use plastmem_ai::embed;
 use plastmem_core::{
   DetailLevel, EpisodicMemory, MessageQueue, SemanticMemory, format_tool_result,
 };
-use plastmem_shared::AppError;
+use plastmem_shared::{APP_ENV, AppError};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use uuid::Uuid;
@@ -73,7 +73,7 @@ async fn fetch_memory(
       &state.db,
     ),
   )?;
-  if !episodic.is_empty() {
+  if APP_ENV.enable_fsrs_review && !episodic.is_empty() {
     let memory_ids = episodic.iter().map(|(m, _)| m.id).collect();
     MessageQueue::add_pending_review(conversation_id, memory_ids, query.to_owned(), &state.db)
       .await?;

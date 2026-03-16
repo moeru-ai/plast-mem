@@ -74,7 +74,7 @@ pub async fn recent_memory_raw(
 }
 
 /// Retrieve recent memories formatted as markdown for LLM consumption.
-/// Returns only summaries, no full message details.
+/// Returns only episode content, no full message details.
 #[utoipa::path(
   post,
   path = "/api/v0/recent_memory",
@@ -115,7 +115,7 @@ pub async fn recent_memory(
 
     let _ = writeln!(out, "### {header}{key_moment}");
     let _ = writeln!(out, "**When:** {time_str}");
-    let _ = writeln!(out, "**Summary:** {}\n", mem.summary);
+    let _ = writeln!(out, "**Content:** {}\n", mem.content);
   }
 
   Ok(out.trim_end().to_string())

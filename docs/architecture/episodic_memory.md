@@ -30,8 +30,8 @@ Conversation Messages → Event Segmentation → EpisodicMemory (with FSRS state
 | `conversation_id` | Grouping key for multi-conversation isolation | No |
 | `messages` | Source conversation (preserved for detail views) | No |
 | `title` | Short episode title (5-15 words, LLM-generated) | No |
-| `summary` | Searchable narrative summary (LLM-generated) | No |
-| `embedding` | Vector of `summary` text for semantic search | No |
+| `content` | Searchable dated observation log (LLM-generated) | No |
+| `embedding` | Vector of `title + content` for semantic search | No |
 | `stability` | FSRS decay parameter | Yes (reviews update) |
 | `difficulty` | FSRS difficulty parameter | Yes (reviews update) |
 | `surprise` | Creation-time significance score | No |
@@ -48,7 +48,7 @@ Episodic memories are created via the [segmentation](segmentation.md) pipeline:
 
 1. **Rule check** — Fast path for obvious cases (e.g., < 3 messages = no split)
 2. **Dual-channel boundary detection** — Surprise channel (embedding divergence) + Topic channel (embedding pre-filter → LLM)
-3. **Episode generation** — LLM generates title + summary
+3. **Episode generation** — LLM generates title + dated observation content
 4. **FSRS initialization** — Initial stability boosted by surprise signal
 
 ```rust
@@ -61,7 +61,7 @@ let boosted_stability = base_stability * (1.0 + surprise * 0.5);
 ### 2. Storage
 
 Stored in PostgreSQL with `pgvector` extension:
-- BM25 index on `summary` for full-text search
+- BM25 index on generated `search_text` for full-text search
 - HNSW index on `embedding` for vector similarity
 
 ### 3. Retrieval
@@ -142,7 +142,7 @@ See [retrieve_memory](retrieve_memory.md) for endpoint details.
 
 ### Why Store Full Messages?
 
-While `summary` is used for search, `messages` preserves the original conversation for detail views. This supports:
+While `content` is used for search, `messages` preserves the original conversation for detail views. This supports:
 - Audit/debugging (see what actually happened)
 - High-detail tool results for key moments
 - Potential future re-summarization
