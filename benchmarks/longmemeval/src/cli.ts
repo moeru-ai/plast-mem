@@ -14,13 +14,14 @@ import { fileURLToPath } from 'node:url'
 
 import c from 'tinyrainbow'
 
+import { uuid } from '@insel-null/uuid'
 import { benchmarkJobStatus } from 'plastmem'
 
 import * as p from '@clack/prompts'
 
 import { name } from '../package.json'
 import { judgeAnswer } from './evaluation'
-import { ingestAll, loadConversationIds, saveConversationIds } from './ingest'
+import { ingestSample, loadConversationIds, saveConversationIds } from './ingest'
 import { generateSampleAnswer } from './llm'
 import { getSampleContext } from './retrieve'
 import { computeStats } from './stats'
@@ -275,7 +276,6 @@ const promptReuseConversationIds = async (
 
 const resolveConversationIds = async (
   dataset: LongMemEvalDataset,
-  baseUrl: string,
 ): Promise<ConversationIdMap> => {
   const conversationIdsPath = buildConversationIdsPath()
   const cachedConversationIds = await loadConversationIds(conversationIdsPath)
@@ -300,22 +300,31 @@ const resolveConversationIds = async (
     return conversationId == null || conversationId.length === 0
   })
 
-  if (pendingSamples.length > 0) {
-    const ingestSpinner = p.spinner()
-    ingestSpinner.start(`Ingesting ${pendingSamples.length} samples`)
-    const ingestedConversationIds = await ingestAll(pendingSamples, baseUrl)
-    ingestSpinner.stop(`Ingested ${pendingSamples.length} samples`)
-    conversationIds = {
-      ...conversationIds,
-      ...ingestedConversationIds,
-    }
-    await saveConversationIds(conversationIdsPath, {
-      ...cachedConversationIds,
-      ...conversationIds,
-    })
-  }
+  if (pendingSamples.length > 0)
+    await saveConversationIds(conversationIdsPath, { ...cachedConversationIds, ...conversationIds })
 
   return conversationIds
+}
+
+const ensureConversationId = async (
+  sample: LongMemEvalDataset[number],
+  baseUrl: string,
+  conversationIds: ConversationIdMap,
+): Promise<string> => {
+  const existingConversationId = conversationIds[sample.question_id]
+  if (existingConversationId != null && existingConversationId.length > 0)
+    return existingConversationId
+
+  const conversationId = uuid.v7()
+  const conversationIdsPath = buildConversationIdsPath()
+  const ingestSpinner = p.spinner()
+  ingestSpinner.start(`Ingesting ${sample.question_id}`)
+  await ingestSample(sample, conversationId, baseUrl)
+  ingestSpinner.stop(`Ingested ${sample.question_id}`)
+
+  conversationIds[sample.question_id] = conversationId
+  await saveConversationIds(conversationIdsPath, conversationIds)
+  return conversationId
 }
 
 const formatStatsSummary = (results: LongMemEvalResult[]): string => {
@@ -426,28 +435,18 @@ const main = async () => {
   logFirstSampleSummary(runState.pendingDataset)
 
   const results = [...runState.results]
-  const conversationIds = await resolveConversationIds(runState.pendingDataset, baseUrl)
-  const waitSpinner = p.spinner()
-  for (const sample of runState.pendingDataset) {
-    const conversationId = conversationIds[sample.question_id]
-    if (conversationId == null || conversationId.length === 0) {
-      throw new Error(`Missing conversation id for question ${sample.question_id}`)
-    }
-    await waitForConversation(conversationId, baseUrl, waitSpinner)
-  }
-
+  const conversationIds = await resolveConversationIds(runState.pendingDataset)
   const runSpinner = p.spinner()
   runSpinner.start(`Running retrieval and evaluation for ${runState.pendingDataset.length} samples`)
   for (const [index, sample] of runState.pendingDataset.entries()) {
-    const conversationId = conversationIds[sample.question_id]
-    if (conversationId == null || conversationId.length === 0) {
-      throw new Error(`Missing conversation id for question ${sample.question_id}`)
-    }
-
     runSpinner.message(
       `Evaluating ${index + 1}/${runState.pendingDataset.length} `
       + `${sample.question_id} (${sample.question_type})`,
     )
+
+    const conversationId = await ensureConversationId(sample, baseUrl, conversationIds)
+    const waitSpinner = p.spinner()
+    await waitForConversation(conversationId, baseUrl, waitSpinner)
 
     const context = await getSampleContext(sample, conversationId, baseUrl)
     const prediction = await generateSampleAnswer(sample, context, model)
