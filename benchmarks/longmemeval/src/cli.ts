@@ -210,12 +210,16 @@ const selectSamples = async (dataset: LongMemEvalDataset): Promise<LongMemEvalDa
   }
 
   const sampleLimit = await promptSampleLimit(filteredDataset.length)
-  const limitedDataset = filteredDataset.slice(0, sampleLimit)
+  const limitedDataset = selectedQuestionTypes.flatMap((questionType) => {
+    const typeSamples = filteredDataset.filter(sample => sample.question_type === questionType)
+    return typeSamples.slice(0, sampleLimit)
+  })
 
   p.note([
     `selected question types: ${selectedQuestionTypes.join(', ')}`,
     `filtered samples: ${filteredDataset.length}/${dataset.length}`,
-    `selected examples: ${limitedDataset.length}/${filteredDataset.length}`,
+    `selected examples per type: ${sampleLimit === filteredDataset.length ? 'all' : sampleLimit}`,
+    `selected examples total: ${limitedDataset.length}`,
     `selected type counts: ${summarizeQuestionTypes(limitedDataset)}`,
   ].join('\n'), 'Run Summary')
 
