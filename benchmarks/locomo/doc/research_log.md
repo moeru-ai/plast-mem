@@ -20,7 +20,7 @@ Overall LLM:  0.00%
 ```
 After comparing the current implementation of `plast-mem` and `benchmarks\locomo` to Nemori's repo, there are 6 hypothesis why our score is not high:
 
-1. The embedding dimenstion should be at least 1536 rather than 1024, using `text-embedding-3-small`.
+1. The embedding dimension should be at least 1536 rather than 1024, using `text-embedding-3-small`.
 2. The prompt for generating episodic memory's summary/content is bad.
 3. Episodic memory vector search should use both title and content/summary rather than summary alone
 4. The prompt for benchmark QA is bad
