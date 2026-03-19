@@ -175,7 +175,10 @@ impl MessageQueue {
   }
 
   /// Atomically removes the first `count` messages from the queue.
-  pub async fn drain(id: Uuid, count: usize, db: &DatabaseConnection) -> Result<(), AppError> {
+  pub async fn drain<C>(id: Uuid, count: usize, db: &C) -> Result<(), AppError>
+  where
+    C: ConnectionTrait,
+  {
     let sql = format!(
       "UPDATE message_queue SET messages = jsonb_path_query_array(messages, '$[{count} to last]'::jsonpath) WHERE id = $1"
     );
@@ -299,11 +302,14 @@ impl MessageQueue {
     Ok(result.is_some())
   }
 
-  pub async fn finalize_job(
+  pub async fn finalize_job<C>(
     id: Uuid,
     prev_episode_content: Option<String>,
-    db: &DatabaseConnection,
-  ) -> Result<(), AppError> {
+    db: &C,
+  ) -> Result<(), AppError>
+  where
+    C: ConnectionTrait,
+  {
     message_queue::Entity::update(message_queue::ActiveModel {
       id: Set(id),
       in_progress_fence: Set(None),

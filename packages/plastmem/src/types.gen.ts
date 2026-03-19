@@ -68,6 +68,7 @@ export type ContextPreRetrieve = {
     conversation_id: string;
     detail?: DetailLevel;
     query: string;
+    query_embedding?: Array<number> | null;
     semantic_limit?: number;
 };
 
@@ -75,6 +76,7 @@ export type DetailLevel = 'auto' | 'none' | 'low' | 'high';
 
 export type EpisodicMemory = {
     consolidated_at?: string | null;
+    content: string;
     conversation_id: string;
     created_at: string;
     difficulty: number;
@@ -84,7 +86,6 @@ export type EpisodicMemory = {
     messages: Array<Message>;
     stability: number;
     start_at: string;
-    summary: string;
     surprise: number;
     title: string;
 };
@@ -102,7 +103,7 @@ export type Message = {
     timestamp: string;
 };
 
-export type MessageRole = 'user' | 'assistant';
+export type MessageRole = string;
 
 export type RecentMemory = {
     /**
@@ -141,6 +142,10 @@ export type RetrieveMemory = {
      * Search query text
      */
     query: string;
+    /**
+     * Optional precomputed embedding for the query
+     */
+    query_embedding?: Array<number> | null;
     /**
      * Maximum semantic memories to return
      */

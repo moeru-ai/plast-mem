@@ -3,7 +3,7 @@ use async_openai::{Client, config::OpenAIConfig, types::embeddings::CreateEmbedd
 use plastmem_shared::{APP_ENV, AppError};
 use sea_orm::prelude::PgVector;
 
-use crate::embed_shared::{EMBEDDING_DIM, process_embedding};
+use crate::embed_shared::{EMBEDDING_DIM, process_embedding, request_embedding_with_retry};
 
 /// Embed multiple texts in a single API call.
 ///
@@ -24,8 +24,9 @@ pub async fn embed_many(inputs: &[String]) -> Result<Vec<PgVector>, AppError> {
     .input(inputs.to_vec())
     .dimensions(EMBEDDING_DIM as u32)
     .build()?;
+  let embeddings = client.embeddings();
 
-  let response = client.embeddings().create(request).await?;
+  let response = request_embedding_with_retry(|| embeddings.create(request.clone())).await?;
 
   // Sort by index to ensure ordering matches input
   let mut data = response.data;

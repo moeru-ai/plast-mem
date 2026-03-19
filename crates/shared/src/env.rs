@@ -16,13 +16,29 @@ fn bool_env(key: &str, default: bool) -> bool {
     .unwrap_or(default)
 }
 
+fn u64_env(key: &str, default: u64) -> u64 {
+  env::var(key)
+    .ok()
+    .and_then(|value| value.trim().parse::<u64>().ok())
+    .unwrap_or(default)
+}
+
+fn usize_env(key: &str, default: usize) -> usize {
+  env::var(key)
+    .ok()
+    .and_then(|value| value.trim().parse::<usize>().ok())
+    .unwrap_or(default)
+}
+
 pub struct AppEnv {
   pub database_url: String,
   pub openai_base_url: String,
   pub openai_api_key: String,
   pub openai_chat_model: String,
   pub openai_embedding_model: String,
+  pub openai_request_timeout_seconds: u64,
   pub enable_fsrs_review: bool,
+  pub predict_calibrate_concurrency: usize,
 }
 
 impl AppEnv {
@@ -37,7 +53,9 @@ impl AppEnv {
       openai_api_key: required_env("OPENAI_API_KEY"),
       openai_chat_model: required_env("OPENAI_CHAT_MODEL"),
       openai_embedding_model: required_env("OPENAI_EMBEDDING_MODEL"),
+      openai_request_timeout_seconds: u64_env("OPENAI_REQUEST_TIMEOUT_SECONDS", 60),
       enable_fsrs_review: bool_env("ENABLE_FSRS_REVIEW", true),
+      predict_calibrate_concurrency: usize_env("PREDICT_CALIBRATE_CONCURRENCY", 4),
     }
   }
 }

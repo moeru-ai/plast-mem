@@ -6,6 +6,8 @@ use async_openai::{
 };
 use plastmem_shared::{APP_ENV, AppError};
 
+use crate::embed_shared::request_chat_completion_with_retry;
+
 pub async fn generate_text(
   messages: Vec<ChatCompletionRequestMessage>,
 ) -> Result<String, AppError> {
@@ -20,9 +22,9 @@ pub async fn generate_text(
     .messages(messages)
     .build()?;
 
-  client
-    .chat()
-    .create(request)
+  let chat = client.chat();
+
+  request_chat_completion_with_retry(|| chat.create(request.clone()))
     .await
     .map(|r| r.choices.into_iter())?
     .filter_map(|c| c.message.content)

@@ -2,7 +2,6 @@
 import { sleep } from '@moeru/std'
 import { benchmarkJobStatus } from 'plastmem'
 
-const INITIAL_WAIT_MS = 2 * 60_000
 const POLL_INTERVAL_MS = 10_000
 
 interface ConversationStatus {
@@ -37,9 +36,6 @@ export const waitForAll = async (
   const uniqueIds = [...new Set(conversationIds.filter(id => id.length > 0))]
   if (uniqueIds.length === 0)
     return
-
-  console.log('  Waiting 2 minutes before polling background jobs...')
-  await sleep(INITIAL_WAIT_MS)
 
   const pendingIds = new Set(uniqueIds)
   while (pendingIds.size > 0) {

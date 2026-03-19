@@ -109,23 +109,6 @@ pub fn format_tool_result(
 ) -> String {
   let mut out = String::new();
 
-  // ── Known Facts ──
-  if !semantic_results.is_empty() {
-    let _ = writeln!(out, "## Known Facts");
-    for (fact, _score) in semantic_results {
-      let sources = fact.source_episodic_ids.len();
-      let _ = writeln!(
-        out,
-        "- [{}] {} (sources: {} conversation{})",
-        fact.category,
-        fact.fact,
-        sources,
-        if sources == 1 { "" } else { "s" }
-      );
-    }
-    let _ = writeln!(out);
-  }
-
   // ── Episodic Memories ──
   if !episodic_results.is_empty() {
     let _ = writeln!(out, "## Episodic Memories");
@@ -133,24 +116,16 @@ pub fn format_tool_result(
 
   let now = Utc::now();
 
-  for (rank, (mem, score)) in episodic_results.iter().enumerate() {
+  for (rank, (mem, _score)) in episodic_results.iter().enumerate() {
     let rank = rank + 1; // 1-indexed
 
     // Header
-    let key_moment = if mem.surprise >= 0.7 {
-      ", key moment"
-    } else {
-      ""
-    };
     let header = if mem.title.is_empty() {
       format!("Memory {rank}")
     } else {
       mem.title.clone()
     };
-    let _ = writeln!(
-      out,
-      "### {header} [rank: {rank}, score: {score:.2}{key_moment}]"
-    );
+    let _ = writeln!(out, "### {header}");
 
     // When
     let relative = HumanTime::from(mem.end_at.signed_duration_since(now));
@@ -185,6 +160,15 @@ pub fn format_tool_result(
       }
     }
 
+    let _ = writeln!(out);
+  }
+
+  // ── Known Facts ──
+  if !semantic_results.is_empty() {
+    let _ = writeln!(out, "## Known Facts");
+    for (fact, _score) in semantic_results {
+      let _ = writeln!(out, "- {}", fact.fact);
+    }
     let _ = writeln!(out);
   }
 

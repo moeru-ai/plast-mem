@@ -5,18 +5,25 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
-#[serde(rename_all = "lowercase")]
-pub enum MessageRole {
-  User,
-  Assistant,
+#[serde(transparent)]
+#[schema(value_type = String)]
+pub struct MessageRole(pub String);
+
+impl From<&str> for MessageRole {
+  fn from(value: &str) -> Self {
+    Self(value.to_owned())
+  }
+}
+
+impl From<String> for MessageRole {
+  fn from(value: String) -> Self {
+    Self(value)
+  }
 }
 
 impl fmt::Display for MessageRole {
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-    match self {
-      Self::User => write!(f, "User"),
-      Self::Assistant => write!(f, "Assistant"),
-    }
+    write!(f, "{}", self.0)
   }
 }
 

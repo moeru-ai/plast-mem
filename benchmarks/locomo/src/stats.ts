@@ -4,9 +4,9 @@ import type { BenchmarkScoreSummary, BenchmarkStats, QACategory, QAResult } from
 const CATEGORIES: QACategory[] = [1, 2, 3, 4, 5]
 const CATEGORY_NAMES: Record<QACategory, string> = {
   1: 'multi-hop',
-  2: 'single-hop',
-  3: 'temporal',
-  4: 'open-domain',
+  2: 'temporal',
+  3: 'open-domain',
+  4: 'single-hop',
   5: 'adversarial',
 }
 

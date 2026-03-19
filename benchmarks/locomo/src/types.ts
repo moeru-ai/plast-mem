@@ -27,7 +27,7 @@ export interface BenchmarkStats {
   by_sample: Record<string, BenchmarkScoreSummary>
   overall: BenchmarkScoreSummary
 }
-// 1 = multi-hop, 2 = single-hop, 3 = temporal, 4 = open-domain, 5 = adversarial
+// 1 = multi-hop, 2 = temporal, 3 = open-domain, 4 = single-hop, 5 = adversarial
 
 export interface DialogTurn {
   blip_caption?: string

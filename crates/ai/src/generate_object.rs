@@ -11,6 +11,8 @@ use plastmem_shared::{APP_ENV, AppError};
 use schemars::JsonSchema;
 use serde::de::DeserializeOwned;
 
+use crate::embed_shared::request_chat_completion_with_retry;
+
 /// Generates a structured object
 ///
 /// # Type Parameters
@@ -162,9 +164,8 @@ where
     })
     .build()?;
 
-  let response = client
-    .chat()
-    .create(request)
+  let chat = client.chat();
+  let response = request_chat_completion_with_retry(|| chat.create(request.clone()))
     .await
     .map(|r| r.choices.into_iter())?
     .find_map(|c| c.message.content)

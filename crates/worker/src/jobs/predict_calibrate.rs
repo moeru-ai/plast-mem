@@ -1,3 +1,6 @@
+use std::collections::HashSet;
+use std::time::Instant;
+
 use apalis::prelude::Data;
 use chrono::Utc;
 use plastmem_ai::{ChatCompletionRequestMessage, embed, embed_many, generate_object, generate_text};
@@ -53,7 +56,7 @@ You are a knowledge extraction specialist. Extract HIGH-VALUE, PERSISTENT knowle
 Extract ONLY knowledge that passes these criteria:
 - **Persistence Test**: Will this still be true in 6 months?
 - **Specificity Test**: Does it contain concrete, searchable information?
-- **Utility Test**: Can this help predict future user needs or preferences?
+- **Utility Test**: Can this help predict future needs, preferences, or behavior of the conversation participants?
 - **Independence Test**: Can this be understood without the conversation context?
 
 ## HIGH-VALUE Knowledge Categories (EXTRACT THESE):
@@ -77,24 +80,31 @@ Extract ONLY knowledge that passes these criteria:
 3. Use present tense for persistent facts
 4. Focus on facts that help understand the user long-term
 5. DO NOT include time/date information in the statement
-6. Quality over quantity - fewer valuable statements are better
+6. If stable speaker names or labels appear in the episode, use those exact names or labels in the statement. Do NOT rewrite them as `User` or `Assistant`.
+7. Preserve exact noun phrases verbatim when they matter for retrieval or QA. Do NOT generalize products, devices, diagnoses, holidays, locations, titles of works, model names, or other distinctive phrases into broader descriptions.
+8. Prefer the shortest exact supported phrase from the source messages.
+9. Quality over quantity - fewer valuable statements are better
 
 ## Examples:
-GOOD: \"User's favorite book is 'Becoming Nicole' by Amy Ellis Nutt\"
-GOOD: \"The user works at ByteDance as a senior ML engineer\"
+GOOD: \"Sam's favorite movie is 'The Godfather'\"
+GOOD: \"Evan works at ByteDance as a senior ML engineer\"
+GOOD: \"Evan uses a fitness tracker\"
+GOOD: \"Sam was diagnosed with gastritis\"
 BAD: \"The user thanked the assistant\"
-BAD: \"The user was happy about the response\"";
+BAD: \"The user was happy about the response\"
+BAD: \"Evan uses a health tracking tool\"
+BAD: \"Sam had a digestive issue\"";
 
 /// Prediction prompt - generate expected episode content from existing knowledge
 const PREDICTION_SYSTEM_PROMPT: &str = "\
 You are performing the PREDICT phase of Predict-Calibrate Learning.
 
-Given existing semantic knowledge about a user and an episode title, predict what the conversation content would be.
+Given existing semantic knowledge about the conversation participants and an episode title, predict what the conversation content would be.
 
 ## Task
 Generate a prediction of what the conversation SHOULD contain based on:
 1. The episode title
-2. Existing knowledge about the user
+2. Existing knowledge about the conversation participants
 
 Your prediction should be a natural description of what you would expect to see in this conversation if your existing knowledge is accurate and complete.
 
@@ -102,7 +112,9 @@ Your prediction should be a natural description of what you would expect to see 
 1. Be specific and concrete in your prediction
 2. Reference relevant knowledge that informed your prediction
 3. If knowledge is insufficient, indicate what you cannot predict
-4. The prediction will be compared with actual conversation to identify knowledge gaps";
+4. Preserve named participants and exact item names already present in the knowledge.
+5. Do not normalize named speakers into `User` or `Assistant` unless the knowledge only provides generic role labels.
+6. The prediction will be compared with actual conversation to identify knowledge gaps";
 
 /// Knowledge extraction from comparison prompt
 const EXTRACT_FROM_COMPARISON_PROMPT: &str = "\
@@ -118,7 +130,7 @@ Identify where the prediction was WRONG or INCOMPLETE - these gaps reveal new kn
 Extract ONLY knowledge that passes these criteria:
 - **Persistence Test**: Will this still be true in 6 months?
 - **Specificity Test**: Does it contain concrete, searchable information?
-- **Utility Test**: Can this help predict future user needs?
+- **Utility Test**: Can this help predict future needs, preferences, or behavior of the conversation participants?
 - **Surprise Test**: Was this unexpected given existing knowledge?
 
 ## Gap Types to Extract:
@@ -132,13 +144,20 @@ Extract ONLY knowledge that passes these criteria:
 3. Each statement should be self-contained and atomic
 4. Include ALL specific details (names, versions, titles)
 5. Use present tense for persistent facts
-6. Quality over quantity
+6. If stable speaker names or labels appear in the messages, use those exact names or labels in the statement. Do NOT rewrite them as `User` or `Assistant`.
+7. Preserve exact noun phrases verbatim when they matter for retrieval or QA. Do NOT generalize products, devices, diagnoses, holidays, locations, titles of works, model names, or other distinctive phrases into broader descriptions.
+8. Prefer the shortest exact supported phrase from the source messages.
+9. Quality over quantity
 
 ## Examples:
-GOOD: \"User prefers Rust over Python for systems programming\"
-GOOD: \"User is learning Japanese for an upcoming trip to Tokyo\"
+GOOD: \"Sam prefers Rust over Python for systems programming\"
+GOOD: \"Evan is learning Japanese for an upcoming trip to Tokyo\"
+GOOD: \"Evan got married during the Christmas season\"
+GOOD: \"Sam is going kayaking at Lake Tahoe\"
 BAD: \"The user disagreed with the prediction\"
-BAD: \"The conversation was about programming\"";
+BAD: \"The conversation was about programming\"
+BAD: \"Evan got married during the winter holiday season\"
+BAD: \"Sam is doing an outdoor activity by a lake\"";
 
 // ──────────────────────────────────────────────────
 // Constants
@@ -187,9 +206,18 @@ pub async fn process_predict_calibrate(
   );
 
   // Load existing semantic memories for this conversation
+  let load_start = Instant::now();
+  tracing::info!(episode_id = %episode.id, "Predict-Calibrate stage start: load_related_facts");
   let existing_facts = load_related_facts(&episode, db).await?;
+  tracing::info!(
+    episode_id = %episode.id,
+    elapsed_ms = load_start.elapsed().as_millis(),
+    facts_found = existing_facts.len(),
+    "Predict-Calibrate stage done: load_related_facts"
+  );
 
   // Extract knowledge using Predict-Calibrate Learning
+  let extraction_start = Instant::now();
   let statements = if existing_facts.is_empty() {
     // Cold start: no existing knowledge to predict from
     tracing::info!(episode_id = %episode.id, "No existing knowledge, using cold start mode");
@@ -204,6 +232,12 @@ pub async fn process_predict_calibrate(
     );
     predict_calibrate_extraction(&episode, &existing_facts).await?
   };
+  tracing::info!(
+    episode_id = %episode.id,
+    elapsed_ms = extraction_start.elapsed().as_millis(),
+    statement_count = statements.len(),
+    "Predict-Calibrate stage done: extract_knowledge"
+  );
 
   if statements.is_empty() {
     tracing::debug!("No knowledge extracted, marking episode as consolidated");
@@ -217,7 +251,14 @@ pub async fn process_predict_calibrate(
   );
 
   // Consolidate extracted statements with existing knowledge
+  let consolidate_start = Instant::now();
+  tracing::info!(episode_id = %episode.id, statement_count = statements.len(), "Predict-Calibrate stage start: consolidate_statements");
   consolidate_statements(&statements, &episode, db).await?;
+  tracing::info!(
+    episode_id = %episode.id,
+    elapsed_ms = consolidate_start.elapsed().as_millis(),
+    "Predict-Calibrate stage done: consolidate_statements"
+  );
 
   // Mark episode as consolidated
   mark_consolidated(job.episode_id, db).await?;
@@ -254,6 +295,8 @@ async fn cold_start_extraction(episode: &EpisodicMemory) -> Result<Vec<String>, 
   );
 
   tracing::debug!(episode_id = %episode.id, "Cold-start extraction");
+  let generation_start = Instant::now();
+  tracing::info!(episode_id = %episode.id, "Predict-Calibrate stage start: cold_start_generate");
 
   let output = generate_object::<KnowledgeExtractionOutput>(
     vec![
@@ -264,6 +307,13 @@ async fn cold_start_extraction(episode: &EpisodicMemory) -> Result<Vec<String>, 
     Some("Extract high-value knowledge from first episode".to_owned()),
   )
   .await?;
+
+  tracing::info!(
+    episode_id = %episode.id,
+    elapsed_ms = generation_start.elapsed().as_millis(),
+    statement_count = output.statements.len(),
+    "Predict-Calibrate stage done: cold_start_generate"
+  );
 
   Ok(output.statements)
 }
@@ -278,8 +328,19 @@ async fn predict_calibrate_extraction(
 ) -> Result<Vec<String>, AppError> {
   // Step 1: PREDICT - Generate prediction from stratified facts (guidelines prioritized)
   let facts = select_relevant_facts(existing_facts);
+  let predict_start = Instant::now();
+  tracing::info!(
+    episode_id = %episode.id,
+    fact_count = facts.len(),
+    "Predict-Calibrate stage start: predict"
+  );
   let prediction = predict_episode(&episode.title, &facts).await?;
-  tracing::debug!(episode_id = %episode.id, prediction_len = prediction.len(), "Generated prediction");
+  tracing::info!(
+    episode_id = %episode.id,
+    elapsed_ms = predict_start.elapsed().as_millis(),
+    prediction_len = prediction.len(),
+    "Predict-Calibrate stage done: predict"
+  );
 
   // Step 2: CALIBRATE - Compare prediction with actual messages
   let user_content = format!(
@@ -290,6 +351,8 @@ async fn predict_calibrate_extraction(
   );
 
   tracing::debug!(episode_id = %episode.id, "Extracting knowledge from gaps");
+  let calibrate_start = Instant::now();
+  tracing::info!(episode_id = %episode.id, "Predict-Calibrate stage start: calibrate");
 
   let output = generate_object::<KnowledgeExtractionOutput>(
     vec![
@@ -300,6 +363,13 @@ async fn predict_calibrate_extraction(
     Some("Extract knowledge from prediction-actual comparison".to_owned()),
   )
   .await?;
+
+  tracing::info!(
+    episode_id = %episode.id,
+    elapsed_ms = calibrate_start.elapsed().as_millis(),
+    statement_count = output.statements.len(),
+    "Predict-Calibrate stage done: calibrate"
+  );
 
   Ok(output.statements)
 }
@@ -335,7 +405,19 @@ async fn consolidate_statements(
   source: &EpisodicMemory,
   db: &DatabaseConnection,
 ) -> Result<(), AppError> {
+  let embed_start = Instant::now();
+  tracing::info!(
+    episode_id = %source.id,
+    statement_count = statements.len(),
+    "Predict-Calibrate stage start: embed_many"
+  );
   let embeddings = embed_many(statements).await?;
+  tracing::info!(
+    episode_id = %source.id,
+    elapsed_ms = embed_start.elapsed().as_millis(),
+    embedding_count = embeddings.len(),
+    "Predict-Calibrate stage done: embed_many"
+  );
 
   for (stmt, emb) in statements.iter().zip(embeddings) {
     if let Some(existing) = find_duplicate(&emb, source.conversation_id, db).await? {
@@ -391,7 +473,7 @@ async fn insert_new_fact(
     conversation_id: source.conversation_id,
     category: infer_category(statement).to_string(),
     fact: statement.to_string(),
-    keywords: extract_keywords(statement),
+    keywords: extract_keywords(statement, source),
     source_episodic_ids: vec![source.id],
     valid_at: now.into(),
     invalid_at: None,
@@ -424,18 +506,155 @@ fn infer_category(statement: &str) -> &'static str {
   }
 }
 
-fn extract_keywords(statement: &str) -> Vec<String> {
-  statement
-    .split_whitespace()
-    .filter(|w| w.len() >= 2) // Allow short technical terms like "Rust", "AI", "Go", "C++"
-    .take(5)
-    .map(|w| {
-      w.to_lowercase()
-        .trim_matches(|c: char| !c.is_alphanumeric())
-        .to_string()
+fn add_keywords_from_text(
+  text: &str,
+  keywords: &mut Vec<String>,
+  seen: &mut HashSet<String>,
+) {
+  const MAX_KEYWORDS: usize = 12;
+
+  fn is_token_char(c: char) -> bool {
+    c.is_alphanumeric() || matches!(c, '\'' | '+' | '#' | '-')
+  }
+
+  fn normalize_spaces(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+  }
+
+  fn is_stopword(token: &str) -> bool {
+    matches!(
+      token.to_ascii_lowercase().as_str(),
+      "a"
+        | "an"
+        | "and"
+        | "are"
+        | "as"
+        | "at"
+        | "by"
+        | "for"
+        | "from"
+        | "had"
+        | "has"
+        | "have"
+        | "he"
+        | "her"
+        | "his"
+        | "in"
+        | "is"
+        | "it"
+        | "its"
+        | "of"
+        | "on"
+        | "or"
+        | "she"
+        | "that"
+        | "the"
+        | "their"
+        | "them"
+        | "they"
+        | "to"
+        | "was"
+        | "were"
+        | "with"
+    )
+  }
+
+  fn push_keyword(keywords: &mut Vec<String>, seen: &mut HashSet<String>, phrase: String) {
+    let normalized = normalize_spaces(phrase.trim());
+    if normalized.len() < 2 {
+      return;
+    }
+    let dedupe_key = normalized.to_ascii_lowercase();
+    if seen.insert(dedupe_key) {
+      keywords.push(normalized);
+    }
+  }
+
+  for quoted in text.split('"').skip(1).step_by(2) {
+    let quoted = quoted.trim();
+    if !quoted.is_empty() {
+      push_keyword(keywords, seen, quoted.to_string());
+      if keywords.len() >= MAX_KEYWORDS {
+        return;
+      }
+    }
+  }
+
+  let tokens: Vec<String> = text
+    .split(|c: char| !is_token_char(c))
+    .filter_map(|token| {
+      let token = token.trim_matches(|c: char| !is_token_char(c));
+      if token.is_empty() || token.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+      }
+      Some(token.to_string())
     })
-    .filter(|w| !w.is_empty())
-    .collect()
+    .collect();
+
+  for window in tokens.windows(2) {
+    let first = &window[0];
+    let second = &window[1];
+    if is_stopword(first) || is_stopword(second) {
+      continue;
+    }
+    let informative = first.len() >= 4
+      || second.len() >= 4
+      || first.chars().next().is_some_and(char::is_uppercase)
+      || second.chars().next().is_some_and(char::is_uppercase)
+      || first.chars().any(|c| c.is_ascii_digit())
+      || second.chars().any(|c| c.is_ascii_digit());
+    if informative {
+      push_keyword(keywords, seen, format!("{first} {second}"));
+      if keywords.len() >= MAX_KEYWORDS {
+        return;
+      }
+    }
+  }
+
+  for token in &tokens {
+    if is_stopword(token) {
+      continue;
+    }
+    let informative = token.len() >= 4
+      || token.chars().next().is_some_and(char::is_uppercase)
+      || token.chars().any(|c| c.is_ascii_digit())
+      || token.contains('+')
+      || token.contains('#')
+      || token.contains('-');
+    if informative {
+      push_keyword(keywords, seen, token.clone());
+      if keywords.len() >= MAX_KEYWORDS {
+        break;
+      }
+    }
+  }
+}
+
+fn extract_keywords(statement: &str, source: &EpisodicMemory) -> Vec<String> {
+  const MAX_KEYWORDS: usize = 12;
+
+  let mut keywords = Vec::new();
+  let mut seen = HashSet::new();
+
+  add_keywords_from_text(statement, &mut keywords, &mut seen);
+  if keywords.len() >= MAX_KEYWORDS {
+    keywords.truncate(MAX_KEYWORDS);
+    return keywords;
+  }
+
+  let source_text = format!(
+    "{}\n{}\n{}",
+    source.title,
+    source.content,
+    source
+      .messages
+      .iter()
+      .map(|m| m.content.as_str())
+      .collect::<Vec<_>>()
+      .join("\n")
+  );
+  add_keywords_from_text(&source_text, &mut keywords, &mut seen);
+  keywords
 }
 
 // ──────────────────────────────────────────────────
