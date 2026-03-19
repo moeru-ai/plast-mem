@@ -200,6 +200,33 @@ This, is a huge progress. This is the best results we obtained ever. This is the
 
 Based on this change, we further question, do we only need to use BM25 searching title and context, rather than title + context + raw message in order to avoid getting too much irrelevant details?
 
+Yeah we still need...
+
 ### H3.3 Alias for `user` and `assistant`?
 
+Yes we need, can't just use user/assistant
+
 ### H3.4 Segmentation prompt too bad?
+
+Yeah, huge chunk segmentation is useless. Too much retrieved context leads to bad results.
+
+### Final reach
+
+We changed the episodic content format, only kept the key time information. We use the speakers' names rather than user/assistant. We shrunken our segmentation trigger window from 1 huge window into 30 messages, streaming ingest. We changed retrieval context presentation order: Episodic first and then semantic. Enhanced semantic memory generation prompt. Enhanced QA prompt for answering multi-hop questions.
+
+NOW, we have:
+
+```
+Overall
+  Overall F1:   54.51%  (n=1540)
+  Overall Nemori F1: 51.84%
+  Overall LLM:  0.00%
+
+  Cat 1 (multi-hop   ):  F1=34.19%  NemoriF1=35.95%  LLM=0.00%  (n=282)
+  Cat 2 (temporal    ):  F1=58.99%  NemoriF1=57.70%  LLM=0.00%  (n=321)
+  Cat 3 (open-domain ):  F1=30.22%  NemoriF1=26.75%  LLM=0.00%  (n=96)
+  Cat 4 (single-hop  ):  F1=62.38%  NemoriF1=57.80%  LLM=0.00%  (n=841)
+──────────────────────────────────────────────
+```
+
+After four days of focused iteration, we achieved a SOTA-comparable result on our current LoCoMo setup, reaching the Nemori baseline level.
