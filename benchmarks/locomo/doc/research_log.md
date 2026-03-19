@@ -49,7 +49,7 @@ Overall
 
 Not a very useful improvement. It proves that the QA prompt will not impact the overall performance too much. Since the context retrieval has no change, the prompt only enhanced how the LLM uses the provided context / retrieved memory to answer the question. Cat 3 got an increase compared to the base.
 
-### H1 The embedding dimenstion should be at least 1536 rather than 1024, using `text-embedding-3-small`.
+### H1 The embedding dimension should be at least 1536 rather than 1024, using `text-embedding-3-small`.
 
 based on the modification on H4, I run the test on the first 9 samples (the last one sample `conv 50` was failed due to API request error). Then I separately ran the last sample, and here is the final results:
 
