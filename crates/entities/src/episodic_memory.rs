@@ -11,7 +11,7 @@ pub struct Model {
   #[sea_orm(column_type = "JsonBinary")]
   pub messages: Json,
   #[sea_orm(column_type = "Text")]
-  pub summary: String,
+  pub content: String,
   pub embedding: PgVector,
   #[sea_orm(column_type = "Text")]
   pub title: String,

@@ -5,18 +5,45 @@ import type { DialogTurn, LoCoMoSample } from './types'
 import { readFile, writeFile } from 'node:fs/promises'
 
 import { uuid } from '@insel-null/uuid'
+import { sleep } from '@moeru/std'
 import { Spinner } from 'picospinner'
-import { benchmarkAddMessages } from 'plastmem'
+import { benchmarkAddMessages, benchmarkJobStatus } from 'plastmem'
 
 // Minutes between consecutive turns within a session
 const TURN_INTERVAL_MINS = 1
+const BENCHMARK_SEGMENT_WINDOW = 30
+const BENCHMARK_POLL_INTERVAL_MS = 2_000
 interface BatchMessage {
   content: string
-  role: SpeakerRole
+  role: string
   timestamp?: number
 }
 interface OrderedSession { date: Date | null, turns: DialogTurn[] }
-type SpeakerRole = 'assistant' | 'user'
+
+const runWithConcurrency = async (
+  tasks: Array<() => Promise<void>>,
+  concurrency: number,
+): Promise<void> => {
+  if (tasks.length === 0)
+    return
+
+  const limit = Math.max(1, Math.floor(concurrency))
+  let nextIndex = 0
+
+  const worker = async (): Promise<void> => {
+    while (true) {
+      const taskIndex = nextIndex
+      nextIndex += 1
+      if (taskIndex >= tasks.length)
+        return
+      await tasks[taskIndex]()
+    }
+  }
+
+  await Promise.all(
+    Array.from({ length: Math.min(limit, tasks.length) }, async () => worker()),
+  )
+}
 
 const SESSION_DATE_RE = /^(\d{1,2}):(\d{2})\s*(am|pm)\s+on\s+(\d{1,2})\s+(\w+),\s+(\d{4})$/i
 const MONTH_INDEX_BY_NAME: Record<string, number> = {
@@ -71,25 +98,37 @@ const addMessagesInBulk = async (
   })
 }
 
-const buildSpeakerRoleMap = (sample: LoCoMoSample): Map<string, SpeakerRole> => {
-  const speakers: string[] = []
-  let n = 1
-  while (speakers.length < 2) {
-    const turns = sample.conversation[`session_${n}`]
-    if (!Array.isArray(turns))
-      break
-    for (const turn of turns) {
-      if (!speakers.includes(turn.speaker))
-        speakers.push(turn.speaker)
-    }
-    n++
+interface ConversationStatus {
+  apalis_active: number
+  done: boolean
+  fence_active: boolean
+  messages_pending: number
+}
+
+const getConversationStatus = async (
+  baseUrl: string,
+  conversationId: string,
+): Promise<ConversationStatus> => {
+  const res = await benchmarkJobStatus({
+    baseUrl,
+    query: { conversation_id: conversationId },
+    throwOnError: true,
+  })
+
+  return res.data as ConversationStatus
+}
+
+const waitForConversationSegmentation = async (
+  baseUrl: string,
+  conversationId: string,
+): Promise<void> => {
+  while (true) {
+    const status = await getConversationStatus(baseUrl, conversationId)
+    if (status.messages_pending === 0 && !status.fence_active)
+      return
+
+    await sleep(BENCHMARK_POLL_INTERVAL_MS)
   }
-  const map = new Map<string, 'assistant' | 'user'>()
-  if (speakers.length > 0)
-    map.set(speakers[0], 'user')
-  if (speakers.length > 1)
-    map.set(speakers[1], 'assistant')
-  return map
 }
 
 const getOrderedSessions = (sample: LoCoMoSample): OrderedSession[] => {
@@ -122,7 +161,6 @@ const ingestSample = async (
   baseUrl: string,
   onProgress?: (done: number, total: number) => void,
 ): Promise<void> => {
-  const roleMap = buildSpeakerRoleMap(sample)
   const sessions = getOrderedSessions(sample)
   const totalTurns = countTotalTurns(sessions)
   const messages: BatchMessage[] = []
@@ -136,31 +174,35 @@ const ingestSample = async (
       if (turn == null || turn.text.trim().length === 0)
         continue
 
-      const role = roleMap.get(turn.speaker) ?? 'user'
       const timestamp = getTurnTimestampMs(session.date, i)
       messages.push({
         content: turn.text,
-        role,
+        role: turn.speaker.trim() || 'User',
         ...(timestamp != null ? { timestamp } : {}),
       })
       onProgress?.(done, totalTurns)
     }
   }
 
-  await addMessagesInBulk(baseUrl, conversationId, messages)
+  for (let start = 0; start < messages.length; start += BENCHMARK_SEGMENT_WINDOW) {
+    const chunk = messages.slice(start, start + BENCHMARK_SEGMENT_WINDOW)
+    await addMessagesInBulk(baseUrl, conversationId, chunk)
+    await waitForConversationSegmentation(baseUrl, conversationId)
+  }
 }
 
 export const ingestAll = async (
   samples: LoCoMoSample[],
   baseUrl: string,
+  concurrency: number,
 ): Promise<Record<string, string>> => {
   const ids: Record<string, string> = {}
 
-  for (const sample of samples) {
+  const tasks = samples.map(sample => async () => {
     const conversationId = uuid.v7()
     ids[sample.sample_id] = conversationId
-
-    const spinner = new Spinner(`Ingesting sample ${sample.sample_id} (${conversationId})`)
+    console.log(`  Ingesting sample ${sample.sample_id} (${conversationId})`)
+    const spinner = new Spinner(`Ingesting sample ${sample.sample_id}`)
     let lastPct = 0
     await ingestSample(sample, conversationId, baseUrl, (done, total) => {
       const pct = Math.floor((done / total) * 100)
@@ -170,7 +212,9 @@ export const ingestAll = async (
       }
     })
     spinner.succeed(`Ingested sample ${sample.sample_id} (${conversationId})`)
-  }
+  })
+
+  await runWithConcurrency(tasks, concurrency)
 
   return ids
 }

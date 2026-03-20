@@ -9,6 +9,7 @@
   "dependencies": {
     "@insel-null/uuid": "catalog:",
     "@moeru/std": "catalog:",
+    "@xsai/embed": "catalog:",
     "@xsai/generate-text": "catalog:",
     "@xsai/tool": "catalog:",
     "picospinner": "catalog:",

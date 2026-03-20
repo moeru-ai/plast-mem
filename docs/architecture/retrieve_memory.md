@@ -52,7 +52,7 @@ Query → embed(query) ─────┤
 
 ### Episodic: Hybrid Search + FSRS Re-ranking
 
-1. BM25 search on `summary` text → 100 candidates
+1. BM25 search on episodic `search_text` → 100 candidates
 2. Vector search on `embedding` → 100 candidates
 3. RRF fusion: `rrf_score = Σ 1.0 / (60 + rank)`
 4. FSRS re-ranking: `final_score = rrf_score × retrievability`
@@ -91,7 +91,7 @@ The tool result is optimized for LLM consumption. Semantic facts are rendered fi
 
 ### Career switch to Rust [rank: 1, score: 0.92, key moment]
 **When:** 2 days ago
-**Summary:** User switching careers from Python to Rust due to performance requirements at new job.
+**Content:** User switched careers from Python to Rust because a new job required higher performance.
 
 **Details:**
 - user: "I've been doing Python for 5 years but my new team is all Rust"
@@ -101,7 +101,7 @@ The tool result is optimized for LLM consumption. Semantic facts are rendered fi
 
 ### Dark mode preferences [rank: 2, score: 0.85]
 **When:** yesterday
-**Summary:** User prefers dark mode interfaces and finds light mode straining.
+**Content:** User prefers dark mode interfaces and finds light mode visually straining.
 ```
 
 The `## Semantic Memory` section is omitted when no matching facts exist.
@@ -125,7 +125,7 @@ Applies to episodic memories only. Semantic facts are always rendered as bullet 
 | `score` | Final score | `rrf_score × retrievability` (0.0-1.0+) |
 | `key moment` | Surprise flag | Present when `surprise ≥ 0.7` |
 | `When` | Relative time | Human-readable (e.g., "2 days ago"), derived from `end_at` |
-| `Summary` | `summary` | LLM-generated memory summary |
+| `Content` | `content` | LLM-generated dated observation log |
 | `Details` | `messages` | Full conversation excerpt (conditional on detail level) |
 
 ## Response Format (Raw JSON Endpoint)
@@ -156,7 +156,7 @@ Returns a single object with `semantic` and `episodic` arrays:
         { "role": "assistant", "content": "..." }
       ],
       "title": "Career switch to Rust",
-      "summary": "User switching careers from Python to Rust...",
+"content": "User switched careers from Python to Rust...",
       "stability": 3.5,
       "difficulty": 5.0,
       "surprise": 0.85,

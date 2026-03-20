@@ -84,7 +84,7 @@ export const contextPreRetrieve = <ThrowOnError extends boolean = false>(options
 
 /**
  * Retrieve recent memories formatted as markdown for LLM consumption.
- * Returns only summaries, no full message details.
+ * Returns only episode content, no full message details.
  */
 export const recentMemory = <ThrowOnError extends boolean = false>(options: Options<RecentMemoryData, ThrowOnError>) => (options.client ?? client).post<RecentMemoryResponses, unknown, ThrowOnError>({
     url: '/api/v0/recent_memory',

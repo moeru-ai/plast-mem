@@ -62,7 +62,7 @@ A single LLM call (`batch_segment`) receives all messages in the window and retu
 
 - `start_message_index` / `end_message_index` / `num_messages` — slice boundaries
 - `title` — 5–15 word theme description
-- `summary` — ≤50 word third-person narrative
+- `content` — detailed third-person episodic narrative
 - `surprise_level` — `low` | `high` | `extremely_high`
 
 ### Boundary Criteria (OR relationship)

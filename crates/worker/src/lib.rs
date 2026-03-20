@@ -6,6 +6,7 @@ use apalis::{
 };
 use apalis_postgres::PostgresStorage;
 use plastmem_shared::AppError;
+use plastmem_shared::APP_ENV;
 use sea_orm::DatabaseConnection;
 
 pub mod jobs;
@@ -65,6 +66,7 @@ pub async fn worker(
       move |_run_id| {
         WorkerBuilder::new("predict-calibrate")
           .backend(semantic_backend.clone())
+          .concurrency(APP_ENV.predict_calibrate_concurrency)
           .enable_tracing()
           .data(db.clone())
           .build(move |job, data| async move {

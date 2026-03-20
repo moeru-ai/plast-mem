@@ -11,6 +11,7 @@ Plast Mem uses environment variables for configuration. All variables are requir
 | `OPENAI_API_KEY` | API authentication key | `sk-...` |
 | `OPENAI_CHAT_MODEL` | Model for chat completions | `gpt-5.2` |
 | `OPENAI_EMBEDDING_MODEL` | Model for embeddings | `text-embedding-3-small` |
+| `ENABLE_FSRS_REVIEW` | Enable pending review recording and FSRS review jobs | `true` / `false` |
 
 ## Setup
 
@@ -22,6 +23,7 @@ OPENAI_BASE_URL=https://api.openai.com/v1
 OPENAI_API_KEY=sk-your-api-key
 OPENAI_CHAT_MODEL=gpt-5.2
 OPENAI_EMBEDDING_MODEL=text-embedding-3-small
+ENABLE_FSRS_REVIEW=true
 ```
 
 ## Self-hosted LLM Setup
@@ -33,6 +35,7 @@ OPENAI_BASE_URL=http://localhost:11434/v1/
 OPENAI_API_KEY=plastmem
 OPENAI_CHAT_MODEL=gpt-oss
 OPENAI_EMBEDDING_MODEL=qwen3-embedding:0.6b
+ENABLE_FSRS_REVIEW=true
 ```
 
 ## Client Configuration

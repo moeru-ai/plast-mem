@@ -15,6 +15,7 @@ catalog:
   '@types/react': ^19.2.14
   '@vitejs/plugin-react': ^5.2.0
   '@xsai/generate-text': ^0.4.3
+  '@xsai/embed': ^0.4.4
   '@xsai/shared-chat': ^0.4.3
   '@xsai/tool': ^0.4.3
   eslint: ^10.0.3

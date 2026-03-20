@@ -41,7 +41,7 @@ const parseCliArgs = (): Args => {
   const { values } = parseArgs({
     options: {
       'concurrency': {
-        default: '2',
+        default: '4',
         short: 'c',
         type: 'string',
       },
@@ -76,7 +76,7 @@ const parseCliArgs = (): Args => {
   const sampleIdStr = values['sample-ids'] ?? ''
 
   return {
-    concurrency: Number.isFinite(concurrency) && concurrency > 0 ? concurrency : 2,
+    concurrency: Number.isFinite(concurrency) && concurrency > 0 ? concurrency : 4,
     dataFile: values['data-file'] ?? resolve(__dirname, '../data/locomo10.json'),
     outFile: values['out-file'] ?? resolve(__dirname, `../results/${new Date().toISOString().replace(/[:.]/g, '-')}.json`),
     sampleIds: sampleIdStr.length > 0 ? sampleIdStr.split(',').map(s => s.trim()) : null,
@@ -333,7 +333,7 @@ const main = async () => {
   let conversationIds: Record<string, string>
   if (!args.skipIngest) {
     console.log('  Ingesting conversations...')
-    conversationIds = await ingestAll(samples, baseUrl)
+    conversationIds = await ingestAll(samples, baseUrl, args.concurrency)
     await saveConversationIds(idsFile, conversationIds)
     console.log('  Ingestion complete.')
   }

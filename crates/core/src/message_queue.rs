@@ -80,7 +80,7 @@ impl MessageQueue {
       pending_reviews: Set(None),
       in_progress_fence: Set(None),
       in_progress_since: Set(None),
-      prev_episode_summary: Set(None),
+      prev_episode_content: Set(None),
     };
 
     message_queue::Entity::insert(active_model)
@@ -175,7 +175,10 @@ impl MessageQueue {
   }
 
   /// Atomically removes the first `count` messages from the queue.
-  pub async fn drain(id: Uuid, count: usize, db: &DatabaseConnection) -> Result<(), AppError> {
+  pub async fn drain<C>(id: Uuid, count: usize, db: &C) -> Result<(), AppError>
+  where
+    C: ConnectionTrait,
+  {
     let sql = format!(
       "UPDATE message_queue SET messages = jsonb_path_query_array(messages, '$[{count} to last]'::jsonpath) WHERE id = $1"
     );
@@ -299,16 +302,19 @@ impl MessageQueue {
     Ok(result.is_some())
   }
 
-  pub async fn finalize_job(
+  pub async fn finalize_job<C>(
     id: Uuid,
-    prev_episode_summary: Option<String>,
-    db: &DatabaseConnection,
-  ) -> Result<(), AppError> {
+    prev_episode_content: Option<String>,
+    db: &C,
+  ) -> Result<(), AppError>
+  where
+    C: ConnectionTrait,
+  {
     message_queue::Entity::update(message_queue::ActiveModel {
       id: Set(id),
       in_progress_fence: Set(None),
       in_progress_since: Set(None),
-      prev_episode_summary: Set(prev_episode_summary),
+      prev_episode_content: Set(prev_episode_content),
       ..Default::default()
     })
     .exec(db)
@@ -329,12 +335,12 @@ impl MessageQueue {
     Ok(())
   }
 
-  pub async fn get_prev_episode_summary(
+  pub async fn get_prev_episode_content(
     id: Uuid,
     db: &DatabaseConnection,
   ) -> Result<Option<String>, AppError> {
     let model = Self::get_or_create_model(id, db).await?;
-    Ok(model.prev_episode_summary)
+    Ok(model.prev_episode_content)
   }
 
   // ──────────────────────────────────────────────────

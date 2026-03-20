@@ -3,7 +3,8 @@ use plastmem_ai::embed;
 use plastmem_core::{
   DetailLevel, EpisodicMemory, MessageQueue, SemanticMemory, format_tool_result,
 };
-use plastmem_shared::AppError;
+use plastmem_shared::{APP_ENV, AppError};
+use sea_orm::prelude::PgVector;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use uuid::Uuid;
@@ -33,6 +34,8 @@ pub struct RetrieveMemory {
   pub conversation_id: Uuid,
   /// Search query text
   pub query: String,
+  /// Optional precomputed embedding for the query
+  pub query_embedding: Option<Vec<f32>>,
   /// Maximum episodic memories to return (1-100)
   #[serde(default = "default_episodic_limit")]
   pub episodic_limit: u64,
@@ -51,11 +54,15 @@ async fn fetch_memory(
   state: &AppState,
   conversation_id: Uuid,
   query: &str,
+  query_embedding: Option<&Vec<f32>>,
   episodic_limit: u64,
   semantic_limit: u64,
   category: Option<&str>,
 ) -> Result<(Vec<(SemanticMemory, f64)>, Vec<(EpisodicMemory, f64)>), AppError> {
-  let query_embedding = embed(query).await?;
+  let query_embedding = match query_embedding {
+    Some(embedding) => PgVector::from(embedding.clone()),
+    None => embed(query).await?,
+  };
   let (semantic, episodic) = tokio::try_join!(
     SemanticMemory::retrieve_by_embedding(
       query,
@@ -73,7 +80,7 @@ async fn fetch_memory(
       &state.db,
     ),
   )?;
-  if !episodic.is_empty() {
+  if APP_ENV.enable_fsrs_review && !episodic.is_empty() {
     let memory_ids = episodic.iter().map(|(m, _)| m.id).collect();
     MessageQueue::add_pending_review(conversation_id, memory_ids, query.to_owned(), &state.db)
       .await?;
@@ -85,10 +92,14 @@ async fn fetch_semantic_memory(
   state: &AppState,
   conversation_id: Uuid,
   query: &str,
+  query_embedding: Option<&Vec<f32>>,
   semantic_limit: u64,
   category: Option<&str>,
 ) -> Result<Vec<(SemanticMemory, f64)>, AppError> {
-  let query_embedding = embed(query).await?;
+  let query_embedding = match query_embedding {
+    Some(embedding) => PgVector::from(embedding.clone()),
+    None => embed(query).await?,
+  };
   SemanticMemory::retrieve_by_embedding(
     query,
     query_embedding,
@@ -106,6 +117,7 @@ async fn fetch_semantic_memory(
 pub struct ContextPreRetrieve {
   pub conversation_id: Uuid,
   pub query: String,
+  pub query_embedding: Option<Vec<f32>>,
   #[serde(default = "default_semantic_limit")]
   pub semantic_limit: u64,
   #[serde(default)]
@@ -139,6 +151,7 @@ pub async fn context_pre_retrieve(
     &state,
     payload.conversation_id,
     &payload.query,
+    payload.query_embedding.as_ref(),
     payload.semantic_limit,
     payload.category.as_deref(),
   )
@@ -195,6 +208,7 @@ pub async fn retrieve_memory_raw(
     &state,
     payload.conversation_id,
     &payload.query,
+    payload.query_embedding.as_ref(),
     payload.episodic_limit,
     payload.semantic_limit,
     payload.category.as_deref(),
@@ -237,6 +251,7 @@ pub async fn retrieve_memory(
     &state,
     payload.conversation_id,
     &payload.query,
+    payload.query_embedding.as_ref(),
     payload.episodic_limit,
     payload.semantic_limit,
     payload.category.as_deref(),
