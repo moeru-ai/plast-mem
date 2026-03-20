@@ -154,33 +154,121 @@ export const scoreAnswer = (
 // LLM Judge (lenient semantic evaluation)
 // ──────────────────────────────────────────────────
 
+const CATEGORY_NAMES: Record<QACategory, string> = {
+  1: 'multi-hop',
+  2: 'temporal',
+  3: 'open-domain',
+  4: 'single-hop',
+  5: 'adversarial',
+}
+
+const buildJudgeGuidance = (category: QACategory): string => {
+  switch (category) {
+    case 1:
+      return [
+        'This is a multi-hop fact question.',
+        'Use three labels: CORRECT, PARTIAL, WRONG.',
+        'Label CORRECT only if the prediction covers all essential pieces required by the question.',
+        'Label PARTIAL if the prediction captures a substantial and clearly relevant part of the answer but misses one or more required pieces.',
+        'Label WRONG if it misses the main answer, gives the wrong facts, or mixes in mostly unrelated items.',
+        'Accept concise phrasing and semantically equivalent wording, but do not accept incomplete coverage.',
+        'Do not label CORRECT if a two-part or multi-part question is answered only partially.',
+      ].join('\n')
+    case 2:
+      return [
+        'This is a temporal question.',
+        'Use only CORRECT or WRONG.',
+        'Accept semantically equivalent time expressions, including absolute vs relative phrasing, if they refer to the same date, time period, duration, or ordering.',
+        'Do not require the exact wording of the gold answer.',
+        'Label the answer WRONG if it refers to the wrong date, wrong time period, wrong duration, or wrong sequence of events.',
+      ].join('\n')
+    case 3:
+      return [
+        'This is an open-domain question.',
+        'Use three labels: CORRECT, PARTIAL, WRONG.',
+        'Judge whether the prediction captures the same core idea as the gold answer.',
+        'Label CORRECT if the main idea matches well.',
+        'Label PARTIAL if the prediction is broadly on the right topic but only captures part of the intended meaning.',
+        'Label WRONG if it misses the main point, introduces a different conclusion, or relies on unsupported claims.',
+      ].join('\n')
+    case 4:
+      return [
+        'This is a single-hop factual question.',
+        'Use three labels: CORRECT, PARTIAL, WRONG.',
+        'Accept answers that identify the same entity, object, title, place, or fact as the gold answer, even if phrased differently or embedded in a longer sentence.',
+        'Label CORRECT if the prediction identifies the right specific fact or entity.',
+        'Label PARTIAL if the prediction is close but too broad, incomplete, or only partially specific.',
+        'Label WRONG if it names the wrong entity or replaces a specific answer with a materially different broader concept.',
+      ].join('\n')
+    case 5:
+      return [
+        'This is an adversarial question.',
+        'Use only CORRECT or WRONG.',
+        'Label the answer CORRECT only if it clearly conveys that the information is not mentioned or cannot be answered from the conversation.',
+        'Any concrete factual answer should be labeled WRONG.',
+      ].join('\n')
+  }
+}
+
+const buildJudgePrompt = (
+  question: string,
+  goldAnswer: number | string,
+  prediction: string,
+  category: QACategory,
+): string => `You are an expert evaluator for long-conversation question answering.
+
+Task category: ${CATEGORY_NAMES[category]}
+
+${buildJudgeGuidance(category)}
+
+Question: ${question}
+Gold answer: ${String(goldAnswer)}
+Predicted answer: ${prediction}
+
+Return exactly one word:
+CORRECT
+or
+PARTIAL
+or
+WRONG`
+
+const parseJudgeLabel = (text: null | string | undefined): number => {
+  const normalized = (text ?? '').trim().toUpperCase()
+  if (normalized === 'CORRECT')
+    return 1.0
+  if (normalized === 'PARTIAL')
+    return 0.5
+  if (normalized === 'WRONG')
+    return 0.0
+
+  const firstWord = normalized.split(/\s+/)[0] ?? ''
+  if (firstWord === 'CORRECT')
+    return 1.0
+  if (firstWord === 'PARTIAL')
+    return 0.5
+  if (firstWord === 'WRONG')
+    return 0.0
+
+  return 0.0
+}
+
 export const llmJudge = async (
   prediction: string,
   goldAnswer: number | string,
   question: string,
+  category: QACategory,
   model: string,
 ): Promise<number> => {
-  const gold = String(goldAnswer)
-  const prompt = `Question: ${question}
-Gold answer: ${gold}
-Predicted answer: ${prediction}
-
-Is the predicted answer correct? Guidelines:
-- Accept semantically equivalent answers (e.g., "adoption agency" ≈ "adoption agencies")
-- Accept if a relative time expression in the prediction matches the specific date in the gold
-- Accept if the prediction captures the key fact even if phrased differently
-- For adversarial questions (gold = "No information available"): only accept if prediction also signals no information
-
-Respond with exactly one word: CORRECT or WRONG`
+  const prompt = buildJudgePrompt(question, goldAnswer, prediction, category)
 
   const { text } = await generateText({
     apiKey: env.OPENAI_API_KEY ?? '',
     baseURL: env.OPENAI_BASE_URL ?? 'https://api.openai.com/v1',
-    maxTokens: 10,
+    maxTokens: 16,
     messages: [{ content: prompt, role: 'user' }],
     model,
     temperature: 0,
   })
 
-  return (text ?? '').trim().toUpperCase().startsWith('CORRECT') ? 1.0 : 0.0
+  return parseJudgeLabel(text)
 }
