@@ -59,6 +59,12 @@ struct PushResult {
 }
 
 #[derive(Debug, FromQueryResult)]
+struct ProcessingStatusRow {
+  messages_pending: i32,
+  fence_active: bool,
+}
+
+#[derive(Debug, FromQueryResult)]
 struct IdRow {
   #[allow(dead_code)]
   id: uuid::Uuid,
@@ -73,12 +79,26 @@ impl MessageQueue {
     id: Uuid,
     db: &DatabaseConnection,
   ) -> Result<QueueProcessingStatus, AppError> {
-    let model = Self::get_or_create_model(id, db).await?;
-    let messages: Vec<Message> = serde_json::from_value(model.messages)?;
+    Self::ensure_exists(id, db).await?;
+
+    let sql = "SELECT \
+               COALESCE(jsonb_array_length(messages), 0)::int AS messages_pending, \
+               (in_progress_fence IS NOT NULL) AS fence_active \
+               FROM message_queue \
+               WHERE id = $1";
+
+    let row = ProcessingStatusRow::find_by_statement(Statement::from_sql_and_values(
+      DbBackend::Postgres,
+      sql,
+      [id.into()],
+    ))
+    .one(db)
+    .await?
+    .ok_or_else(|| anyhow!("Queue not found after ensure_exists"))?;
 
     Ok(QueueProcessingStatus {
-      messages_pending: i32::try_from(messages.len()).unwrap_or(i32::MAX),
-      fence_active: model.in_progress_fence.is_some(),
+      messages_pending: row.messages_pending,
+      fence_active: row.fence_active,
     })
   }
 
@@ -87,14 +107,7 @@ impl MessageQueue {
     Self::from_model(model)
   }
 
-  pub async fn get_or_create_model(
-    id: Uuid,
-    db: &DatabaseConnection,
-  ) -> Result<message_queue::Model, AppError> {
-    if let Some(model) = message_queue::Entity::find_by_id(id).one(db).await? {
-      return Ok(model);
-    }
-
+  async fn ensure_exists(id: Uuid, db: &DatabaseConnection) -> Result<(), AppError> {
     let active_model = message_queue::ActiveModel {
       id: Set(id),
       messages: Set(serde_json::to_value(Vec::<Message>::new())?),
@@ -112,6 +125,19 @@ impl MessageQueue {
       )
       .exec_without_returning(db)
       .await?;
+
+    Ok(())
+  }
+
+  pub async fn get_or_create_model(
+    id: Uuid,
+    db: &DatabaseConnection,
+  ) -> Result<message_queue::Model, AppError> {
+    if let Some(model) = message_queue::Entity::find_by_id(id).one(db).await? {
+      return Ok(model);
+    }
+
+    Self::ensure_exists(id, db).await?;
 
     message_queue::Entity::find_by_id(id)
       .one(db)
@@ -132,7 +158,7 @@ impl MessageQueue {
     message: Message,
     db: &DatabaseConnection,
   ) -> Result<Option<SegmentationCheck>, AppError> {
-    Self::get_or_create_model(id, db).await?;
+    Self::ensure_exists(id, db).await?;
 
     let message_json = serde_json::to_value(vec![&message])?;
     let sql = "UPDATE message_queue \
@@ -335,7 +361,7 @@ impl MessageQueue {
     query: String,
     db: &DatabaseConnection,
   ) -> Result<(), AppError> {
-    Self::get_or_create_model(id, db).await?;
+    Self::ensure_exists(id, db).await?;
 
     let review = PendingReview { query, memory_ids };
     let review_value = serde_json::to_value(vec![review])?;
