@@ -15,18 +15,9 @@ export type AddMessageMessage = {
     timestamp?: string | null;
 };
 
-export type BenchmarkAddMessages = {
-    conversation_id: string;
-    /**
-     * Enqueue forced segmentation immediately after append.
-     */
-    force_process?: boolean;
-    messages: Array<AddMessageMessage>;
-};
-
-export type BenchmarkAddMessagesResult = {
-    accepted: number;
-    enqueued: boolean;
+export type AddMessageResult = {
+    accepted: boolean;
+    reason?: string | null;
 };
 
 export type BenchmarkFlush = {
@@ -34,30 +25,18 @@ export type BenchmarkFlush = {
 };
 
 export type BenchmarkFlushResult = {
-    /**
-     * Whether a flush job was enqueued (false if queue was already empty).
-     */
     enqueued: boolean;
+    reason: string;
 };
 
 export type BenchmarkJobStatus = {
-    /**
-     * Number of active (Pending or Running) Apalis jobs for this conversation.
-     * Covers EventSegmentationJob and PredictCalibrateJob.
-     */
-    apalis_active: number;
-    /**
-     * True when the message queue is empty, no fence is active, and no Apalis jobs are active.
-     */
+    admissible_for_add: boolean;
     done: boolean;
-    /**
-     * Whether a segmentation job fence is currently active.
-     */
     fence_active: boolean;
-    /**
-     * Number of messages still pending in the queue (not yet segmented).
-     */
+    flushable: boolean;
     messages_pending: number;
+    predict_calibrate_jobs_active: number;
+    segmentation_jobs_active: number;
 };
 
 export type ContextPreRetrieve = {
@@ -193,37 +172,22 @@ export type AddMessageErrors = {
      * Invalid request - message content cannot be empty
      */
     400: unknown;
+    /**
+     * Backpressured - message not accepted
+     */
+    429: AddMessageResult;
 };
+
+export type AddMessageError = AddMessageErrors[keyof AddMessageErrors];
 
 export type AddMessageResponses = {
     /**
-     * Message added successfully
+     * Message accepted
      */
-    200: unknown;
+    200: AddMessageResult;
 };
 
-export type BenchmarkAddMessagesData = {
-    body: BenchmarkAddMessages;
-    path?: never;
-    query?: never;
-    url: '/api/v0/benchmark/add_messages';
-};
-
-export type BenchmarkAddMessagesErrors = {
-    /**
-     * Invalid request
-     */
-    400: unknown;
-};
-
-export type BenchmarkAddMessagesResponses = {
-    /**
-     * Batch add result
-     */
-    200: BenchmarkAddMessagesResult;
-};
-
-export type BenchmarkAddMessagesResponse = BenchmarkAddMessagesResponses[keyof BenchmarkAddMessagesResponses];
+export type AddMessageResponse = AddMessageResponses[keyof AddMessageResponses];
 
 export type BenchmarkFlushData = {
     body: BenchmarkFlush;

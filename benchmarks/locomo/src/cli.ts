@@ -21,8 +21,8 @@ interface Args {
   concurrency: number
   dataFile: string
   outFile: string
-  scoreFile: null | string
   sampleIds: null | string[]
+  scoreFile: null | string
   skipIngest: boolean
   skipWait: boolean
   useLlmJudge: boolean
@@ -54,11 +54,11 @@ const parseCliArgs = (): Args => {
         short: 'o',
         type: 'string',
       },
-      'score-file': {
-        type: 'string',
-      },
       'sample-ids': {
         short: 's',
+        type: 'string',
+      },
+      'score-file': {
         type: 'string',
       },
       'skip-ingest': {
@@ -87,8 +87,8 @@ const parseCliArgs = (): Args => {
     concurrency: Number.isFinite(concurrency) && concurrency > 0 ? concurrency : 4,
     dataFile: values['data-file'] ?? resolve(__dirname, '../data/locomo10.json'),
     outFile,
-    scoreFile,
     sampleIds: sampleIdStr.length > 0 ? sampleIdStr.split(',').map(s => s.trim()) : null,
+    scoreFile,
     skipIngest: values['skip-ingest'],
     skipWait: values['skip-wait'],
     useLlmJudge: values['use-llm-judge'],
@@ -189,14 +189,14 @@ const runQaStage = async (
 
     const prefetchSpinner = new Spinner(`Prefetching ${qaCount} contexts`)
     prefetchSpinner.start()
-    const contexts: string[] = Array.from({ length: qaCount }, () => '')
+    const contexts: string[] = Array<string>(qaCount).fill('')
     const contextTasks = qaPairs.map((qa, index) => async () => {
       contexts[index] = await getContext(conversationId, qa.question, baseUrl)
     })
     await runWithConcurrency(contextTasks, args.concurrency)
     prefetchSpinner.succeed(`Prefetched ${qaCount} contexts`)
 
-    const buffered: Array<ArtifactResult | null> = Array.from({ length: qaCount }, () => null)
+    const buffered: Array<ArtifactResult | null> = Array<ArtifactResult | null>(qaCount).fill(null)
     let nextToPrint = 0
 
     const flush = () => {
@@ -259,10 +259,7 @@ const runEvalStage = async (
     const sampleResults = results.slice(startIndex, endIndex)
     console.log(`  Sample ${sampleId}: ${sampleResults.length} questions`)
 
-    const buffered: Array<null | { index: number, result: QAResult }> = Array.from(
-      { length: sampleResults.length },
-      () => null,
-    )
+    const buffered: Array<null | { index: number, result: QAResult }> = Array<null | { index: number, result: QAResult }>(sampleResults.length).fill(null)
     let nextToPrint = 0
 
     const flush = () => {
@@ -364,7 +361,7 @@ const main = async () => {
   let conversationIds: Record<string, string>
   if (!args.skipIngest) {
     console.log('  Ingesting conversations...')
-    conversationIds = await ingestAll(samples, baseUrl, args.concurrency)
+    conversationIds = await ingestAll(samples, baseUrl, args.concurrency, !args.skipWait)
     await saveConversationIds(idsFile, conversationIds)
     console.log('  Ingestion complete.')
   }
@@ -373,11 +370,11 @@ const main = async () => {
     conversationIds = await loadConversationIds(idsFile)
   }
 
-  console.log('  Waiting for background processing...')
   if (args.skipWait) {
     console.log('  Skipping wait (--skip-wait).')
   }
   else {
+    console.log('  Waiting for all remaining background jobs before QA...')
     const activeConversationIds = samples
       .map(sample => conversationIds[sample.sample_id])
       .filter((id): id is string => id != null && id.length > 0)

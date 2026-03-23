@@ -1,18 +1,17 @@
-import type { BenchmarkAddMessages } from 'plastmem'
+import type { AddMessage } from 'plastmem'
 
 import type { DialogTurn, LoCoMoSample } from './types'
 
 import { readFile, writeFile } from 'node:fs/promises'
 
 import { uuid } from '@insel-null/uuid'
-import { sleep } from '@moeru/std'
 import { Spinner } from 'picospinner'
-import { benchmarkAddMessages, benchmarkJobStatus } from 'plastmem'
+import { addMessage } from 'plastmem'
+
+import { flushConversationTailWhenReady, waitUntilConversationAdmissible } from './wait'
 
 // Minutes between consecutive turns within a session
 const TURN_INTERVAL_MINS = 1
-const BENCHMARK_SEGMENT_WINDOW = 30
-const BENCHMARK_POLL_INTERVAL_MS = 2_000
 interface BatchMessage {
   content: string
   role: string
@@ -82,53 +81,40 @@ const parseSessionDate = (dateStr: string): Date | null => {
   return new Date(Date.UTC(Number.parseInt(yearStr, 10), monthIndex, Number.parseInt(dStr, 10), hours, mins))
 }
 
-const addMessagesInBulk = async (
+interface AddMessageResult {
+  accepted: boolean
+  reason?: string
+}
+
+const isBackpressured = (value: unknown): value is AddMessageResult =>
+  typeof value === 'object'
+  && value !== null
+  && 'accepted' in value
+  && (value as { accepted: unknown }).accepted === false
+  && (!('reason' in value) || (value as { reason?: unknown }).reason === 'backpressure')
+
+const sendMessage = async (
   baseUrl: string,
   conversationId: string,
-  messages: BatchMessage[],
-): Promise<void> => {
-  await benchmarkAddMessages({
+  message: BatchMessage,
+): Promise<boolean> => {
+  const res = await addMessage({
     baseUrl,
     body: {
       conversation_id: conversationId,
-      force_process: true,
-      messages: messages as unknown as BenchmarkAddMessages['messages'],
+      message: message as unknown as AddMessage['message'],
     },
-    throwOnError: true,
-  })
-}
-
-interface ConversationStatus {
-  apalis_active: number
-  done: boolean
-  fence_active: boolean
-  messages_pending: number
-}
-
-const getConversationStatus = async (
-  baseUrl: string,
-  conversationId: string,
-): Promise<ConversationStatus> => {
-  const res = await benchmarkJobStatus({
-    baseUrl,
-    query: { conversation_id: conversationId },
-    throwOnError: true,
+    throwOnError: false,
   })
 
-  return res.data as ConversationStatus
-}
+  if (res.response?.ok)
+    return true
 
-const waitForConversationSegmentation = async (
-  baseUrl: string,
-  conversationId: string,
-): Promise<void> => {
-  while (true) {
-    const status = await getConversationStatus(baseUrl, conversationId)
-    if (status.messages_pending === 0 && !status.fence_active)
-      return
+  if (res.response?.status === 429 && isBackpressured(res.error))
+    return false
 
-    await sleep(BENCHMARK_POLL_INTERVAL_MS)
-  }
+  const status = res.response?.status ?? 'network'
+  throw new Error(`addMessage failed with status ${status}`)
 }
 
 const getOrderedSessions = (sample: LoCoMoSample): OrderedSession[] => {
@@ -184,10 +170,14 @@ const ingestSample = async (
     }
   }
 
-  for (let start = 0; start < messages.length; start += BENCHMARK_SEGMENT_WINDOW) {
-    const chunk = messages.slice(start, start + BENCHMARK_SEGMENT_WINDOW)
-    await addMessagesInBulk(baseUrl, conversationId, chunk)
-    await waitForConversationSegmentation(baseUrl, conversationId)
+  for (const message of messages) {
+    while (true) {
+      const accepted = await sendMessage(baseUrl, conversationId, message)
+      if (accepted)
+        break
+
+      await waitUntilConversationAdmissible(baseUrl, conversationId)
+    }
   }
 }
 
@@ -195,6 +185,7 @@ export const ingestAll = async (
   samples: LoCoMoSample[],
   baseUrl: string,
   concurrency: number,
+  settleAndFlushAfterSampleIngest: boolean,
 ): Promise<Record<string, string>> => {
   const ids: Record<string, string> = {}
 
@@ -211,6 +202,12 @@ export const ingestAll = async (
         lastPct = pct
       }
     })
+    if (settleAndFlushAfterSampleIngest) {
+      spinner.setText(`Waiting for episodic settle on sample ${sample.sample_id} (${conversationId})`)
+      const flushed = await flushConversationTailWhenReady(baseUrl, conversationId)
+      if (flushed)
+        spinner.setText(`Flushed episodic tail for sample ${sample.sample_id} (${conversationId})`)
+    }
     spinner.succeed(`Ingested sample ${sample.sample_id} (${conversationId})`)
   })
 

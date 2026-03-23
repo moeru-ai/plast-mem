@@ -10,11 +10,8 @@ mod benchmark;
 mod recent_memory;
 mod retrieve_memory;
 
-pub use add_message::{AddMessage, AddMessageMessage};
-pub use benchmark::{
-  BenchmarkAddMessages, BenchmarkAddMessagesResult, BenchmarkFlush, BenchmarkFlushResult,
-  BenchmarkJobStatus,
-};
+pub use add_message::{AddMessage, AddMessageMessage, AddMessageResult};
+pub use benchmark::{BenchmarkFlush, BenchmarkFlushResult, BenchmarkJobStatus};
 pub use recent_memory::RecentMemory;
 pub use retrieve_memory::{
   ContextPreRetrieve, EpisodicMemoryResult, RetrieveMemory, RetrieveMemoryRawResult,
@@ -24,7 +21,6 @@ pub use retrieve_memory::{
 pub fn app() -> Router<AppState> {
   let (router, openapi) = OpenApiRouter::with_openapi(ApiDoc::openapi())
     .routes(routes!(add_message::add_message))
-    .routes(routes!(benchmark::benchmark_add_messages))
     .routes(routes!(benchmark::benchmark_flush))
     .routes(routes!(benchmark::benchmark_job_status))
     .routes(routes!(recent_memory::recent_memory))
@@ -50,10 +46,9 @@ pub fn app() -> Router<AppState> {
   components(schemas(
     AddMessage,
     AddMessageMessage,
+    AddMessageResult,
     BenchmarkFlush,
     BenchmarkFlushResult,
-    BenchmarkAddMessages,
-    BenchmarkAddMessagesResult,
     BenchmarkJobStatus,
     RecentMemory,
     RetrieveMemory,
