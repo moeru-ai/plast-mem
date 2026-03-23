@@ -16,11 +16,11 @@ use uuid::Uuid;
 
 const MIN_MESSAGES: usize = 5;
 const WINDOW_BASE: usize = 30;
-const WINDOW_MAX: usize = 50;
+const WINDOW_MAX: usize = 40;
 pub const FENCE_TTL_MINUTES: i64 = 120;
 const GAP_TRIGGER_HOURS: i64 = 3;
 
-pub const ADD_BACKPRESSURE_LIMIT: i32 = 50;
+pub const ADD_BACKPRESSURE_LIMIT: i32 = 35;
 
 // ──────────────────────────────────────────────────
 // Types
