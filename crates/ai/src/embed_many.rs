@@ -13,6 +13,8 @@ pub async fn embed_many(inputs: &[String]) -> Result<Vec<PgVector>, AppError> {
     return Ok(vec![]);
   }
 
+  let embedding_dim = u32::try_from(EMBEDDING_DIM)
+    .map_err(|_| anyhow!("EMBEDDING_DIM must fit in u32"))?;
   let config = OpenAIConfig::new()
     .with_api_key(&APP_ENV.openai_api_key)
     .with_api_base(&APP_ENV.openai_base_url);
@@ -22,7 +24,7 @@ pub async fn embed_many(inputs: &[String]) -> Result<Vec<PgVector>, AppError> {
   let request = CreateEmbeddingRequestArgs::default()
     .model(&APP_ENV.openai_embedding_model)
     .input(inputs.to_vec())
-    .dimensions(EMBEDDING_DIM as u32)
+    .dimensions(embedding_dim)
     .build()?;
   let embeddings = client.embeddings();
 

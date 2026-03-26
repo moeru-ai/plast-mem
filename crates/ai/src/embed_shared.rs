@@ -17,11 +17,11 @@ const EMBEDDING_RETRY_DELAYS: [Duration; EMBEDDING_MAX_ATTEMPTS - 1] = [
   Duration::from_secs(2),
 ];
 
-/// Process embedding vector to ensure it's L2 normalized with exactly EMBEDDING_DIM dimensions.
+/// Process embedding vector to ensure it's L2 normalized with exactly `EMBEDDING_DIM` dimensions.
 ///
-/// - If dim > EMBEDDING_DIM: truncate to EMBEDDING_DIM and L2 normalize
-/// - If dim == EMBEDDING_DIM: check if already L2 normalized, normalize if not
-/// - If dim < EMBEDDING_DIM: return error
+/// - If dim > `EMBEDDING_DIM`: truncate to `EMBEDDING_DIM` and L2 normalize
+/// - If dim == `EMBEDDING_DIM`: check if already L2 normalized, normalize if not
+/// - If dim < `EMBEDDING_DIM`: return error
 pub fn process_embedding(mut vec: Vec<f32>) -> Result<Vec<f32>, AppError> {
   match vec.len() {
     d if d > EMBEDDING_DIM => {
@@ -44,7 +44,7 @@ pub fn process_embedding(mut vec: Vec<f32>) -> Result<Vec<f32>, AppError> {
   }
 }
 
-pub(crate) async fn request_embedding_with_retry<T, F, Fut>(mut operation: F) -> Result<T, AppError>
+pub async fn request_embedding_with_retry<T, F, Fut>(mut operation: F) -> Result<T, AppError>
 where
   F: FnMut() -> Fut,
   Fut: Future<Output = Result<T, OpenAIError>>,
@@ -52,7 +52,7 @@ where
   request_openai_with_retry(&mut operation, "Embedding request failed after retries").await
 }
 
-pub(crate) async fn request_chat_completion_with_retry<T, F, Fut>(
+pub async fn request_chat_completion_with_retry<T, F, Fut>(
   mut operation: F,
 ) -> Result<T, AppError>
 where
@@ -78,10 +78,10 @@ where
   let mut attempt = 0usize;
 
   loop {
-    let result = match timeout(timeout_duration, operation()).await {
-      Ok(result) => result.map_err(OpenAIRequestError::OpenAI),
-      Err(_) => Err(OpenAIRequestError::Timeout(timeout_duration)),
-    };
+    let result = timeout(timeout_duration, operation()).await.map_or_else(
+      |_| Err(OpenAIRequestError::Timeout(timeout_duration)),
+      |result| result.map_err(OpenAIRequestError::OpenAI),
+    );
 
     match result {
       Ok(value) => return Ok(value),
@@ -141,7 +141,7 @@ fn is_retryable_openai_error(err: &OpenAIError) -> bool {
         || reqwest_err.is_connect()
         || matches!(
           reqwest_err.status().map(|status| status.as_u16()),
-          Some(429) | Some(500..=599)
+          Some(429 | 500..=599)
         )
         || has_retryable_message(&reqwest_err.to_string())
     }

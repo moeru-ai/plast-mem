@@ -26,36 +26,36 @@ impl MigrationTrait for Migration {
     conn
       .execute_raw(Statement::from_string(
         backend,
-        r#"
+        r"
         DO $$
         BEGIN
           IF EXISTS (
             SELECT 1
             FROM information_schema.columns
             WHERE table_name = 'episodic_memory' AND column_name = 'summary'
-          ) THEN
+        ) THEN
             ALTER TABLE episodic_memory RENAME COLUMN summary TO content;
           END IF;
         END $$;
-        "#,
+        ",
       ))
       .await?;
 
     conn
       .execute_raw(Statement::from_string(
         backend,
-        r#"
+        r"
         DO $$
         BEGIN
           IF EXISTS (
             SELECT 1
             FROM information_schema.columns
             WHERE table_name = 'message_queue' AND column_name = 'prev_episode_summary'
-          ) THEN
+        ) THEN
             ALTER TABLE message_queue RENAME COLUMN prev_episode_summary TO prev_episode_content;
           END IF;
         END $$;
-        "#,
+        ",
       ))
       .await?;
 
@@ -102,36 +102,36 @@ impl MigrationTrait for Migration {
     conn
       .execute_raw(Statement::from_string(
         backend,
-        r#"
+        r"
         DO $$
         BEGIN
           IF EXISTS (
             SELECT 1
             FROM information_schema.columns
             WHERE table_name = 'episodic_memory' AND column_name = 'content'
-          ) THEN
+        ) THEN
             ALTER TABLE episodic_memory RENAME COLUMN content TO summary;
           END IF;
         END $$;
-        "#,
+        ",
       ))
       .await?;
 
     conn
       .execute_raw(Statement::from_string(
         backend,
-        r#"
+        r"
         DO $$
         BEGIN
           IF EXISTS (
             SELECT 1
             FROM information_schema.columns
             WHERE table_name = 'message_queue' AND column_name = 'prev_episode_content'
-          ) THEN
+        ) THEN
             ALTER TABLE message_queue RENAME COLUMN prev_episode_content TO prev_episode_summary;
           END IF;
         END $$;
-        "#,
+        ",
       ))
       .await?;
 

@@ -13,6 +13,7 @@ pub struct AppState {
 
 impl AppState {
   #[must_use]
+  #[allow(clippy::missing_const_for_fn)]
   pub fn new(
     db: DatabaseConnection,
     segmentation_job_storage: PostgresStorage<EventSegmentationJob>,

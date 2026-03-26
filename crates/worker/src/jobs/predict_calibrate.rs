@@ -178,15 +178,12 @@ pub async fn process_predict_calibrate(
   let db = &*db;
 
   // Load the target episode
-  let episode = match EpisodicMemory::get(job.episode_id, db).await? {
-    Some(ep) => ep,
-    None => {
-      tracing::warn!(
-        episode_id = %job.episode_id,
-        "Episode not found for predict-calibrate"
-      );
-      return Ok(());
-    }
+  let Some(episode) = EpisodicMemory::get(job.episode_id, db).await? else {
+    tracing::warn!(
+      episode_id = %job.episode_id,
+      "Episode not found for predict-calibrate"
+    );
+    return Ok(());
   };
 
   // Skip if already consolidated
@@ -376,7 +373,7 @@ async fn predict_calibrate_extraction(
 
 async fn predict_episode(title: &str, facts: &[&SemanticMemory]) -> Result<String, AppError> {
   if facts.is_empty() {
-    return Ok(format!("No knowledge available to predict '{}'.", title));
+    return Ok(format!("No knowledge available to predict '{title}'."));
   }
 
   let facts_text = facts
@@ -384,10 +381,7 @@ async fn predict_episode(title: &str, facts: &[&SemanticMemory]) -> Result<Strin
     .map(|f| format!("- [{}] {}", f.category, f.fact))
     .collect::<Vec<_>>()
     .join("\n");
-  let user_content = format!(
-    "Episode Title: {}\n\nExisting Knowledge:\n{}",
-    title, facts_text
-  );
+  let user_content = format!("Episode Title: {title}\n\nExisting Knowledge:\n{facts_text}");
 
   generate_text(vec![
     ChatCompletionRequestMessage::System(PREDICTION_SYSTEM_PROMPT.into()),
@@ -506,6 +500,7 @@ fn infer_category(statement: &str) -> &'static str {
   }
 }
 
+#[allow(clippy::too_many_lines)]
 fn add_keywords_from_text(
   text: &str,
   keywords: &mut Vec<String>,
@@ -559,7 +554,7 @@ fn add_keywords_from_text(
     )
   }
 
-  fn push_keyword(keywords: &mut Vec<String>, seen: &mut HashSet<String>, phrase: String) {
+  fn push_keyword(keywords: &mut Vec<String>, seen: &mut HashSet<String>, phrase: &str) {
     let normalized = normalize_spaces(phrase.trim());
     if normalized.len() < 2 {
       return;
@@ -573,7 +568,7 @@ fn add_keywords_from_text(
   for quoted in text.split('"').skip(1).step_by(2) {
     let quoted = quoted.trim();
     if !quoted.is_empty() {
-      push_keyword(keywords, seen, quoted.to_string());
+      push_keyword(keywords, seen, quoted);
       if keywords.len() >= MAX_KEYWORDS {
         return;
       }
@@ -604,7 +599,8 @@ fn add_keywords_from_text(
       || first.chars().any(|c| c.is_ascii_digit())
       || second.chars().any(|c| c.is_ascii_digit());
     if informative {
-      push_keyword(keywords, seen, format!("{first} {second}"));
+      let phrase = format!("{first} {second}");
+      push_keyword(keywords, seen, &phrase);
       if keywords.len() >= MAX_KEYWORDS {
         return;
       }
@@ -622,7 +618,7 @@ fn add_keywords_from_text(
       || token.contains('#')
       || token.contains('-');
     if informative {
-      push_keyword(keywords, seen, token.clone());
+      push_keyword(keywords, seen, token);
       if keywords.len() >= MAX_KEYWORDS {
         break;
       }
@@ -661,7 +657,7 @@ fn extract_keywords(statement: &str, source: &EpisodicMemory) -> Vec<String> {
 // Helpers
 // ──────────────────────────────────────────────────
 
-fn select_relevant_facts<'a>(facts: &'a [(SemanticMemory, f64)]) -> Vec<&'a SemanticMemory> {
+fn select_relevant_facts(facts: &[(SemanticMemory, f64)]) -> Vec<&SemanticMemory> {
   // Stratified: guidelines first (affect AI style), then other high-relevance facts
   let guidelines: Vec<_> = facts
     .iter()
@@ -698,14 +694,15 @@ async fn load_related_facts(
   let results = SemanticMemory::retrieve_by_embedding(
     &episode.content,
     content_embedding,
-    MAX_STATEMENTS_FOR_PREDICTION as i64,
+    i64::try_from(MAX_STATEMENTS_FOR_PREDICTION)
+      .map_err(|_| anyhow::anyhow!("MAX_STATEMENTS_FOR_PREDICTION must fit in i64"))?,
     episode.conversation_id,
     db,
     None,
   )
   .await?;
 
-  let max_score = results.first().map(|(_, s)| *s).unwrap_or(0.0);
+  let max_score = results.first().map_or(0.0, |(_, s)| *s);
   tracing::debug!(
     episode_id = %episode.id,
     facts_found = results.len(),

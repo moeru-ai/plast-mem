@@ -155,7 +155,7 @@ When boundary placement is uncertain, split.
 - Focus on choosing the right split points. The system will derive segment ends automatically.
 - Return only JSON that matches the schema."#;
 
-const EPISODE_CONTENT_SYSTEM_PROMPT: &str = r#"
+const EPISODE_CONTENT_SYSTEM_PROMPT: &str = r"
 You are turning a conversation segment into an episodic memory record.
 Return only JSON with `title` and `content`.
 
@@ -191,7 +191,7 @@ Format:
   * Sam said he planned to visit his parents that weekend (June 20-21, 2026).
   * Evan asked for help comparing adoption agencies.
   * Sam said he moved from Sweden four years earlier (2022).
-"#;
+";
 
 fn format_messages(messages: &[Message]) -> String {
   messages
@@ -227,7 +227,7 @@ fn build_segmentation_user_content(
     },
   );
 
-  retry_reason.map_or(request.clone(), |reason| {
+  retry_reason.map_or_else(|| request.clone(), |reason| {
     format!(
       "The previous segmentation plan was invalid.\n\
        Failure reason: {reason}\n\n\

@@ -96,6 +96,7 @@ pub struct JobStatusQuery {
 }
 
 #[derive(Debug, Serialize, ToSchema)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct BenchmarkJobStatus {
   pub messages_pending: i32,
   pub fence_active: bool,

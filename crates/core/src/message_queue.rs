@@ -14,7 +14,6 @@ use uuid::Uuid;
 // Trigger constants
 // ──────────────────────────────────────────────────
 
-const MIN_MESSAGES: usize = 5;
 const WINDOW_BASE: usize = 30;
 const WINDOW_MAX: usize = 40;
 pub const FENCE_TTL_MINUTES: i64 = 120;
@@ -229,7 +228,7 @@ impl MessageQueue {
       && messages.windows(2).last().is_some_and(|pair| {
         pair[1].timestamp - pair[0].timestamp >= TimeDelta::hours(GAP_TRIGGER_HOURS)
       });
-    let count_trigger = trigger_count_usize >= WINDOW_BASE && trigger_count_usize >= MIN_MESSAGES;
+    let count_trigger = trigger_count_usize >= WINDOW_BASE;
     let force_trigger = gap_trigger || trigger_count_usize >= WINDOW_MAX;
 
     if !gap_trigger && !count_trigger {

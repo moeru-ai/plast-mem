@@ -41,7 +41,7 @@ pub struct AddMessageResult {
 }
 
 impl AddMessageResult {
-  fn accepted() -> Self {
+  const fn accepted() -> Self {
     Self {
       accepted: true,
       reason: None,
