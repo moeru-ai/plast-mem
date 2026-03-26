@@ -183,15 +183,23 @@ const ingestSample = async (
 
 export const ingestAll = async (
   samples: LoCoMoSample[],
+  existingIds: Record<string, string>,
   baseUrl: string,
   concurrency: number,
   settleAndFlushAfterSampleIngest: boolean,
+  onSampleComplete?: (ids: Record<string, string>) => Promise<void>,
 ): Promise<Record<string, string>> => {
-  const ids: Record<string, string> = {}
+  const ids: Record<string, string> = { ...existingIds }
+  let persistChain = Promise.resolve()
 
   const tasks = samples.map(sample => async () => {
+    const existingConversationId = ids[sample.sample_id]
+    if (existingConversationId != null && existingConversationId.length > 0) {
+      console.log(`  Reusing sample ${sample.sample_id} (${existingConversationId})`)
+      return
+    }
+
     const conversationId = uuid.v7()
-    ids[sample.sample_id] = conversationId
     console.log(`  Ingesting sample ${sample.sample_id} (${conversationId})`)
     const spinner = new Spinner(`Ingesting sample ${sample.sample_id}`)
     let lastPct = 0
@@ -207,6 +215,11 @@ export const ingestAll = async (
       const flushed = await flushConversationTailWhenReady(baseUrl, conversationId)
       if (flushed)
         spinner.setText(`Flushed episodic tail for sample ${sample.sample_id} (${conversationId})`)
+    }
+    ids[sample.sample_id] = conversationId
+    if (onSampleComplete != null) {
+      persistChain = persistChain.then(async () => onSampleComplete({ ...ids }))
+      await persistChain
     }
     spinner.succeed(`Ingested sample ${sample.sample_id} (${conversationId})`)
   })
