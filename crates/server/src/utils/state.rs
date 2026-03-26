@@ -1,20 +1,29 @@
 use apalis_postgres::PostgresStorage;
 use sea_orm::DatabaseConnection;
 
-use plastmem_worker::EventSegmentationJob;
+use plastmem_worker::{EventSegmentationJob, MemoryReviewJob, PredictCalibrateJob};
 
 #[derive(Clone)]
 pub struct AppState {
   pub db: DatabaseConnection,
-  pub job_storage: PostgresStorage<EventSegmentationJob>,
+  pub segmentation_job_storage: PostgresStorage<EventSegmentationJob>,
+  pub review_job_storage: PostgresStorage<MemoryReviewJob>,
+  pub predict_calibrate_job_storage: PostgresStorage<PredictCalibrateJob>,
 }
 
 impl AppState {
   #[must_use]
-  pub const fn new(
+  pub fn new(
     db: DatabaseConnection,
-    job_storage: PostgresStorage<EventSegmentationJob>,
+    segmentation_job_storage: PostgresStorage<EventSegmentationJob>,
+    review_job_storage: PostgresStorage<MemoryReviewJob>,
+    predict_calibrate_job_storage: PostgresStorage<PredictCalibrateJob>,
   ) -> Self {
-    Self { db, job_storage }
+    Self {
+      db,
+      segmentation_job_storage,
+      review_job_storage,
+      predict_calibrate_job_storage,
+    }
   }
 }

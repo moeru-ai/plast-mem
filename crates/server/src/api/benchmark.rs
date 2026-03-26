@@ -64,7 +64,7 @@ pub async fn benchmark_flush(
     }));
   }
 
-  let mut job_storage = state.job_storage.clone();
+  let mut job_storage = state.segmentation_job_storage.clone();
   job_storage
     .push(EventSegmentationJob {
       conversation_id: id,

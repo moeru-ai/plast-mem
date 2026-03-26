@@ -98,7 +98,7 @@ pub async fn add_message(
   };
 
   if let Some(check) = MessageQueue::push(payload.conversation_id, message, &state.db).await? {
-    let mut job_storage = state.job_storage.clone();
+    let mut job_storage = state.segmentation_job_storage.clone();
     job_storage
       .push(EventSegmentationJob {
         conversation_id: payload.conversation_id,

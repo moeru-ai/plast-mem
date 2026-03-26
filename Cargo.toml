@@ -35,8 +35,9 @@ plastmem_worker.path = "./crates/worker"
 plastmem_server.path = "./crates/server"
 anyhow = "1.0.100"
 futures = "0.3"
-apalis = "1.0.0-rc.3"
-apalis-postgres = { version = "1.0.0-rc.3", features = [ "time" ] }
+apalis = "1.0.0-rc.6"
+apalis-board-api = { version = "1.0.0-rc.6", features = [ "axum" ] }
+apalis-postgres = { version = "1.0.0-rc.6", features = [ "time" ] }
 axum = { version = "0.8.8", features = [ "macros" ] }
 async-openai = { version = "0.32.4", features = [
   "chat-completion",
@@ -99,6 +100,7 @@ plastmem_migration.workspace = true
 plastmem_shared.workspace = true
 plastmem_worker.workspace = true
 plastmem_server.workspace = true
+apalis-board-api.workspace = true
 apalis-postgres.workspace = true
 sea-orm.workspace = true
 tokio.workspace = true
