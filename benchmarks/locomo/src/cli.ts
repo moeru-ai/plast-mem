@@ -372,7 +372,6 @@ const main = async () => {
         await saveConversationIds(idsFile, ids)
       },
     )
-    await saveConversationIds(idsFile, conversationIds)
     console.log('  Ingestion complete.')
   }
   else {
