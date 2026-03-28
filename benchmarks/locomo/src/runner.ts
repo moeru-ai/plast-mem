@@ -24,7 +24,14 @@ import { buildFullContext } from './full-context'
 import { ingestAll, loadConversationIds, saveConversationIds } from './ingest'
 import { generateAnswer } from './llm'
 import { getContext } from './retrieve'
-import { computeComparison, computeStats, printComparison, printStats } from './stats'
+import {
+  computeComparison,
+  computeStats,
+  printComparison,
+  printSampleComparison,
+  printSampleSummary,
+  printStats,
+} from './stats'
 import { waitForAll } from './wait'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -231,6 +238,27 @@ const scoreVariant = async (
   })
 }
 
+const printCompletedSampleSummary = (sample: LoCoMoSample, sampleCheckpoint: SampleCheckpoint): void => {
+  const plastmemResults = getScoredResults(sampleCheckpoint.variants.plastmem?.results ?? [])
+  if (plastmemResults.length > 0) {
+    const plastmemSummary = computeStats(plastmemResults).overall
+    printSampleSummary('plast-mem', sample.sample_id, plastmemSummary)
+  }
+
+  const fullContextResults = getScoredResults(sampleCheckpoint.variants.full_context?.results ?? [])
+  if (fullContextResults.length > 0) {
+    const fullContextSummary = computeStats(fullContextResults).overall
+    printSampleSummary('full-context', sample.sample_id, fullContextSummary)
+  }
+
+  if (plastmemResults.length > 0 && fullContextResults.length > 0) {
+    const comparison = computeComparison(plastmemResults, fullContextResults)
+    const sampleDelta = comparison.by_sample[sample.sample_id]
+    if (sampleDelta != null)
+      printSampleComparison(sample.sample_id, sampleDelta)
+  }
+}
+
 const ingestSampleIfNeeded = async (
   sample: LoCoMoSample,
   sampleCheckpoint: SampleCheckpoint,
@@ -305,6 +333,7 @@ const runSample = async (
 
     sampleCheckpoint.status = 'complete'
     await persistState(checkpointPath, checkpoint)
+    printCompletedSampleSummary(sample, sampleCheckpoint)
   }
   catch (error) {
     sampleCheckpoint.error = error instanceof Error ? error.message : String(error)

@@ -118,60 +118,89 @@ export const computeComparison = (
   }
 }
 
-const printScoreSummary = (label: string, summary: BenchmarkScoreSummary): void => {
-  log.message(`${label} F1:   ${(summary.overall * 100).toFixed(2)}%  (n=${summary.total})`)
-  log.message(`${label} Nemori F1: ${(summary.overall_nemori_f1 * 100).toFixed(2)}%`)
-  log.message(`${label} LLM:  ${(summary.overall_llm * 100).toFixed(2)}%`)
-  log.message('')
+const formatMetric = (label: string, value: number): string =>
+  `${label} ${(value * 100).toFixed(2)}%`
 
-  for (const c of CATEGORIES) {
-    const f1 = summary.by_category[c]
-    const llm = summary.by_category_llm[c]
-    const nemoriF1 = summary.by_category_nemori_f1[c]
-    const count = summary.by_category_count[c]
-    if (count > 0) {
-      log.message(
-        `  Cat ${c} (${CATEGORY_NAMES[c].padEnd(12)}):  F1=${(f1 * 100).toFixed(2)}%  NemoriF1=${(nemoriF1 * 100).toFixed(2)}%  LLM=${(llm * 100).toFixed(2)}%  (n=${count})`,
-      )
-    }
-  }
+const formatSummaryLine = (summary: BenchmarkScoreSummary): string =>
+  `${formatMetric('F1', summary.overall)}  `
+  + `${formatMetric('NemoriF1', summary.overall_nemori_f1)}  `
+  + `${formatMetric('LLM', summary.overall_llm)}  `
+  + `n=${summary.total}`
+
+export const printSampleSummary = (
+  label: string,
+  sampleId: string,
+  summary: BenchmarkScoreSummary,
+): void => {
+  log.message(`${label} ${sampleId}  ${formatSummaryLine(summary)}`)
+}
+
+export const printSampleComparison = (
+  sampleId: string,
+  metric: BenchmarkComparisonMetric,
+): void => {
+  log.message([
+    'delta ',
+    sampleId,
+    '  ',
+    formatMetric('F1', metric.score_delta),
+    '  ',
+    formatMetric('NemoriF1', metric.nemori_f1_delta),
+    '  ',
+    formatMetric('LLM', metric.llm_judge_delta),
+  ].join(''))
 }
 
 export const printStats = (stats: BenchmarkStats): void => {
-  log.message('\n── Results ──────────────────────────────────')
-  const sampleIds = Object.keys(stats.by_sample)
+  log.message(`overall  ${formatSummaryLine(stats.overall)}`)
 
-  if (sampleIds.length > 0) {
-    log.message('By sample:')
-    for (const sampleId of sampleIds) {
-      log.message('')
-      log.message(`Sample ${sampleId}`)
-      printScoreSummary('  Overall', stats.by_sample[sampleId])
-    }
+  const sampleIds = Object.keys(stats.by_sample)
+  if (sampleIds.length > 0)
+    log.message('samples')
+
+  for (const sampleId of sampleIds) {
+    log.message(`  ${sampleId}  ${formatSummaryLine(stats.by_sample[sampleId])}`)
   }
 
-  log.message('')
-  log.message('Overall')
-  printScoreSummary('  Overall', stats.overall)
-  log.message('──────────────────────────────────────────────\n')
+  log.message('categories')
+  for (const category of CATEGORIES) {
+    const count = stats.overall.by_category_count[category]
+    if (count === 0)
+      continue
+
+    log.message(
+      `  c${category} ${CATEGORY_NAMES[category].padEnd(12)}  `
+      + `${formatMetric('F1', stats.overall.by_category[category])}  `
+      + `${formatMetric('NemoriF1', stats.overall.by_category_nemori_f1[category])}  `
+      + `${formatMetric('LLM', stats.overall.by_category_llm[category])}  `
+      + `n=${count}`,
+    )
+  }
 }
 
 export const printComparison = (comparison: BenchmarkComparisonSummary): void => {
-  log.message('\n── Comparison: plast-mem - Full Context ─────')
-  log.message(`Overall F1 delta: ${(comparison.overall.score_delta * 100).toFixed(2)}%`)
-  log.message(`Overall Nemori F1 delta: ${(comparison.overall.nemori_f1_delta * 100).toFixed(2)}%`)
-  log.message(`Overall LLM delta: ${(comparison.overall.llm_judge_delta * 100).toFixed(2)}%`)
-  log.message('')
+  log.message([
+    'delta overall  ',
+    formatMetric('F1', comparison.overall.score_delta),
+    '  ',
+    formatMetric('NemoriF1', comparison.overall.nemori_f1_delta),
+    '  ',
+    formatMetric('LLM', comparison.overall.llm_judge_delta),
+  ].join(''))
 
   for (const category of CATEGORIES) {
     const metric = comparison.by_category[category]
-    log.message(
-      `  Cat ${category} (${CATEGORY_NAMES[category].padEnd(12)}): `
-      + `F1=${(metric.score_delta * 100).toFixed(2)}% `
-      + `NemoriF1=${(metric.nemori_f1_delta * 100).toFixed(2)}% `
-      + `LLM=${(metric.llm_judge_delta * 100).toFixed(2)}%`,
-    )
+    log.message([
+      '  c',
+      String(category),
+      ' ',
+      CATEGORY_NAMES[category].padEnd(12),
+      '  ',
+      formatMetric('F1', metric.score_delta),
+      '  ',
+      formatMetric('NemoriF1', metric.nemori_f1_delta),
+      '  ',
+      formatMetric('LLM', metric.llm_judge_delta),
+    ].join(''))
   }
-
-  log.message('──────────────────────────────────────────────\n')
 }
