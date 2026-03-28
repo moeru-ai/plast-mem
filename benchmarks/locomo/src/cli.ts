@@ -1,7 +1,7 @@
 import type { BenchmarkRunConfig, RunCheckpoint } from './checkpoint'
 import type { LoCoMoSample } from './types'
 
-import { readFile } from 'node:fs/promises'
+import { readdir, readFile } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import { cwd, env, exit, loadEnvFile } from 'node:process'
 import { fileURLToPath } from 'node:url'
@@ -16,21 +16,20 @@ import {
   outro,
   select,
   spinner,
-  text,
 } from '@clack/prompts'
 
 import {
   buildCheckpointPath,
   createCheckpoint,
-  isCheckpointCompatible,
   loadCheckpoint,
-  resetCheckpointFile,
 } from './checkpoint'
 import { printFinalSummary, runBenchmark } from './runner'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
 const DEFAULT_DATA_FILE = resolve(cwd(), 'data/locomo10.json')
+const RESULTS_DIR = resolve(cwd(), 'results')
+const CHECKPOINT_FILE_SUFFIX = '.checkpoint.json'
 const COLON_DOT_RE = /[:.]/g
 const DEFAULT_CONCURRENCY = 4
 const LONG_CONTEXT_SAMPLE_IDS = ['conv-43', 'conv-47', 'conv-48'] as const
@@ -48,7 +47,7 @@ const prompt = async <T>(value: Promise<symbol | T>): Promise<T> => {
 }
 
 const timestampedOutputPath = (): string =>
-  resolve(__dirname, `../results/${new Date().toISOString().replace(COLON_DOT_RE, '-')}.json`)
+  resolve(cwd(), `results/${new Date().toISOString().replace(COLON_DOT_RE, '-')}.json`)
 
 const loadSamples = async (dataFile: string): Promise<LoCoMoSample[]> => {
   const raw = await readFile(dataFile, 'utf-8')
@@ -68,16 +67,82 @@ const loadDefaultSamples = async (): Promise<LoCoMoSample[]> => {
   }
 }
 
+const getRequiredChatModel = (): string => {
+  const model = env.OPENAI_CHAT_MODEL?.trim()
+  if (model == null || model.length === 0) {
+    throw new Error(
+      'OPENAI_CHAT_MODEL not set in the root .env.\n'
+      + 'Set it before running the benchmark.',
+    )
+  }
+  return model
+}
+
 const resolvePresetSampleIds = (
   allSampleIds: string[],
   preset: readonly string[],
 ): string[] =>
   allSampleIds.filter(sampleId => preset.includes(sampleId))
 
+const getLatestCheckpointPath = async (): Promise<null | string> => {
+  try {
+    const entries = await readdir(RESULTS_DIR, { withFileTypes: true })
+    const checkpointNames = entries
+      .filter(entry => entry.isFile() && entry.name.endsWith(CHECKPOINT_FILE_SUFFIX))
+      .map(entry => entry.name)
+      .toSorted((left, right) => right.localeCompare(left))
+
+    const latest = checkpointNames[0]
+    if (latest == null)
+      return null
+
+    return resolve(RESULTS_DIR, latest)
+  }
+  catch {
+    return null
+  }
+}
+
+const describeCheckpoint = (checkpoint: RunCheckpoint): string => {
+  const samples = Object.values(checkpoint.samples)
+  const complete = samples.filter(sample => sample.status === 'complete').length
+  const failed = samples.filter(sample => sample.status === 'failed').length
+  const running = samples.filter(sample => sample.status === 'running').length
+  const pending = samples.length - complete - failed - running
+  return [
+    `Started: ${checkpoint.started_at}`,
+    `Updated: ${checkpoint.updated_at}`,
+    `Complete: ${complete}`,
+    `Failed: ${failed}`,
+    `Running: ${running}`,
+    `Pending: ${pending}`,
+  ].join('\n')
+}
+
+const loadLatestCheckpoint = async (): Promise<null | { checkpoint: RunCheckpoint, checkpointPath: string }> => {
+  const checkpointPath = await getLatestCheckpointPath()
+  if (checkpointPath == null)
+    return null
+
+  const checkpoint = await loadCheckpoint(checkpointPath)
+  if (checkpoint == null)
+    return null
+
+  note(describeCheckpoint(checkpoint), 'Latest checkpoint found')
+  const shouldResume = await prompt<boolean>(confirm({
+    initialValue: true,
+    message: 'Resume from the latest checkpoint?',
+  }))
+
+  if (!shouldResume)
+    return null
+
+  return { checkpoint, checkpointPath }
+}
+
 const promptForConfig = async (): Promise<BenchmarkRunConfig> => {
-  const defaultOutFile = timestampedOutputPath()
   const defaultBaseUrl = (env.PLASTMEM_BASE_URL ?? 'http://localhost:3000').replace(TRAILING_SLASH_RE, '')
-  const defaultModel = env.OPENAI_CHAT_MODEL ?? 'gpt-4o-mini'
+  const model = getRequiredChatModel()
   const allSamples = await loadDefaultSamples()
   const allSampleIds = allSamples.map(sample => sample.sample_id)
   const sampleMode = await prompt<string>(select({
@@ -121,51 +186,17 @@ const promptForConfig = async (): Promise<BenchmarkRunConfig> => {
     message: 'Enable LLM judge scoring?',
   }))
 
-  const baseUrl = (await prompt<string>(text({
-    defaultValue: defaultBaseUrl,
-    message: 'plast-mem base URL',
-    placeholder: defaultBaseUrl,
-  }))).replace(TRAILING_SLASH_RE, '')
-
-  const model = await prompt<string>(text({
-    defaultValue: defaultModel,
-    message: 'Answer model',
-    placeholder: defaultModel,
-  }))
-
-  const outFile = resolve(await prompt<string>(text({
-    defaultValue: defaultOutFile,
-    message: 'Result output file',
-    placeholder: defaultOutFile,
-  })))
-
   return {
-    baseUrl,
+    baseUrl: defaultBaseUrl,
     compareFullContext: compareMode === 'compare',
     concurrency: DEFAULT_CONCURRENCY,
     dataFile: DEFAULT_DATA_FILE,
     model,
-    outFile,
+    outFile: timestampedOutputPath(),
     sampleIds: selectedSampleIds.toSorted((left, right) => left.localeCompare(right)),
     useLlmJudge,
     waitForBackground: true,
   }
-}
-
-const describeCheckpoint = (checkpoint: RunCheckpoint): string => {
-  const samples = Object.values(checkpoint.samples)
-  const complete = samples.filter(sample => sample.status === 'complete').length
-  const failed = samples.filter(sample => sample.status === 'failed').length
-  const running = samples.filter(sample => sample.status === 'running').length
-  const pending = samples.length - complete - failed - running
-  return [
-    `Started: ${checkpoint.started_at}`,
-    `Updated: ${checkpoint.updated_at}`,
-    `Complete: ${complete}`,
-    `Failed: ${failed}`,
-    `Running: ${running}`,
-    `Pending: ${pending}`,
-  ].join('\n')
 }
 
 const prepareCheckpoint = async (
@@ -173,20 +204,6 @@ const prepareCheckpoint = async (
   samples: LoCoMoSample[],
 ): Promise<{ checkpoint: RunCheckpoint, checkpointPath: string }> => {
   const checkpointPath = buildCheckpointPath(config.outFile)
-  const existing = await loadCheckpoint(checkpointPath)
-
-  if (existing != null && isCheckpointCompatible(existing, config)) {
-    note(describeCheckpoint(existing), 'Existing checkpoint found')
-    const shouldResume = await prompt<boolean>(confirm({
-      initialValue: true,
-      message: 'Resume from the existing checkpoint?',
-    }))
-
-    if (shouldResume)
-      return { checkpoint: existing, checkpointPath }
-  }
-
-  await resetCheckpointFile(checkpointPath)
   return {
     checkpoint: createCheckpoint(config, samples),
     checkpointPath,
@@ -201,7 +218,8 @@ const main = async (): Promise<void> => {
 
   intro('LoCoMo Benchmark')
 
-  const config = await promptForConfig()
+  const resumed = await loadLatestCheckpoint()
+  const config = resumed?.checkpoint.config ?? await promptForConfig()
 
   if (config.useLlmJudge && (env.OPENAI_API_KEY == null || env.OPENAI_API_KEY.length === 0)) {
     cancel('OPENAI_API_KEY not set for LLM judge mode.')
@@ -215,7 +233,7 @@ const main = async (): Promise<void> => {
     exit(1)
   }
 
-  const { checkpoint, checkpointPath } = await prepareCheckpoint(config, samples)
+  const { checkpoint, checkpointPath } = resumed ?? await prepareCheckpoint(config, samples)
 
   note([
     `data: ${config.dataFile}`,

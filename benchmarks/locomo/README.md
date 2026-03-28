@@ -44,13 +44,18 @@ At startup the CLI prompts for:
 - fixed QA concurrency (`4`)
 - always waits for background jobs after each sample ingest
 - whether to enable LLM judge scoring
-- base URL, model, and output file
+
+If a previous checkpoint exists in `benchmarks/locomo/results/`, the CLI first asks whether to resume that latest checkpoint. When resuming, it reuses the saved config instead of asking for fresh run options.
+
+`PLASTMEM_BASE_URL` is read from the root `.env`. If unset, it defaults to `http://localhost:3000`.
+`OPENAI_CHAT_MODEL` is read from the root `.env`. If unset, the CLI exits with an error.
 
 ## Resume / Checkpoint
 
 - The dataset is always loaded from `benchmarks/locomo/data/locomo10.json`
 - If that file is missing, the CLI exits with the expected path and a `curl` command to download it
 - Each output file writes a sibling checkpoint file: `results/<run>.checkpoint.json`
+- Fresh runs always write to a timestamped output path automatically
 - Progress is persisted at sample-stage granularity:
   - ingest complete
   - plast-mem eval complete
