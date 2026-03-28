@@ -43,4 +43,3 @@ This folder contains design sketches and future work notes. It grew over time; t
 
 - Semantic extensions (older SPO-based notes; needs rethinking under category+keywords schema).
   - See: `docs/todo/semantic_memory_extension.md`
-

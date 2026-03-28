@@ -156,7 +156,7 @@ Returns a single object with `semantic` and `episodic` arrays:
         { "role": "assistant", "content": "..." }
       ],
       "title": "Career switch to Rust",
-"content": "User switched careers from Python to Rust...",
+      "content": "User switched careers from Python to Rust...",
       "stability": 3.5,
       "difficulty": 5.0,
       "surprise": 0.85,
