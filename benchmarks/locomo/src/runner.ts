@@ -16,7 +16,7 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { log } from '@clack/prompts'
+import { log, note } from '@clack/prompts'
 
 import { getVariantOrder, saveCheckpoint } from './checkpoint'
 import { llmJudge, scoreAnswer, scoreAnswerNemoriF1 } from './evaluation'
@@ -27,10 +27,10 @@ import { getContext } from './retrieve'
 import {
   computeComparison,
   computeStats,
-  printComparison,
   printSampleComparison,
   printSampleSummary,
-  printStats,
+  renderComparison,
+  renderStats,
 } from './stats'
 import { waitForAll } from './wait'
 
@@ -372,17 +372,13 @@ export const runBenchmark = async (
 export const printFinalSummary = (checkpoint: RunCheckpoint): void => {
   const output = buildBenchmarkOutput(checkpoint)
   const plastmem = output.variants.plastmem
-  if (plastmem != null) {
-    log.step('plast-mem')
-    printStats(plastmem.stats)
-  }
+  if (plastmem != null)
+    note(renderStats(plastmem.stats), 'plast-mem')
 
   const fullContext = output.variants.full_context
-  if (fullContext != null) {
-    log.step('Full Context')
-    printStats(fullContext.stats)
-  }
+  if (fullContext != null)
+    note(renderStats(fullContext.stats), 'Full Context')
 
   if (output.comparison != null)
-    printComparison(output.comparison)
+    note(renderComparison(output.comparison), 'Delta vs Full Context')
 }
