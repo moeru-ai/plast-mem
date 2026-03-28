@@ -33,6 +33,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 const DEFAULT_CONCURRENCY = 4
 const DEFAULT_DATA_FILE = resolve(cwd(), 'data/locomo10.json')
 const COLON_DOT_RE = /[:.]/g
+const LONG_CONTEXT_SAMPLE_IDS = ['conv-43', 'conv-47', 'conv-48'] as const
+const MINIMAL_SAMPLE_IDS = ['conv-42', 'conv-48'] as const
 const DEFAULT_SAMPLE_IDS = ['conv-42', 'conv-44', 'conv-48', 'conv-50'] as const
 const TRAILING_SLASH_RE = /\/$/
 
@@ -66,35 +68,44 @@ const loadDefaultSamples = async (): Promise<LoCoMoSample[]> => {
   }
 }
 
+const resolvePresetSampleIds = (
+  allSampleIds: string[],
+  preset: readonly string[],
+): string[] =>
+  allSampleIds.filter(sampleId => preset.includes(sampleId))
+
 const promptForConfig = async (): Promise<BenchmarkRunConfig> => {
   const defaultOutFile = timestampedOutputPath()
   const defaultBaseUrl = (env.PLASTMEM_BASE_URL ?? 'http://localhost:3000').replace(TRAILING_SLASH_RE, '')
   const defaultModel = env.OPENAI_CHAT_MODEL ?? 'gpt-4o-mini'
   const allSamples = await loadDefaultSamples()
+  const allSampleIds = allSamples.map(sample => sample.sample_id)
   const sampleMode = await prompt<string>(select({
     initialValue: 'custom',
     message: 'Which samples should run?',
     options: [
+      { label: 'Minimal subset (42/48)', value: 'minimal' },
       { label: 'Recommended subset (42/44/48/50)', value: 'custom' },
+      { label: 'Long-context subset (43/47/48)', value: 'long_context' },
       { label: 'All samples', value: 'all' },
     ],
   }))
 
-  const defaultSelectedSampleIds = allSamples
-    .map(sample => sample.sample_id)
-    .filter(sampleId => DEFAULT_SAMPLE_IDS.includes(sampleId as typeof DEFAULT_SAMPLE_IDS[number]))
-
   const selectedSampleIds = sampleMode === 'all'
-    ? allSamples.map(sample => sample.sample_id)
-    : await prompt<string[]>(multiselect({
-        initialValues: defaultSelectedSampleIds,
-        message: 'Choose sample IDs',
-        options: allSamples.map(sample => ({
-          label: sample.sample_id,
-          value: sample.sample_id,
-        })),
-        required: true,
-      }))
+    ? allSampleIds
+    : sampleMode === 'minimal'
+      ? resolvePresetSampleIds(allSampleIds, MINIMAL_SAMPLE_IDS)
+      : sampleMode === 'long_context'
+        ? resolvePresetSampleIds(allSampleIds, LONG_CONTEXT_SAMPLE_IDS)
+        : await prompt<string[]>(multiselect({
+            initialValues: resolvePresetSampleIds(allSampleIds, DEFAULT_SAMPLE_IDS),
+            message: 'Choose sample IDs',
+            options: allSamples.map(sample => ({
+              label: sample.sample_id,
+              value: sample.sample_id,
+            })),
+            required: true,
+          }))
 
   const compareMode = await prompt<string>(select({
     initialValue: 'plastmem',
