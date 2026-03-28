@@ -21,7 +21,6 @@ pub struct SemanticMemory {
   pub conversation_id: Uuid,
   pub category: String,
   pub fact: String,
-  pub keywords: Vec<String>,
   pub source_episodic_ids: Vec<Uuid>,
   pub valid_at: DateTime<Utc>,
   pub invalid_at: Option<DateTime<Utc>>,
@@ -39,7 +38,6 @@ impl SemanticMemory {
       conversation_id: model.conversation_id,
       category: model.category,
       fact: model.fact,
-      keywords: model.keywords,
       source_episodic_ids: model.source_episodic_ids,
       valid_at: model.valid_at.with_timezone(&Utc),
       invalid_at: model.invalid_at.map(|dt| dt.with_timezone(&Utc)),
@@ -70,7 +68,7 @@ impl SemanticMemory {
     fulltext AS (
       SELECT id, ROW_NUMBER() OVER (ORDER BY pdb.score(id) DESC) AS r
       FROM semantic_memory
-      WHERE search_text ||| $1
+      WHERE fact ||| $1
         AND conversation_id = $2
         AND invalid_at IS NULL
         AND ($6::text IS NULL OR category = $6)
@@ -95,7 +93,7 @@ impl SemanticMemory {
       GROUP BY id
     )
     SELECT
-      m.id, m.conversation_id, m.category, m.fact, m.keywords, m.source_episodic_ids,
+      m.id, m.conversation_id, m.category, m.fact, m.source_episodic_ids,
       m.valid_at, m.invalid_at, m.embedding, m.created_at,
       r.score AS score
     FROM rrf_score r

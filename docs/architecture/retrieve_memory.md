@@ -68,13 +68,13 @@ See [FSRS](fsrs.md) for details.
 
 ### Semantic: Hybrid Search (no FSRS)
 
-1. BM25 search on `search_text` column (`fact || ' ' || keywords joined`) → 100 candidates
+1. BM25 search on `fact` → 100 candidates
 2. Vector search on `embedding` → 100 candidates
 3. RRF fusion: `rrf_score = Σ 1.0 / (60 + rank)`
 4. Optional category filter: `AND ($category::text IS NULL OR category = $category)`
 5. Sort by `rrf_score`, truncate to `semantic_limit`
 
-Semantic facts do not decay and are not subject to FSRS re-ranking. Only active facts (`invalid_at IS NULL`) are searched. BM25 runs against `search_text` (not just `fact`) so that keywords such as entity names contribute to BM25 scoring.
+Semantic facts do not decay and are not subject to FSRS re-ranking. Only active facts (`invalid_at IS NULL`) are searched. BM25 runs directly against `fact`.
 
 ## Response Format (Markdown Endpoint)
 
@@ -140,7 +140,6 @@ Returns a single object with `semantic` and `episodic` arrays:
       "conversation_id": "550e8400-e29b-41d4-a716-446655440001",
       "category": "preference",
       "fact": "User likes dark mode interfaces.",
-      "keywords": ["dark mode"],
       "source_episodic_ids": ["550e8400-e29b-41d4-a716-446655440003"],
       "valid_at": "2025-01-14T09:00:00Z",
       "invalid_at": null,
@@ -194,9 +193,9 @@ Note: `embedding` is omitted from both semantic and episodic responses (`#[serde
 
 Semantic facts are either active or invalidated—they don't decay. FSRS decay modeling is only meaningful for episodic memories, where recency and review history affect how "fresh" a memory is.
 
-### Why BM25 on `search_text` (not `fact`)?
+### Why BM25 on `fact`?
 
-`search_text` is a generated column: `fact || ' ' || array_to_string(keywords, ' ')`. BM25 on this column gives keyword entity names equal weight alongside the fact text. This improves entity recall—e.g., querying "Alex" finds facts that mention Alex in keywords even when "Alex" appears incidentally in the fact sentence.
+Semantic memory now uses the original fact-centric BM25 index. This keeps the schema simpler and avoids maintaining a separate keyword extraction path and generated `search_text` column.
 
 ## Side Effects
 

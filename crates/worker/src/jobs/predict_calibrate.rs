@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::time::Instant;
 
 use apalis::prelude::Data;
@@ -467,7 +466,6 @@ async fn insert_new_fact(
     conversation_id: source.conversation_id,
     category: infer_category(statement).to_string(),
     fact: statement.to_string(),
-    keywords: extract_keywords(statement, source),
     source_episodic_ids: vec![source.id],
     valid_at: now.into(),
     invalid_at: None,
@@ -498,159 +496,6 @@ fn infer_category(statement: &str) -> &'static str {
   } else {
     "identity"
   }
-}
-
-#[allow(clippy::too_many_lines)]
-fn add_keywords_from_text(
-  text: &str,
-  keywords: &mut Vec<String>,
-  seen: &mut HashSet<String>,
-) {
-  const MAX_KEYWORDS: usize = 12;
-
-  fn is_token_char(c: char) -> bool {
-    c.is_alphanumeric() || matches!(c, '\'' | '+' | '#' | '-')
-  }
-
-  fn normalize_spaces(text: &str) -> String {
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
-  }
-
-  fn is_stopword(token: &str) -> bool {
-    matches!(
-      token.to_ascii_lowercase().as_str(),
-      "a"
-        | "an"
-        | "and"
-        | "are"
-        | "as"
-        | "at"
-        | "by"
-        | "for"
-        | "from"
-        | "had"
-        | "has"
-        | "have"
-        | "he"
-        | "her"
-        | "his"
-        | "in"
-        | "is"
-        | "it"
-        | "its"
-        | "of"
-        | "on"
-        | "or"
-        | "she"
-        | "that"
-        | "the"
-        | "their"
-        | "them"
-        | "they"
-        | "to"
-        | "was"
-        | "were"
-        | "with"
-    )
-  }
-
-  fn push_keyword(keywords: &mut Vec<String>, seen: &mut HashSet<String>, phrase: &str) {
-    let normalized = normalize_spaces(phrase.trim());
-    if normalized.len() < 2 {
-      return;
-    }
-    let dedupe_key = normalized.to_ascii_lowercase();
-    if seen.insert(dedupe_key) {
-      keywords.push(normalized);
-    }
-  }
-
-  for quoted in text.split('"').skip(1).step_by(2) {
-    let quoted = quoted.trim();
-    if !quoted.is_empty() {
-      push_keyword(keywords, seen, quoted);
-      if keywords.len() >= MAX_KEYWORDS {
-        return;
-      }
-    }
-  }
-
-  let tokens: Vec<String> = text
-    .split(|c: char| !is_token_char(c))
-    .filter_map(|token| {
-      let token = token.trim_matches(|c: char| !is_token_char(c));
-      if token.is_empty() || token.chars().all(|c| c.is_ascii_digit()) {
-        return None;
-      }
-      Some(token.to_string())
-    })
-    .collect();
-
-  for window in tokens.windows(2) {
-    let first = &window[0];
-    let second = &window[1];
-    if is_stopword(first) || is_stopword(second) {
-      continue;
-    }
-    let informative = first.len() >= 4
-      || second.len() >= 4
-      || first.chars().next().is_some_and(char::is_uppercase)
-      || second.chars().next().is_some_and(char::is_uppercase)
-      || first.chars().any(|c| c.is_ascii_digit())
-      || second.chars().any(|c| c.is_ascii_digit());
-    if informative {
-      let phrase = format!("{first} {second}");
-      push_keyword(keywords, seen, &phrase);
-      if keywords.len() >= MAX_KEYWORDS {
-        return;
-      }
-    }
-  }
-
-  for token in &tokens {
-    if is_stopword(token) {
-      continue;
-    }
-    let informative = token.len() >= 4
-      || token.chars().next().is_some_and(char::is_uppercase)
-      || token.chars().any(|c| c.is_ascii_digit())
-      || token.contains('+')
-      || token.contains('#')
-      || token.contains('-');
-    if informative {
-      push_keyword(keywords, seen, token);
-      if keywords.len() >= MAX_KEYWORDS {
-        break;
-      }
-    }
-  }
-}
-
-fn extract_keywords(statement: &str, source: &EpisodicMemory) -> Vec<String> {
-  const MAX_KEYWORDS: usize = 12;
-
-  let mut keywords = Vec::new();
-  let mut seen = HashSet::new();
-
-  add_keywords_from_text(statement, &mut keywords, &mut seen);
-  if keywords.len() >= MAX_KEYWORDS {
-    keywords.truncate(MAX_KEYWORDS);
-    return keywords;
-  }
-
-  let source_text = format!(
-    "{}\n{}\n{}",
-    source.title,
-    source.content,
-    source
-      .messages
-      .iter()
-      .map(|m| m.content.as_str())
-      .collect::<Vec<_>>()
-      .join("\n")
-  );
-  add_keywords_from_text(&source_text, &mut keywords, &mut seen);
-  keywords
 }
 
 // ──────────────────────────────────────────────────
@@ -720,7 +565,7 @@ async fn find_similar_facts<C: ConnectionTrait>(
   db: &C,
 ) -> Result<Vec<semantic_memory::Model>, AppError> {
   let sql = r"
-  SELECT id, conversation_id, category, fact, keywords, source_episodic_ids,
+  SELECT id, conversation_id, category, fact, source_episodic_ids,
     valid_at, invalid_at, embedding, created_at, -(embedding <#> $1) AS similarity
   FROM semantic_memory
   WHERE conversation_id = $2 AND invalid_at IS NULL AND -(embedding <#> $1) > $3
