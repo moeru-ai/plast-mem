@@ -6,6 +6,7 @@ mod m20260218_01_create_semantic_memory_table;
 mod m20260228_01_refactor_semantic_memory;
 mod m20260305_01_refactor_episodic_memory_search;
 mod m20260315_01_align_episodic_content;
+mod m20260328_01_restore_semantic_fact_bm25;
 
 pub struct Migrator;
 
@@ -19,6 +20,7 @@ impl MigratorTrait for Migrator {
       Box::new(m20260228_01_refactor_semantic_memory::Migration),
       Box::new(m20260305_01_refactor_episodic_memory_search::Migration),
       Box::new(m20260315_01_align_episodic_content::Migration),
+      Box::new(m20260328_01_restore_semantic_fact_bm25::Migration),
     ]
   }
 }

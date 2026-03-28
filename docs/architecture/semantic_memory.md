@@ -45,12 +45,10 @@ This approach treats prediction errors as learning signals—when the system's e
 | `conversation_id` | Isolation boundary — facts scoped per conversation | No |
 | `category` | One of 8 fixed categories (see below) | No |
 | `fact` | Natural language sentence describing the fact | No |
-| `keywords` | Key entity names / nouns for BM25 multi-hop search | No |
-| `search_text` | `GENERATED` column: `fact || ' ' || array_to_string(keywords, ' ')` — indexed for BM25 | No (generated) |
 | `source_episodic_ids` | UUIDs of episodes that evidence this fact (provenance) | Yes (reinforce appends) |
 | `valid_at` | When this fact became valid | No |
 | `invalid_at` | When this fact was superseded/contradicted; `NULL` = still active | Yes (Update/Invalidate sets) |
-| `embedding` | Vector of `"{category}: {fact} {keywords}"` (category prefix biases embedding) | No |
+| `embedding` | Vector embedding of the fact | No |
 | `created_at` | Record creation timestamp | No |
 
 ### Differences from Episodic Memory
@@ -121,12 +119,9 @@ Extracts knowledge statements that explain prediction errors:
 
 - Deduplication via embedding similarity (≥0.95)
 - Category inference from statement content
-- Simple keyword extraction
 - Source episode tracking
 
 All statements are embedded via `embed_many()` before consolidation.
-
-Embed input format: `"{category}: {fact} {keywords.join(" ")}"` — category prefix biases the vector toward the semantic domain.
 
 Then, inside a single DB transaction:
 
@@ -171,7 +166,7 @@ WITH
 fulltext AS (
   SELECT id, ROW_NUMBER() OVER (ORDER BY pdb.score(id) DESC) AS r
   FROM semantic_memory
-  WHERE search_text ||| $query
+  WHERE fact ||| $query
     AND conversation_id = $id
     AND invalid_at IS NULL
     AND ($category::text IS NULL OR category = $category)
@@ -187,7 +182,7 @@ semantic AS (
 ...RRF merge...
 ```
 
-BM25 runs against `search_text` (generated column = `fact || ' ' || keywords joined`), which gives keyword entities multi-hop reach.
+BM25 runs directly against `fact`.
 
 RRF formula: `score = Σ 1.0 / (60 + rank)`
 
@@ -234,10 +229,6 @@ There is **no direct write API** for semantic memory. All facts are created excl
 |-----------|----------|
 | `SemanticMemory::retrieve_by_embedding(query, embedding, limit, conversation_id, db, category)` | `crates/core/src/memory/semantic.rs` |
 
-## Migration Notes
-
-The `search_text` generated column uses `immutable_keywords_to_text(TEXT[])`, a user-defined `IMMUTABLE` wrapper around `array_to_string`. This is required because PostgreSQL's `array_to_string` is `STABLE`, and `GENERATED ALWAYS AS … STORED` requires `IMMUTABLE` functions. The wrapper is created in migration `m20260228_01_refactor_semantic_memory`.
-
 ## Design Decisions
 
 ### Why Fact-Centric (Not SPO Triplets)?
@@ -252,9 +243,9 @@ The previous design used subject/predicate/object triples. This was replaced bec
 
 Hierarchical labels (e.g., `user/preference`, `self/guideline`) add complexity without benefit. 8 flat categories cover all relevant knowledge domains and are simple enough for an LLM to consistently assign.
 
-### Why `keywords` Field?
+### Why Fact-Centric BM25?
 
-BM25 on `fact` alone misses entity references. If the fact is "User's colleague Alex introduced them to Rust," the keyword `["Alex", "Rust"]` ensures BM25 can surface this fact when querying for "Alex" or "Rust" even if the fact text doesn't lead with those words.
+Semantic retrieval uses the original BM25-on-`fact` scheme. This avoids maintaining a separate keyword extraction pipeline and keeps semantic memory closer to the LLM-produced source statement.
 
 ### Why No FSRS for Semantic Memory?
 
@@ -312,7 +303,7 @@ Hard-deleting invalidated facts would lose history. Soft deletes via `invalid_at
                     ┌─────────┴─────────┐
                     │  retrieve_memory  │◀── Query (+ optional category filter)
                     │  (BM25+vector RRF │
-                    │   on search_text, │
+                    │   on fact,        │
                     │   no FSRS)        │
                     └───────────────────┘
 ```

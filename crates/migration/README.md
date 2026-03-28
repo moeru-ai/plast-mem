@@ -15,6 +15,7 @@ at application startup by the main `plastmem` binary.
 | `m20260216_02_create_episodic_memory_table.rs` | Creates `episodic_memory` table with pgvector support |
 | `m20260218_01_create_semantic_memory_table.rs` | Creates `semantic_memory` table |
 | `m20260228_01_refactor_semantic_memory.rs` | Refactors semantic memory (SPO → category+keywords, adds search_text generated column) |
+| `m20260328_01_restore_semantic_fact_bm25.rs` | Removes semantic keywords/search_text and restores BM25 on `fact` |
 
 ## Running Migrations
 
