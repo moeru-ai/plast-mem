@@ -31,18 +31,6 @@ export interface BenchmarkOutput {
   variants: Partial<Record<BenchmarkVariant, BenchmarkVariantOutput>>
 }
 
-export interface BenchmarkRunConfig {
-  baseUrl: string
-  compareFullContext: boolean
-  concurrency: number
-  dataFile: string
-  model: string
-  outFile: string
-  sampleIds: string[]
-  useLlmJudge: boolean
-  waitForBackground: boolean
-}
-
 export interface BenchmarkScoreSummary {
   by_category: Record<QACategory, number>
   by_category_count: Record<QACategory, number>
@@ -111,29 +99,4 @@ export interface QAResult {
   question: string
   sample_id: string
   score: number
-}
-
-export interface RunCheckpoint {
-  completed_at: null | string
-  config: BenchmarkRunConfig
-  fingerprint: string
-  samples: Record<string, SampleCheckpoint>
-  started_at: string
-  updated_at: string
-  version: 1
-}
-
-export interface SampleCheckpoint {
-  conversation_id: null | string
-  error: null | string
-  ingest_done: boolean
-  sample_id: string
-  status: 'complete' | 'failed' | 'pending' | 'running'
-  variants: Partial<Record<BenchmarkVariant, VariantCheckpoint>>
-}
-
-export interface VariantCheckpoint {
-  eval_done: boolean
-  results: PendingQAResult[]
-  score_done: boolean
 }

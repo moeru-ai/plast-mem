@@ -1,10 +1,7 @@
 import type {
-  BenchmarkRunConfig,
   BenchmarkVariant,
   LoCoMoSample,
-  RunCheckpoint,
-  SampleCheckpoint,
-  VariantCheckpoint,
+  PendingQAResult,
 } from './types'
 
 import { createHash } from 'node:crypto'
@@ -13,6 +10,43 @@ import { dirname } from 'node:path'
 
 const CHECKPOINT_VERSION = 1
 const JSON_FILE_RE = /\.json$/i
+
+export interface BenchmarkRunConfig {
+  baseUrl: string
+  compareFullContext: boolean
+  concurrency: number
+  dataFile: string
+  model: string
+  outFile: string
+  sampleIds: string[]
+  useLlmJudge: boolean
+  waitForBackground: boolean
+}
+
+export interface RunCheckpoint {
+  completed_at: null | string
+  config: BenchmarkRunConfig
+  fingerprint: string
+  samples: Record<string, SampleCheckpoint>
+  started_at: string
+  updated_at: string
+  version: 1
+}
+
+export interface SampleCheckpoint {
+  conversation_id: null | string
+  error: null | string
+  ingest_done: boolean
+  sample_id: string
+  status: 'complete' | 'failed' | 'pending' | 'running'
+  variants: Partial<Record<BenchmarkVariant, VariantCheckpoint>>
+}
+
+export interface VariantCheckpoint {
+  eval_done: boolean
+  results: PendingQAResult[]
+  score_done: boolean
+}
 
 const createVariantCheckpoint = (): VariantCheckpoint => ({
   eval_done: false,

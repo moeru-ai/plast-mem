@@ -1,4 +1,4 @@
-import type { BenchmarkRunConfig, DialogTurn, LoCoMoSample } from './types'
+import type { DialogTurn, LoCoMoSample } from './types'
 
 import { getOrderedSessions } from './ingest'
 
@@ -34,7 +34,6 @@ const formatSession = (
 
 export const buildFullContext = (
   sample: LoCoMoSample,
-  _config: BenchmarkRunConfig,
   question: string,
 ): string => {
   const sessions = getOrderedSessions(sample)
