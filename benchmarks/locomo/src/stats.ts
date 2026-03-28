@@ -1,4 +1,3 @@
-/* eslint-disable no-console */
 import type {
   BenchmarkComparisonMetric,
   BenchmarkComparisonSummary,
@@ -7,6 +6,8 @@ import type {
   QACategory,
   QAResult,
 } from './types'
+
+import { log } from '@clack/prompts'
 
 const CATEGORIES: QACategory[] = [1, 2, 3, 4, 5]
 const CATEGORY_NAMES: Record<QACategory, string> = {
@@ -118,10 +119,10 @@ export const computeComparison = (
 }
 
 const printScoreSummary = (label: string, summary: BenchmarkScoreSummary): void => {
-  console.log(`${label} F1:   ${(summary.overall * 100).toFixed(2)}%  (n=${summary.total})`)
-  console.log(`${label} Nemori F1: ${(summary.overall_nemori_f1 * 100).toFixed(2)}%`)
-  console.log(`${label} LLM:  ${(summary.overall_llm * 100).toFixed(2)}%`)
-  console.log()
+  log.message(`${label} F1:   ${(summary.overall * 100).toFixed(2)}%  (n=${summary.total})`)
+  log.message(`${label} Nemori F1: ${(summary.overall_nemori_f1 * 100).toFixed(2)}%`)
+  log.message(`${label} LLM:  ${(summary.overall_llm * 100).toFixed(2)}%`)
+  log.message('')
 
   for (const c of CATEGORIES) {
     const f1 = summary.by_category[c]
@@ -129,7 +130,7 @@ const printScoreSummary = (label: string, summary: BenchmarkScoreSummary): void 
     const nemoriF1 = summary.by_category_nemori_f1[c]
     const count = summary.by_category_count[c]
     if (count > 0) {
-      console.log(
+      log.message(
         `  Cat ${c} (${CATEGORY_NAMES[c].padEnd(12)}):  F1=${(f1 * 100).toFixed(2)}%  NemoriF1=${(nemoriF1 * 100).toFixed(2)}%  LLM=${(llm * 100).toFixed(2)}%  (n=${count})`,
       )
     }
@@ -137,34 +138,34 @@ const printScoreSummary = (label: string, summary: BenchmarkScoreSummary): void 
 }
 
 export const printStats = (stats: BenchmarkStats): void => {
-  console.log('\n── Results ──────────────────────────────────')
+  log.message('\n── Results ──────────────────────────────────')
   const sampleIds = Object.keys(stats.by_sample)
 
   if (sampleIds.length > 0) {
-    console.log('By sample:')
+    log.message('By sample:')
     for (const sampleId of sampleIds) {
-      console.log()
-      console.log(`Sample ${sampleId}`)
+      log.message('')
+      log.message(`Sample ${sampleId}`)
       printScoreSummary('  Overall', stats.by_sample[sampleId])
     }
   }
 
-  console.log()
-  console.log('Overall')
+  log.message('')
+  log.message('Overall')
   printScoreSummary('  Overall', stats.overall)
-  console.log('──────────────────────────────────────────────\n')
+  log.message('──────────────────────────────────────────────\n')
 }
 
 export const printComparison = (comparison: BenchmarkComparisonSummary): void => {
-  console.log('\n── Comparison: plast-mem - Full Context ─────')
-  console.log(`Overall F1 delta: ${(comparison.overall.score_delta * 100).toFixed(2)}%`)
-  console.log(`Overall Nemori F1 delta: ${(comparison.overall.nemori_f1_delta * 100).toFixed(2)}%`)
-  console.log(`Overall LLM delta: ${(comparison.overall.llm_judge_delta * 100).toFixed(2)}%`)
-  console.log()
+  log.message('\n── Comparison: plast-mem - Full Context ─────')
+  log.message(`Overall F1 delta: ${(comparison.overall.score_delta * 100).toFixed(2)}%`)
+  log.message(`Overall Nemori F1 delta: ${(comparison.overall.nemori_f1_delta * 100).toFixed(2)}%`)
+  log.message(`Overall LLM delta: ${(comparison.overall.llm_judge_delta * 100).toFixed(2)}%`)
+  log.message('')
 
   for (const category of CATEGORIES) {
     const metric = comparison.by_category[category]
-    console.log(
+    log.message(
       `  Cat ${category} (${CATEGORY_NAMES[category].padEnd(12)}): `
       + `F1=${(metric.score_delta * 100).toFixed(2)}% `
       + `NemoriF1=${(metric.nemori_f1_delta * 100).toFixed(2)}% `
@@ -172,5 +173,5 @@ export const printComparison = (comparison: BenchmarkComparisonSummary): void =>
     )
   }
 
-  console.log('──────────────────────────────────────────────\n')
+  log.message('──────────────────────────────────────────────\n')
 }

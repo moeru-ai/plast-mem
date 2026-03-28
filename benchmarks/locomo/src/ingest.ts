@@ -3,9 +3,8 @@ import type { AddMessage } from 'plastmem'
 import type { DialogTurn, LoCoMoSample } from './types'
 
 import { readFile, writeFile } from 'node:fs/promises'
-import { stdout } from 'node:process'
 
-import { spinner as createSpinner } from '@clack/prompts'
+import { spinner as createSpinner, log } from '@clack/prompts'
 import { uuid } from '@insel-null/uuid'
 import { addMessage } from 'plastmem'
 
@@ -197,22 +196,14 @@ export const ingestAll = async (
   const tasks = samples.map(sample => async () => {
     const existingConversationId = ids[sample.sample_id]
     if (existingConversationId != null && existingConversationId.length > 0) {
-      stdout.write(`  Reusing sample ${sample.sample_id} (${existingConversationId})\n`)
+      log.info(`Reusing sample ${sample.sample_id} (${existingConversationId})`)
       return
     }
 
     const conversationId = uuid.v7()
-    stdout.write(`  Ingesting sample ${sample.sample_id} (${conversationId})\n`)
     const spinner = createSpinner()
-    spinner.start(`Ingesting sample ${sample.sample_id}`)
-    let lastPct = 0
-    await ingestSample(sample, conversationId, baseUrl, (done, total) => {
-      const pct = Math.floor((done / total) * 100)
-      if (pct >= lastPct + 20) {
-        spinner.message(`Ingesting sample ${sample.sample_id} (${conversationId}) ${pct}%`)
-        lastPct = pct
-      }
-    })
+    spinner.start(`Ingesting sample ${sample.sample_id} (${conversationId})`)
+    await ingestSample(sample, conversationId, baseUrl)
     if (settleAndFlushAfterSampleIngest) {
       spinner.message(`Waiting for episodic settle on sample ${sample.sample_id} (${conversationId})`)
       const flushed = await flushConversationTailWhenReady(baseUrl, conversationId)

@@ -1,4 +1,3 @@
-/* eslint-disable no-console */
 import type {
   BenchmarkRunConfig,
   RunCheckpoint,
@@ -17,6 +16,8 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { log } from '@clack/prompts'
+
 import { getVariantOrder, saveCheckpoint } from './checkpoint'
 import { llmJudge, scoreAnswer, scoreAnswerNemoriF1 } from './evaluation'
 import { buildFullContext } from './full-context'
@@ -28,6 +29,7 @@ import { waitForAll } from './wait'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const IDS_FILE = resolve(__dirname, '../data/conversation_ids.json')
+const QA_CONCURRENCY = 4
 
 const runWithConcurrency = async (
   tasks: Array<() => Promise<void>>,
@@ -141,14 +143,14 @@ const evaluateVariant = async (
 ): Promise<PendingQAResult[]> => {
   const qaPairs = sample.qa.filter(qa => qa.category !== 5)
   const label = variant === 'plastmem' ? 'plast-mem' : 'Full Context'
-  console.log(`  ${label}: evaluating ${qaPairs.length} questions`)
+  log.message(`${label}: evaluating ${qaPairs.length} questions`)
 
   const contexts = Array.from<string>({ length: qaPairs.length }).fill('')
   await runWithConcurrency(
     qaPairs.map((qa, index) => async () => {
       contexts[index] = await getContextForVariant(variant, sample, sampleCheckpoint, config, qa.question)
     }),
-    config.concurrency,
+    QA_CONCURRENCY,
   )
 
   const results = Array.from<null | PendingQAResult>({ length: qaPairs.length }).fill(null)
@@ -167,11 +169,11 @@ const evaluateVariant = async (
         sample_id: sample.sample_id,
         score: null,
       }
-      console.log(`    [${index + 1}/${qaPairs.length}] answered`)
     }),
-    config.concurrency,
+    QA_CONCURRENCY,
   )
 
+  log.success(`${label}: evaluation complete for ${qaPairs.length} questions`)
   return results.map((result, index) => {
     if (result == null)
       throw new Error(`Missing evaluated result for sample ${sample.sample_id} question #${index + 1}`)
@@ -186,7 +188,7 @@ const scoreVariant = async (
   results: PendingQAResult[],
 ): Promise<QAResult[]> => {
   const label = variant === 'plastmem' ? 'plast-mem' : 'Full Context'
-  console.log(`  ${label}: scoring ${results.length} answers`)
+  log.message(`${label}: scoring ${results.length} answers`)
 
   const scored = Array.from<null | QAResult>({ length: results.length }).fill(null)
   await runWithConcurrency(
@@ -203,15 +205,25 @@ const scoreVariant = async (
         nemori_f1_score: nemoriF1Score,
         score,
       }
-      console.log(
-        `    [${index + 1}/${results.length}] `
-        + `f1=${score.toFixed(2)} nemoriF1=${nemoriF1Score.toFixed(2)} llm=${llmScore.toFixed(2)}`,
-      )
     }),
-    config.concurrency,
+    QA_CONCURRENCY,
   )
 
-  console.log(`  ${label}: sample ${sample.sample_id} score complete`)
+  const completed = scored.filter((result): result is QAResult => result != null)
+  const avgScore = completed.length > 0
+    ? completed.reduce((sum, result) => sum + result.score, 0) / completed.length
+    : 0
+  const avgNemoriF1 = completed.length > 0
+    ? completed.reduce((sum, result) => sum + result.nemori_f1_score, 0) / completed.length
+    : 0
+  const avgLlm = completed.length > 0
+    ? completed.reduce((sum, result) => sum + result.llm_judge_score, 0) / completed.length
+    : 0
+
+  log.success(
+    `${label}: sample ${sample.sample_id} score complete `
+    + `f1=${avgScore.toFixed(2)} nemoriF1=${avgNemoriF1.toFixed(2)} llm=${avgLlm.toFixed(2)}`,
+  )
   return scored.map((result, index) => {
     if (result == null)
       throw new Error(`Missing scored result for sample ${sample.sample_id} question #${index + 1}`)
@@ -226,7 +238,7 @@ const ingestSampleIfNeeded = async (
   conversationIds: Record<string, string>,
 ): Promise<void> => {
   if (sampleCheckpoint.ingest_done) {
-    console.log(`  Reusing ingested sample ${sample.sample_id}`)
+    log.info(`Reusing ingested sample ${sample.sample_id}`)
     return
   }
 
@@ -269,7 +281,7 @@ const runSample = async (
   await persistState(checkpointPath, checkpoint)
 
   try {
-    console.log(`\n── Sample ${sample.sample_id} ──`)
+    log.step(`Sample ${sample.sample_id}`)
     await ingestSampleIfNeeded(sample, sampleCheckpoint, checkpoint.config, conversationIds)
     await persistState(checkpointPath, checkpoint)
 
@@ -298,7 +310,7 @@ const runSample = async (
     sampleCheckpoint.error = error instanceof Error ? error.message : String(error)
     sampleCheckpoint.status = 'failed'
     await persistState(checkpointPath, checkpoint)
-    console.error(`  Sample ${sample.sample_id} failed: ${sampleCheckpoint.error}`)
+    log.error(`Sample ${sample.sample_id} failed: ${sampleCheckpoint.error}`)
   }
 }
 
@@ -316,7 +328,7 @@ export const runBenchmark = async (
   for (const sample of samples) {
     const sampleCheckpoint = checkpoint.samples[sample.sample_id]
     if (sampleCheckpoint?.status === 'complete') {
-      console.log(`\n── Sample ${sample.sample_id} already complete, skipping ──`)
+      log.info(`Sample ${sample.sample_id} already complete, skipping`)
       continue
     }
 
@@ -332,13 +344,13 @@ export const printFinalSummary = (checkpoint: RunCheckpoint): void => {
   const output = buildBenchmarkOutput(checkpoint)
   const plastmem = output.variants.plastmem
   if (plastmem != null) {
-    console.log('\nplast-mem')
+    log.step('plast-mem')
     printStats(plastmem.stats)
   }
 
   const fullContext = output.variants.full_context
   if (fullContext != null) {
-    console.log('Full Context')
+    log.step('Full Context')
     printStats(fullContext.stats)
   }
 

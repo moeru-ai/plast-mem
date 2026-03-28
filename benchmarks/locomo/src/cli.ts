@@ -11,11 +11,12 @@ import {
   confirm,
   intro,
   isCancel,
+  log,
   multiselect,
   note,
   outro,
   select,
-  spinner,
+  text,
 } from '@clack/prompts'
 
 import {
@@ -31,7 +32,6 @@ const DEFAULT_DATA_FILE = resolve(cwd(), 'data/locomo10.json')
 const RESULTS_DIR = resolve(cwd(), 'results')
 const CHECKPOINT_FILE_SUFFIX = '.checkpoint.json'
 const COLON_DOT_RE = /[:.]/g
-const DEFAULT_CONCURRENCY = 4
 const LONG_CONTEXT_SAMPLE_IDS = ['conv-43', 'conv-47', 'conv-48'] as const
 const MINIMAL_SAMPLE_IDS = ['conv-42', 'conv-48'] as const
 const DEFAULT_SAMPLE_IDS = ['conv-42', 'conv-44', 'conv-48', 'conv-50'] as const
@@ -142,9 +142,15 @@ const loadLatestCheckpoint = async (): Promise<null | { checkpoint: RunCheckpoin
 
 const promptForConfig = async (): Promise<BenchmarkRunConfig> => {
   const defaultBaseUrl = (env.PLASTMEM_BASE_URL ?? 'http://localhost:3000').replace(TRAILING_SLASH_RE, '')
-  const model = getRequiredChatModel()
+  const defaultModel = getRequiredChatModel()
   const allSamples = await loadDefaultSamples()
   const allSampleIds = allSamples.map(sample => sample.sample_id)
+  const model = await prompt<string>(text({
+    initialValue: defaultModel,
+    message: 'Answer model',
+    placeholder: defaultModel,
+    validate: value => typeof value === 'string' && value.trim().length > 0 ? undefined : 'Model is required',
+  }))
   const sampleMode = await prompt<string>(select({
     initialValue: 'custom',
     message: 'Which samples should run?',
@@ -189,9 +195,8 @@ const promptForConfig = async (): Promise<BenchmarkRunConfig> => {
   return {
     baseUrl: defaultBaseUrl,
     compareFullContext: compareMode === 'compare',
-    concurrency: DEFAULT_CONCURRENCY,
     dataFile: DEFAULT_DATA_FILE,
-    model,
+    model: model.trim(),
     outFile: timestampedOutputPath(),
     sampleIds: selectedSampleIds.toSorted((left, right) => left.localeCompare(right)),
     useLlmJudge,
@@ -246,13 +251,12 @@ const main = async (): Promise<void> => {
     `compare: ${config.compareFullContext ? 'plast-mem + Full Context' : 'plast-mem only'}`,
   ].join('\n'), 'Run configuration')
 
-  const progress = spinner()
-  progress.start('Running selected samples')
+  log.step('Running selected samples')
   const completedCheckpoint = await runBenchmark(checkpoint, checkpointPath, samples)
-  progress.stop('Benchmark run finished')
+  log.success('Benchmark run finished')
 
   printFinalSummary(completedCheckpoint)
-  outro(`Results written to ${config.outFile}`)
+  outro(`Results written to ${completedCheckpoint.config.outFile}`)
 }
 
 // eslint-disable-next-line @masknet/no-top-level

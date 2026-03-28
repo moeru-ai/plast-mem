@@ -14,7 +14,6 @@ const JSON_FILE_RE = /\.json$/i
 export interface BenchmarkRunConfig {
   baseUrl: string
   compareFullContext: boolean
-  concurrency: number
   dataFile: string
   model: string
   outFile: string
@@ -72,7 +71,6 @@ const createSampleCheckpoint = (
 const normalizeConfig = (config: BenchmarkRunConfig): string => JSON.stringify({
   baseUrl: config.baseUrl,
   compareFullContext: config.compareFullContext,
-  concurrency: config.concurrency,
   dataFile: config.dataFile,
   model: config.model,
   sampleIds: config.sampleIds.toSorted((left, right) => left.localeCompare(right)),

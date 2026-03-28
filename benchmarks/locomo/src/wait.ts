@@ -1,4 +1,4 @@
-/* eslint-disable no-console */
+import { log } from '@clack/prompts'
 import { sleep } from '@moeru/std'
 import { benchmarkFlush, benchmarkJobStatus } from 'plastmem'
 
@@ -13,6 +13,11 @@ export interface ConversationStatus {
   messages_pending: number
   predict_calibrate_jobs_active: number
   segmentation_jobs_active: number
+}
+
+interface StatusEntry {
+  id: string
+  status: ConversationStatus
 }
 
 export const getStatus = async (
@@ -69,6 +74,44 @@ export const flushConversationTailWhenReady = async (
   }
 }
 
+const collectStatuses = async (
+  ids: string[],
+  baseUrl: string,
+): Promise<StatusEntry[]> =>
+  Promise.all(ids.map(async (id) => {
+    const status = await getStatus(baseUrl, id)
+    return { id, status }
+  }))
+
+const flushReadyConversations = async (
+  statuses: StatusEntry[],
+  baseUrl: string,
+  flushedIds: Set<string>,
+): Promise<void> => {
+  for (const { id, status } of statuses) {
+    if (!status.flushable || flushedIds.has(id))
+      continue
+
+    const res = await benchmarkFlush({
+      baseUrl,
+      body: { conversation_id: id },
+      throwOnError: true,
+    })
+    if (res.data?.enqueued === true)
+      flushedIds.add(id)
+  }
+}
+
+const removeCompletedConversations = (
+  statuses: StatusEntry[],
+  pendingIds: Set<string>,
+): void => {
+  for (const { id, status } of statuses) {
+    if (status.done)
+      pendingIds.delete(id)
+  }
+}
+
 export const waitForAll = async (
   conversationIds: string[],
   baseUrl: string,
@@ -80,31 +123,13 @@ export const waitForAll = async (
   const pendingIds = new Set(uniqueIds)
   const flushedIds = new Set<string>()
   while (pendingIds.size > 0) {
-    const ids = [...pendingIds]
-    const statuses = await Promise.all(ids.map(async (id) => {
-      const status = await getStatus(baseUrl, id)
-      return { id, status }
-    }))
+    const statuses = await collectStatuses([...pendingIds], baseUrl)
 
     const line = statuses.map(({ id, status }) => renderStatus(id, status)).join(' | ')
-    console.log(`  [wait] ${line}`)
+    log.message(`[wait] ${line}`)
 
-    for (const { id, status } of statuses) {
-      if (status.flushable && !flushedIds.has(id)) {
-        const res = await benchmarkFlush({
-          baseUrl,
-          body: { conversation_id: id },
-          throwOnError: true,
-        })
-        if (res.data?.enqueued === true)
-          flushedIds.add(id)
-      }
-    }
-
-    for (const { id, status } of statuses) {
-      if (status.done)
-        pendingIds.delete(id)
-    }
+    await flushReadyConversations(statuses, baseUrl, flushedIds)
+    removeCompletedConversations(statuses, pendingIds)
 
     if (pendingIds.size === 0)
       break

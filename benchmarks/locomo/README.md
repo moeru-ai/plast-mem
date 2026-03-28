@@ -39,11 +39,15 @@ for each selected sample:
 
 At startup the CLI prompts for:
 
+- answer model (prefilled from `OPENAI_CHAT_MODEL`; the chosen model is recorded in the output JSON metadata)
 - sample scope (defaults to `conv-42`, `conv-44`, `conv-48`, `conv-50`; can switch to `all` or custom selection)
 - compare mode (`plast-mem only` or `plast-mem + Full Context`)
-- fixed QA concurrency (`4`)
-- always waits for background jobs after each sample ingest
 - whether to enable LLM judge scoring
+
+The benchmark always:
+
+- uses QA concurrency `4`
+- waits for background jobs after each sample ingest
 
 If a previous checkpoint exists in `benchmarks/locomo/results/`, the CLI first asks whether to resume that latest checkpoint. When resuming, it reuses the saved config instead of asking for fresh run options.
 
