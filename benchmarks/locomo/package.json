@@ -7,7 +7,7 @@
     "start": "tsx src/cli.ts"
   },
   "dependencies": {
-    "@clack/prompts": "^1.1.0",
+    "@clack/prompts": "catalog:",
     "@insel-null/uuid": "catalog:",
     "@moeru/std": "catalog:",
     "@xsai/embed": "catalog:",

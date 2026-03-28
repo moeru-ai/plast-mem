@@ -1,10 +1,16 @@
+shellEmulator: true
+
+trustPolicy: no-downgrade
+
+trustPolicyExclude:
+  - semver@6.3.1
 packages:
   - benchmarks/*
   - examples/*
   - packages/*
-
 catalog:
-  '@antfu/eslint-config': ^7.7.2
+  '@antfu/eslint-config': 7.4.3
+  '@clack/prompts': ^1.1.0
   '@eslint-react/eslint-plugin': ^2.13.0
   '@insel-null/uuid': ^0.0.1
   '@moeru/eslint-config': 0.1.0-beta.17
@@ -14,8 +20,8 @@ catalog:
   '@types/node': ^25.5.0
   '@types/react': ^19.2.14
   '@vitejs/plugin-react': ^5.2.0
-  '@xsai/generate-text': ^0.4.3
   '@xsai/embed': ^0.4.4
+  '@xsai/generate-text': ^0.4.3
   '@xsai/shared-chat': ^0.4.3
   '@xsai/tool': ^0.4.3
   eslint: ^10.0.3
@@ -37,10 +43,3 @@ catalog:
   vite-node: ^5.3.0
   vitest: ^4.1.0
   zod: ^4.3.6
-
-shellEmulator: true
-
-trustPolicy: no-downgrade
-
-trustPolicyExclude:
-  - semver@6.3.1
