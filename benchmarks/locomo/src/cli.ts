@@ -59,7 +59,10 @@ const loadDefaultSamples = async (): Promise<LoCoMoSample[]> => {
   try {
     return await loadSamples(DEFAULT_DATA_FILE)
   }
-  catch {
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT')
+      throw error
+
     throw new Error(
       `LoCoMo dataset not found at ${DEFAULT_DATA_FILE}.\n`
       + 'Download it with:\n'

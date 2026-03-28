@@ -22,11 +22,24 @@ const dialogTurnSchema = z.object({
 })
 
 const qAPairSchema = z.object({
-  adversarial_answer: z.string().nullable(),
-  answer: z.union([z.number(), z.string()]),
+  adversarial_answer: z.string().nullable().optional(),
+  answer: z.union([z.number(), z.string()]).optional(),
   category: qACategorySchema,
   evidence: z.array(z.string()),
   question: z.string(),
+}).transform((value, context) => {
+  if (value.answer != null)
+    return value
+
+  if (value.category === 5 && value.adversarial_answer != null)
+    return { ...value, answer: value.adversarial_answer }
+
+  context.addIssue({
+    code: 'custom',
+    message: 'QA pair is missing answer',
+    path: ['answer'],
+  })
+  return z.NEVER
 })
 
 const pendingQAResultSchema = z.object({
