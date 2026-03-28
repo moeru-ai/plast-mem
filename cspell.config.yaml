@@ -4,8 +4,10 @@ dictionaryDefinitions: []
 dictionaries: []
 words:
   - alaya
+  - antfu
   - apalis
   - clippy
+  - conv
   - cust
   - direnv
   - dotenv
@@ -45,6 +47,7 @@ words:
   - uuidv
   - vchord
   - vite
+  - vitejs
   - vitest
   - waifu
   - xsai

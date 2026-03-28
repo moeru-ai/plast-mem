@@ -32,6 +32,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 
 const DEFAULT_CONCURRENCY = 4
 const COLON_DOT_RE = /[:.]/g
+const DEFAULT_SAMPLE_IDS = ['conv-42', 'conv-44', 'conv-48', 'conv-50'] as const
 const TRAILING_SLASH_RE = /\/$/
 
 const prompt = async <T>(value: Promise<symbol | T>): Promise<T> => {
@@ -65,18 +66,22 @@ const promptForConfig = async (): Promise<BenchmarkRunConfig> => {
 
   const allSamples = await loadSamples(dataFile)
   const sampleMode = await prompt<string>(select({
-    initialValue: 'all',
+    initialValue: 'custom',
     message: 'Which samples should run?',
     options: [
+      { label: 'Recommended subset (42/44/48/50)', value: 'custom' },
       { label: 'All samples', value: 'all' },
-      { label: 'Select individual samples', value: 'custom' },
     ],
   }))
+
+  const defaultSelectedSampleIds = allSamples
+    .map(sample => sample.sample_id)
+    .filter(sampleId => DEFAULT_SAMPLE_IDS.includes(sampleId as typeof DEFAULT_SAMPLE_IDS[number]))
 
   const selectedSampleIds = sampleMode === 'all'
     ? allSamples.map(sample => sample.sample_id)
     : await prompt<string[]>(multiselect({
-        initialValues: allSamples.map(sample => sample.sample_id),
+        initialValues: defaultSelectedSampleIds,
         message: 'Choose sample IDs',
         options: allSamples.map(sample => ({
           label: sample.sample_id,
