@@ -25,6 +25,7 @@ import {
   loadCheckpoint,
 } from './checkpoint'
 import { printFinalSummary, runBenchmark } from './runner'
+import { parseLoCoMoSamples } from './schemas'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -51,7 +52,7 @@ const timestampedOutputPath = (): string =>
 
 const loadSamples = async (dataFile: string): Promise<LoCoMoSample[]> => {
   const raw = await readFile(dataFile, 'utf-8')
-  return JSON.parse(raw) as LoCoMoSample[]
+  return parseLoCoMoSamples(JSON.parse(raw))
 }
 
 const loadDefaultSamples = async (): Promise<LoCoMoSample[]> => {

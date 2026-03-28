@@ -8,6 +8,8 @@ import { createHash } from 'node:crypto'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 
+import { parseRunCheckpoint } from './schemas'
+
 const CHECKPOINT_VERSION = 1
 const JSON_FILE_RE = /\.json$/i
 
@@ -112,7 +114,7 @@ export const saveCheckpoint = async (
 export const loadCheckpoint = async (path: string): Promise<null | RunCheckpoint> => {
   try {
     const raw = await readFile(path, 'utf-8')
-    return JSON.parse(raw) as RunCheckpoint
+    return parseRunCheckpoint(JSON.parse(raw))
   }
   catch {
     return null

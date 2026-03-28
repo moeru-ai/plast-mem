@@ -2,12 +2,11 @@ import type { AddMessage } from 'plastmem'
 
 import type { DialogTurn, LoCoMoSample } from './types'
 
-import { readFile, writeFile } from 'node:fs/promises'
-
 import { spinner as createSpinner, log } from '@clack/prompts'
 import { uuid } from '@insel-null/uuid'
 import { addMessage } from 'plastmem'
 
+import { runWithConcurrency } from './concurrency'
 import { flushConversationTailWhenReady, waitUntilConversationAdmissible } from './wait'
 
 // Minutes between consecutive turns within a session
@@ -18,31 +17,6 @@ interface BatchMessage {
   content: string
   role: string
   timestamp?: number
-}
-
-const runWithConcurrency = async (
-  tasks: Array<() => Promise<void>>,
-  concurrency: number,
-): Promise<void> => {
-  if (tasks.length === 0)
-    return
-
-  const limit = Math.max(1, Math.floor(concurrency))
-  let nextIndex = 0
-
-  const worker = async (): Promise<void> => {
-    while (true) {
-      const taskIndex = nextIndex
-      nextIndex += 1
-      if (taskIndex >= tasks.length)
-        return
-      await tasks[taskIndex]()
-    }
-  }
-
-  await Promise.all(
-    Array.from({ length: Math.min(limit, tasks.length) }).fill(0).map(async () => worker()),
-  )
 }
 
 const SESSION_DATE_RE = /^(\d{1,2}):(\d{2})\s*(am|pm)\s+on\s+(\d{1,2})\s+(\w+),\s+(\d{4})$/i
@@ -203,7 +177,9 @@ export const ingestAll = async (
     const conversationId = uuid.v7()
     const spinner = createSpinner()
     spinner.start(`Ingesting sample ${sample.sample_id} (${conversationId})`)
-    await ingestSample(sample, conversationId, baseUrl)
+    await ingestSample(sample, conversationId, baseUrl, (done, total) => {
+      spinner.message(`Ingesting sample ${sample.sample_id} (${conversationId}) ${done}/${total}`)
+    })
     if (settleAndFlushAfterSampleIngest) {
       spinner.message(`Waiting for episodic settle on sample ${sample.sample_id} (${conversationId})`)
       const flushed = await flushConversationTailWhenReady(baseUrl, conversationId)
@@ -221,18 +197,4 @@ export const ingestAll = async (
   await runWithConcurrency(tasks, concurrency)
 
   return ids
-}
-
-export const loadConversationIds = async (path: string): Promise<Record<string, string>> => {
-  try {
-    const content = await readFile(path, 'utf-8')
-    return JSON.parse(content) as Record<string, string>
-  }
-  catch {
-    return {}
-  }
-}
-
-export const saveConversationIds = async (path: string, ids: Record<string, string>): Promise<void> => {
-  await writeFile(path, JSON.stringify(ids, null, 2))
 }

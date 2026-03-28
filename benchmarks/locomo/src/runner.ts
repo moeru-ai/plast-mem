@@ -13,15 +13,15 @@ import type {
 } from './types'
 
 import { mkdir, writeFile } from 'node:fs/promises'
-import { dirname, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { dirname } from 'node:path'
 
 import { log, note } from '@clack/prompts'
 
 import { getVariantOrder, saveCheckpoint } from './checkpoint'
+import { runWithConcurrency } from './concurrency'
 import { llmJudge, scoreAnswer, scoreAnswerNemoriF1 } from './evaluation'
 import { buildFullContext } from './full-context'
-import { ingestAll, loadConversationIds, saveConversationIds } from './ingest'
+import { ingestAll } from './ingest'
 import { generateAnswer } from './llm'
 import { getContext } from './retrieve'
 import {
@@ -34,32 +34,7 @@ import {
 } from './stats'
 import { waitForAll } from './wait'
 
-const __dirname = dirname(fileURLToPath(import.meta.url))
-const IDS_FILE = resolve(__dirname, '../data/conversation_ids.json')
 const QA_CONCURRENCY = 4
-
-const runWithConcurrency = async (
-  tasks: Array<() => Promise<void>>,
-  concurrency: number,
-): Promise<void> => {
-  if (tasks.length === 0)
-    return
-
-  const limit = Math.max(1, Math.floor(concurrency))
-  let nextIndex = 0
-
-  const worker = async (): Promise<void> => {
-    while (true) {
-      const currentIndex = nextIndex
-      nextIndex += 1
-      if (currentIndex >= tasks.length)
-        return
-      await tasks[currentIndex]()
-    }
-  }
-
-  await Promise.all(Array.from({ length: Math.min(limit, tasks.length) }).fill(0).map(async () => worker()))
-}
 
 const isScoredResult = (result: PendingQAResult): result is QAResult =>
   result.llm_judge_score != null
@@ -263,7 +238,8 @@ const ingestSampleIfNeeded = async (
   sample: LoCoMoSample,
   sampleCheckpoint: SampleCheckpoint,
   config: BenchmarkRunConfig,
-  conversationIds: Record<string, string>,
+  checkpoint: RunCheckpoint,
+  checkpointPath: string,
 ): Promise<void> => {
   if (sampleCheckpoint.ingest_done) {
     log.info(`Reusing ingested sample ${sample.sample_id}`)
@@ -272,20 +248,16 @@ const ingestSampleIfNeeded = async (
 
   const ids = await ingestAll(
     [sample],
-    {
-      ...conversationIds,
-      ...(sampleCheckpoint.conversation_id != null ? { [sample.sample_id]: sampleCheckpoint.conversation_id } : {}),
-    },
+    sampleCheckpoint.conversation_id != null ? { [sample.sample_id]: sampleCheckpoint.conversation_id } : {},
     config.baseUrl,
     1,
     config.waitForBackground,
     async (nextIds) => {
-      Object.assign(conversationIds, nextIds)
-      await saveConversationIds(IDS_FILE, nextIds)
+      sampleCheckpoint.conversation_id = nextIds[sample.sample_id] ?? sampleCheckpoint.conversation_id
+      await persistState(checkpointPath, checkpoint)
     },
   )
 
-  Object.assign(conversationIds, ids)
   sampleCheckpoint.conversation_id = ids[sample.sample_id] ?? sampleCheckpoint.conversation_id
   sampleCheckpoint.ingest_done = true
 
@@ -301,7 +273,6 @@ const runSample = async (
   sample: LoCoMoSample,
   checkpoint: RunCheckpoint,
   checkpointPath: string,
-  conversationIds: Record<string, string>,
 ): Promise<void> => {
   const sampleCheckpoint = checkpoint.samples[sample.sample_id]
   sampleCheckpoint.status = 'running'
@@ -310,7 +281,7 @@ const runSample = async (
 
   try {
     log.step(`Sample ${sample.sample_id}`)
-    await ingestSampleIfNeeded(sample, sampleCheckpoint, checkpoint.config, conversationIds)
+    await ingestSampleIfNeeded(sample, sampleCheckpoint, checkpoint.config, checkpoint, checkpointPath)
     await persistState(checkpointPath, checkpoint)
 
     for (const variant of getVariantOrder(checkpoint.config.compareFullContext)) {
@@ -348,12 +319,6 @@ export const runBenchmark = async (
   checkpointPath: string,
   samples: LoCoMoSample[],
 ): Promise<RunCheckpoint> => {
-  const conversationIds = await loadConversationIds(IDS_FILE)
-  for (const sample of Object.values(checkpoint.samples)) {
-    if (sample.conversation_id != null && sample.conversation_id.length > 0)
-      conversationIds[sample.sample_id] = sample.conversation_id
-  }
-
   for (const sample of samples) {
     const sampleCheckpoint = checkpoint.samples[sample.sample_id]
     if (sampleCheckpoint?.status === 'complete') {
@@ -361,7 +326,7 @@ export const runBenchmark = async (
       continue
     }
 
-    await runSample(sample, checkpoint, checkpointPath, conversationIds)
+    await runSample(sample, checkpoint, checkpointPath)
   }
 
   checkpoint.completed_at = new Date().toISOString()
