@@ -179,6 +179,7 @@ export const generateAnswer = async (
           { content: prompt, role: 'user' },
         ],
         model,
+        reasoningEffort: 'none',
         temperature: 0,
       })
 

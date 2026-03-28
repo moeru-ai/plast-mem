@@ -267,6 +267,7 @@ export const llmJudge = async (
     maxTokens: 16,
     messages: [{ content: prompt, role: 'user' }],
     model,
+    reasoningEffort: 'none',
     temperature: 0,
   })
 
