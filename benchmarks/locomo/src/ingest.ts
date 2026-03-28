@@ -3,6 +3,7 @@ import type { AddMessage } from 'plastmem'
 import type { DialogTurn, LoCoMoSample } from './types'
 
 import { readFile, writeFile } from 'node:fs/promises'
+import { stdout } from 'node:process'
 
 import { uuid } from '@insel-null/uuid'
 import { Spinner } from 'picospinner'
@@ -12,12 +13,13 @@ import { flushConversationTailWhenReady, waitUntilConversationAdmissible } from 
 
 // Minutes between consecutive turns within a session
 const TURN_INTERVAL_MINS = 1
+export interface OrderedSession { date: Date | null, turns: DialogTurn[] }
+
 interface BatchMessage {
   content: string
   role: string
   timestamp?: number
 }
-interface OrderedSession { date: Date | null, turns: DialogTurn[] }
 
 const runWithConcurrency = async (
   tasks: Array<() => Promise<void>>,
@@ -40,7 +42,7 @@ const runWithConcurrency = async (
   }
 
   await Promise.all(
-    Array.from({ length: Math.min(limit, tasks.length) }, async () => worker()),
+    Array.from({ length: Math.min(limit, tasks.length) }).fill(0).map(async () => worker()),
   )
 }
 
@@ -117,7 +119,7 @@ const sendMessage = async (
   throw new Error(`addMessage failed with status ${status}`)
 }
 
-const getOrderedSessions = (sample: LoCoMoSample): OrderedSession[] => {
+export const getOrderedSessions = (sample: LoCoMoSample): OrderedSession[] => {
   const sessions: OrderedSession[] = []
   for (let sn = 1; sn <= 100; sn++) {
     const turns = sample.conversation[`session_${sn}`]
@@ -195,12 +197,12 @@ export const ingestAll = async (
   const tasks = samples.map(sample => async () => {
     const existingConversationId = ids[sample.sample_id]
     if (existingConversationId != null && existingConversationId.length > 0) {
-      console.log(`  Reusing sample ${sample.sample_id} (${existingConversationId})`)
+      stdout.write(`  Reusing sample ${sample.sample_id} (${existingConversationId})\n`)
       return
     }
 
     const conversationId = uuid.v7()
-    console.log(`  Ingesting sample ${sample.sample_id} (${conversationId})`)
+    stdout.write(`  Ingesting sample ${sample.sample_id} (${conversationId})\n`)
     const spinner = new Spinner(`Ingesting sample ${sample.sample_id}`)
     let lastPct = 0
     await ingestSample(sample, conversationId, baseUrl, (done, total) => {
