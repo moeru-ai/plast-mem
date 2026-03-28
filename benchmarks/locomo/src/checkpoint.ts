@@ -125,12 +125,5 @@ export const resetCheckpointFile = async (path: string): Promise<void> => {
   await rm(path, { force: true })
 }
 
-export const isCheckpointCompatible = (
-  checkpoint: RunCheckpoint,
-  config: BenchmarkRunConfig,
-): boolean =>
-  checkpoint.version === CHECKPOINT_VERSION
-  && checkpoint.fingerprint === buildCheckpointFingerprint(config)
-
 export const getVariantOrder = (compareFullContext: boolean): BenchmarkVariant[] =>
   compareFullContext ? ['plastmem', 'full_context'] : ['plastmem']
