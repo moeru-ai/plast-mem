@@ -103,7 +103,7 @@ Results are written to `results/<timestamp>.json`:
   },
   "variants": {
     "plastmem": {
-      "stats": { "overall": { "overall": 0.42 } },
+      "stats": { "overall": { "overall": 0.42, "...": "..." }, "by_sample": { "...": "..." } },
       "results": [
         {
           "sample_id": "...",
