@@ -1,4 +1,4 @@
-import { log } from '@clack/prompts'
+import { spinner as createSpinner } from '@clack/prompts'
 import { sleep } from '@moeru/std'
 import { benchmarkFlush, benchmarkJobStatus } from 'plastmem'
 
@@ -32,10 +32,20 @@ export const getStatus = async (
   return res.data as ConversationStatus
 }
 
-const renderStatus = (id: string, status: ConversationStatus): string => {
-  const shortId = id.slice(0, 8)
-  const phase = status.done ? 'done' : 'wait'
-  return `${shortId}:p=${status.messages_pending},f=${status.fence_active ? 1 : 0},s=${status.segmentation_jobs_active},pc=${status.predict_calibrate_jobs_active},a=${status.admissible_for_add ? 1 : 0},fl=${status.flushable ? 1 : 0} ${phase}`
+const renderFlag = (value: boolean): string => value ? 'yes' : 'no'
+
+const renderStatus = (
+  index: number,
+  total: number,
+  status: ConversationStatus,
+): string => {
+  const prefix = total > 1 ? `conversation ${index + 1} ` : ''
+  return `${prefix}pending=${status.messages_pending}, `
+    + `fence=${renderFlag(status.fence_active)}, `
+    + `segmentation=${status.segmentation_jobs_active}, `
+    + `predict_calibrate=${status.predict_calibrate_jobs_active}, `
+    + `admissible=${renderFlag(status.admissible_for_add)}, `
+    + `flushable=${renderFlag(status.flushable)}`
 }
 
 export const waitUntilConversationAdmissible = async (
@@ -122,17 +132,23 @@ export const waitForAll = async (
 
   const pendingIds = new Set(uniqueIds)
   const flushedIds = new Set<string>()
+  const spinner = createSpinner()
+  spinner.start(uniqueIds.length === 1 ? 'Waiting for background jobs' : `Waiting for ${uniqueIds.length} conversations`)
   while (pendingIds.size > 0) {
     const statuses = await collectStatuses([...pendingIds], baseUrl)
 
-    const line = statuses.map(({ id, status }) => renderStatus(id, status)).join(' | ')
-    log.message(`[wait] ${line}`)
+    const line = statuses
+      .map(({ status }, index) => renderStatus(index, statuses.length, status))
+      .join(' | ')
+    spinner.message(line)
 
     await flushReadyConversations(statuses, baseUrl, flushedIds)
     removeCompletedConversations(statuses, pendingIds)
 
-    if (pendingIds.size === 0)
+    if (pendingIds.size === 0) {
+      spinner.stop(uniqueIds.length === 1 ? 'Background jobs settled' : 'All background jobs settled')
       break
+    }
 
     await sleep(POLL_INTERVAL_MS)
   }

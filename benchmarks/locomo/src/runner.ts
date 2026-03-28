@@ -15,7 +15,7 @@ import type {
 import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 
-import { log, note } from '@clack/prompts'
+import { log, note, spinner as createSpinner } from '@clack/prompts'
 
 import { getVariantOrder, saveCheckpoint } from './checkpoint'
 import { runWithConcurrency } from './concurrency'
@@ -28,7 +28,6 @@ import {
   computeComparison,
   computeStats,
   printSampleComparison,
-  printSampleSummary,
   renderComparison,
   renderStats,
 } from './stats'
@@ -53,6 +52,22 @@ const buildMeta = (config: BenchmarkRunConfig): BenchmarkMeta => ({
   timestamp: new Date().toISOString(),
   use_llm_judge: config.useLlmJudge,
 })
+
+const getVariantLabel = (variant: BenchmarkVariant): string =>
+  variant === 'plastmem' ? 'plast-mem' : 'Full Context'
+
+const formatSampleResultLine = (
+  label: string,
+  sampleId: string,
+  stats: QAResult[],
+): string => {
+  const summary = computeStats(stats).overall
+  return `${label} ${sampleId}  `
+    + `F1 ${(summary.overall * 100).toFixed(2)}%  `
+    + `NemoriF1 ${(summary.overall_nemori_f1 * 100).toFixed(2)}%  `
+    + `LLM ${(summary.overall_llm * 100).toFixed(2)}%  `
+    + `n=${summary.total}`
+}
 
 export const buildBenchmarkOutput = (checkpoint: RunCheckpoint): BenchmarkOutput => {
   const plastmemResults = Object.values(checkpoint.samples)
@@ -124,8 +139,8 @@ const evaluateVariant = async (
   config: BenchmarkRunConfig,
 ): Promise<PendingQAResult[]> => {
   const qaPairs = sample.qa.filter(qa => qa.category !== 5)
-  const label = variant === 'plastmem' ? 'plast-mem' : 'Full Context'
-  log.message(`${label}: evaluating ${qaPairs.length} questions`)
+  const spinner = createSpinner()
+  spinner.start(`Evaluating ${qaPairs.length} questions`)
 
   const contexts = Array.from<string>({ length: qaPairs.length }).fill('')
   await runWithConcurrency(
@@ -155,7 +170,7 @@ const evaluateVariant = async (
     QA_CONCURRENCY,
   )
 
-  log.success(`${label}: evaluation complete for ${qaPairs.length} questions`)
+  spinner.stop(`Evaluated ${qaPairs.length} questions`)
   return results.map((result, index) => {
     if (result == null)
       throw new Error(`Missing evaluated result for sample ${sample.sample_id} question #${index + 1}`)
@@ -169,8 +184,9 @@ const scoreVariant = async (
   config: BenchmarkRunConfig,
   results: PendingQAResult[],
 ): Promise<QAResult[]> => {
-  const label = variant === 'plastmem' ? 'plast-mem' : 'Full Context'
-  log.message(`${label}: scoring ${results.length} answers`)
+  const label = getVariantLabel(variant)
+  const spinner = createSpinner()
+  spinner.start(`Scoring ${results.length} answers`)
 
   const scored = Array.from<null | QAResult>({ length: results.length }).fill(null)
   await runWithConcurrency(
@@ -192,20 +208,7 @@ const scoreVariant = async (
   )
 
   const completed = scored.filter((result): result is QAResult => result != null)
-  const avgScore = completed.length > 0
-    ? completed.reduce((sum, result) => sum + result.score, 0) / completed.length
-    : 0
-  const avgNemoriF1 = completed.length > 0
-    ? completed.reduce((sum, result) => sum + result.nemori_f1_score, 0) / completed.length
-    : 0
-  const avgLlm = completed.length > 0
-    ? completed.reduce((sum, result) => sum + result.llm_judge_score, 0) / completed.length
-    : 0
-
-  log.success(
-    `${label}: sample ${sample.sample_id} score complete `
-    + `f1=${avgScore.toFixed(2)} nemoriF1=${avgNemoriF1.toFixed(2)} llm=${avgLlm.toFixed(2)}`,
-  )
+  spinner.stop(formatSampleResultLine(label, sample.sample_id, completed))
   return scored.map((result, index) => {
     if (result == null)
       throw new Error(`Missing scored result for sample ${sample.sample_id} question #${index + 1}`)
@@ -215,16 +218,7 @@ const scoreVariant = async (
 
 const printCompletedSampleSummary = (sample: LoCoMoSample, sampleCheckpoint: SampleCheckpoint): void => {
   const plastmemResults = getScoredResults(sampleCheckpoint.variants.plastmem?.results ?? [])
-  if (plastmemResults.length > 0) {
-    const plastmemSummary = computeStats(plastmemResults).overall
-    printSampleSummary('plast-mem', sample.sample_id, plastmemSummary)
-  }
-
   const fullContextResults = getScoredResults(sampleCheckpoint.variants.full_context?.results ?? [])
-  if (fullContextResults.length > 0) {
-    const fullContextSummary = computeStats(fullContextResults).overall
-    printSampleSummary('full-context', sample.sample_id, fullContextSummary)
-  }
 
   if (plastmemResults.length > 0 && fullContextResults.length > 0) {
     const comparison = computeComparison(plastmemResults, fullContextResults)

@@ -108,6 +108,11 @@ export const getOrderedSessions = (sample: LoCoMoSample): OrderedSession[] => {
 const countTotalTurns = (sessions: OrderedSession[]): number =>
   sessions.reduce((total, session) => total + session.turns.length, 0)
 
+const getSampleLabel = (sampleId: string): string => `Sample ${sampleId}`
+
+const getSampleDebugLabel = (sampleId: string, conversationId: string): string =>
+  `Sample ${sampleId} (${conversationId})`
+
 const getTurnTimestampMs = (sessionDate: Date | null, turnIndex: number): number | undefined => {
   if (sessionDate == null)
     return undefined
@@ -170,28 +175,28 @@ export const ingestAll = async (
   const tasks = samples.map(sample => async () => {
     const existingConversationId = ids[sample.sample_id]
     if (existingConversationId != null && existingConversationId.length > 0) {
-      log.info(`Reusing sample ${sample.sample_id} (${existingConversationId})`)
+      log.info(`Reusing ${getSampleLabel(sample.sample_id)}`)
       return
     }
 
     const conversationId = uuid.v7()
     const spinner = createSpinner()
-    spinner.start(`Ingesting sample ${sample.sample_id} (${conversationId})`)
+    spinner.start(`${getSampleDebugLabel(sample.sample_id, conversationId)} ingesting`)
     await ingestSample(sample, conversationId, baseUrl, (done, total) => {
-      spinner.message(`Ingesting sample ${sample.sample_id} (${conversationId}) ${done}/${total}`)
+      spinner.message(`${getSampleLabel(sample.sample_id)} ingesting ${done}/${total}`)
     })
     if (settleAndFlushAfterSampleIngest) {
-      spinner.message(`Waiting for episodic settle on sample ${sample.sample_id} (${conversationId})`)
+      spinner.message(`${getSampleLabel(sample.sample_id)} waiting for background jobs`)
       const flushed = await flushConversationTailWhenReady(baseUrl, conversationId)
       if (flushed)
-        spinner.message(`Flushed episodic tail for sample ${sample.sample_id} (${conversationId})`)
+        spinner.message(`${getSampleLabel(sample.sample_id)} flushed pending tail`)
     }
     ids[sample.sample_id] = conversationId
     if (onSampleComplete != null) {
       persistChain = persistChain.then(async () => onSampleComplete({ ...ids }))
       await persistChain
     }
-    spinner.stop(`Ingested sample ${sample.sample_id} (${conversationId})`)
+    spinner.stop(`${getSampleLabel(sample.sample_id)} ingested`)
   })
 
   await runWithConcurrency(tasks, concurrency)
