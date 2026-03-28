@@ -30,9 +30,9 @@ import { printFinalSummary, runBenchmark } from './runner'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
-const DEFAULT_CONCURRENCY = 4
 const DEFAULT_DATA_FILE = resolve(cwd(), 'data/locomo10.json')
 const COLON_DOT_RE = /[:.]/g
+const DEFAULT_CONCURRENCY = 4
 const LONG_CONTEXT_SAMPLE_IDS = ['conv-43', 'conv-47', 'conv-48'] as const
 const MINIMAL_SAMPLE_IDS = ['conv-42', 'conv-48'] as const
 const DEFAULT_SAMPLE_IDS = ['conv-42', 'conv-44', 'conv-48', 'conv-50'] as const
@@ -116,23 +116,6 @@ const promptForConfig = async (): Promise<BenchmarkRunConfig> => {
     ],
   }))
 
-  const concurrencyRaw = await prompt<string>(text({
-    defaultValue: String(DEFAULT_CONCURRENCY),
-    message: 'QA concurrency',
-    placeholder: String(DEFAULT_CONCURRENCY),
-    validate: (value: string | undefined) => {
-      if (value == null)
-        return 'Enter a positive integer.'
-      const parsed = Number.parseInt(value, 10)
-      return Number.isFinite(parsed) && parsed > 0 ? undefined : 'Enter a positive integer.'
-    },
-  }))
-
-  const waitForBackground = await prompt<boolean>(confirm({
-    initialValue: true,
-    message: 'Wait for background jobs after each sample ingest?',
-  }))
-
   const useLlmJudge = await prompt<boolean>(confirm({
     initialValue: false,
     message: 'Enable LLM judge scoring?',
@@ -159,13 +142,13 @@ const promptForConfig = async (): Promise<BenchmarkRunConfig> => {
   return {
     baseUrl,
     compareFullContext: compareMode === 'compare',
-    concurrency: Number.parseInt(concurrencyRaw, 10),
+    concurrency: DEFAULT_CONCURRENCY,
     dataFile: DEFAULT_DATA_FILE,
     model,
     outFile,
     sampleIds: selectedSampleIds.toSorted((left, right) => left.localeCompare(right)),
     useLlmJudge,
-    waitForBackground,
+    waitForBackground: true,
   }
 }
 

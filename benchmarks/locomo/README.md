@@ -41,8 +41,8 @@ At startup the CLI prompts for:
 
 - sample scope (defaults to `conv-42`, `conv-44`, `conv-48`, `conv-50`; can switch to `all` or custom selection)
 - compare mode (`plast-mem only` or `plast-mem + Full Context`)
-- QA concurrency
-- whether to wait for background jobs after each sample ingest
+- fixed QA concurrency (`4`)
+- always waits for background jobs after each sample ingest
 - whether to enable LLM judge scoring
 - base URL, model, and output file
 
