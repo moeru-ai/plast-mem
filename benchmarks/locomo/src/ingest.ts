@@ -5,8 +5,8 @@ import type { DialogTurn, LoCoMoSample } from './types'
 import { readFile, writeFile } from 'node:fs/promises'
 import { stdout } from 'node:process'
 
+import { spinner as createSpinner } from '@clack/prompts'
 import { uuid } from '@insel-null/uuid'
-import { Spinner } from 'picospinner'
 import { addMessage } from 'plastmem'
 
 import { flushConversationTailWhenReady, waitUntilConversationAdmissible } from './wait'
@@ -203,27 +203,28 @@ export const ingestAll = async (
 
     const conversationId = uuid.v7()
     stdout.write(`  Ingesting sample ${sample.sample_id} (${conversationId})\n`)
-    const spinner = new Spinner(`Ingesting sample ${sample.sample_id}`)
+    const spinner = createSpinner()
+    spinner.start(`Ingesting sample ${sample.sample_id}`)
     let lastPct = 0
     await ingestSample(sample, conversationId, baseUrl, (done, total) => {
       const pct = Math.floor((done / total) * 100)
       if (pct >= lastPct + 20) {
-        spinner.setText(`Ingesting sample ${sample.sample_id} (${conversationId}) ${pct}%`)
+        spinner.message(`Ingesting sample ${sample.sample_id} (${conversationId}) ${pct}%`)
         lastPct = pct
       }
     })
     if (settleAndFlushAfterSampleIngest) {
-      spinner.setText(`Waiting for episodic settle on sample ${sample.sample_id} (${conversationId})`)
+      spinner.message(`Waiting for episodic settle on sample ${sample.sample_id} (${conversationId})`)
       const flushed = await flushConversationTailWhenReady(baseUrl, conversationId)
       if (flushed)
-        spinner.setText(`Flushed episodic tail for sample ${sample.sample_id} (${conversationId})`)
+        spinner.message(`Flushed episodic tail for sample ${sample.sample_id} (${conversationId})`)
     }
     ids[sample.sample_id] = conversationId
     if (onSampleComplete != null) {
       persistChain = persistChain.then(async () => onSampleComplete({ ...ids }))
       await persistChain
     }
-    spinner.succeed(`Ingested sample ${sample.sample_id} (${conversationId})`)
+    spinner.stop(`Ingested sample ${sample.sample_id} (${conversationId})`)
   })
 
   await runWithConcurrency(tasks, concurrency)

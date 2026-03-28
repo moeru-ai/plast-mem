@@ -39,7 +39,6 @@ for each selected sample:
 
 At startup the CLI prompts for:
 
-- dataset path
 - sample scope (defaults to `conv-42`, `conv-44`, `conv-48`, `conv-50`; can switch to `all` or custom selection)
 - compare mode (`plast-mem only` or `plast-mem + Full Context`)
 - QA concurrency
@@ -49,6 +48,8 @@ At startup the CLI prompts for:
 
 ## Resume / Checkpoint
 
+- The dataset is always loaded from `benchmarks/locomo/data/locomo10.json`
+- If that file is missing, the CLI exits with the expected path and a `curl` command to download it
 - Each output file writes a sibling checkpoint file: `results/<run>.checkpoint.json`
 - Progress is persisted at sample-stage granularity:
   - ingest complete

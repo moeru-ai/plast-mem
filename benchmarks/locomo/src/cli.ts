@@ -3,7 +3,7 @@ import type { LoCoMoSample } from './types'
 
 import { readFile } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
-import { env, exit, loadEnvFile } from 'node:process'
+import { cwd, env, exit, loadEnvFile } from 'node:process'
 import { fileURLToPath } from 'node:url'
 
 import {
@@ -31,6 +31,7 @@ import { printFinalSummary, runBenchmark } from './runner'
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
 const DEFAULT_CONCURRENCY = 4
+const DEFAULT_DATA_FILE = resolve(cwd(), 'data/locomo10.json')
 const COLON_DOT_RE = /[:.]/g
 const DEFAULT_SAMPLE_IDS = ['conv-42', 'conv-44', 'conv-48', 'conv-50'] as const
 const TRAILING_SLASH_RE = /\/$/
@@ -52,19 +53,24 @@ const loadSamples = async (dataFile: string): Promise<LoCoMoSample[]> => {
   return JSON.parse(raw) as LoCoMoSample[]
 }
 
+const loadDefaultSamples = async (): Promise<LoCoMoSample[]> => {
+  try {
+    return await loadSamples(DEFAULT_DATA_FILE)
+  }
+  catch {
+    throw new Error(
+      `LoCoMo dataset not found at ${DEFAULT_DATA_FILE}.\n`
+      + 'Download it with:\n'
+      + `curl -L https://github.com/snap-research/locomo/raw/main/data/locomo10.json --create-dirs -o ${DEFAULT_DATA_FILE}`,
+    )
+  }
+}
+
 const promptForConfig = async (): Promise<BenchmarkRunConfig> => {
-  const defaultDataFile = resolve(__dirname, '../data/locomo10.json')
   const defaultOutFile = timestampedOutputPath()
   const defaultBaseUrl = (env.PLASTMEM_BASE_URL ?? 'http://localhost:3000').replace(TRAILING_SLASH_RE, '')
   const defaultModel = env.OPENAI_CHAT_MODEL ?? 'gpt-4o-mini'
-
-  const dataFile = resolve(await prompt<string>(text({
-    defaultValue: defaultDataFile,
-    message: 'LoCoMo dataset path',
-    placeholder: defaultDataFile,
-  })))
-
-  const allSamples = await loadSamples(dataFile)
+  const allSamples = await loadDefaultSamples()
   const sampleMode = await prompt<string>(select({
     initialValue: 'custom',
     message: 'Which samples should run?',
@@ -143,7 +149,7 @@ const promptForConfig = async (): Promise<BenchmarkRunConfig> => {
     baseUrl,
     compareFullContext: compareMode === 'compare',
     concurrency: Number.parseInt(concurrencyRaw, 10),
-    dataFile,
+    dataFile: DEFAULT_DATA_FILE,
     model,
     outFile,
     sampleIds: selectedSampleIds.toSorted((left, right) => left.localeCompare(right)),
@@ -208,7 +214,7 @@ const main = async (): Promise<void> => {
     exit(1)
   }
 
-  const allSamples = await loadSamples(config.dataFile)
+  const allSamples = await loadDefaultSamples()
   const samples = allSamples.filter(sample => config.sampleIds.includes(sample.sample_id))
   if (samples.length === 0) {
     cancel('No samples selected.')
