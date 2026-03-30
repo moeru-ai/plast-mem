@@ -17,11 +17,18 @@ pub async fn generate_text(
 
   let client = Client::with_config(config);
 
-  let request = CreateChatCompletionRequestArgs::default()
+  #[allow(deprecated)]
+  let mut request = CreateChatCompletionRequestArgs::default();
+  request
     .model(&APP_ENV.openai_chat_model)
     .messages(messages)
-    .reasoning_effort(ReasoningEffort::None)
-    .build()?;
+    .reasoning_effort(ReasoningEffort::None);
+
+  if let Some(seed) = APP_ENV.openai_chat_seed {
+    request.seed(seed);
+  }
+
+  let request = request.build()?;
 
   let chat = client.chat();
 

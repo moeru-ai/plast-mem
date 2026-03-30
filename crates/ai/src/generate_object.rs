@@ -151,7 +151,9 @@ where
   // OpenAI strict mode requires additionalProperties: false and all properties in required
   fix_schema_for_strict(&mut schema);
 
-  let request = CreateChatCompletionRequestArgs::default()
+  #[allow(deprecated)]
+  let mut request = CreateChatCompletionRequestArgs::default();
+  request
     .model(&APP_ENV.openai_chat_model)
     .messages(messages)
     .reasoning_effort(ReasoningEffort::None)
@@ -162,8 +164,13 @@ where
         schema: Some(schema),
         strict: Some(true),
       },
-    })
-    .build()?;
+    });
+
+  if let Some(seed) = APP_ENV.openai_chat_seed {
+    request.seed(seed);
+  }
+
+  let request = request.build()?;
 
   let chat = client.chat();
   let response = request_chat_completion_with_retry(|| chat.create(request.clone()))
