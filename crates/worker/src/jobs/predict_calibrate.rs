@@ -138,7 +138,6 @@ const DEDUPE_THRESHOLD: f64 = 0.95;
 const MAX_STATEMENTS_FOR_PREDICTION: usize = 10;
 const MAX_GUIDELINES_FOR_PREDICTION: usize = 3;
 const MAX_FACTS_FOR_ACTIONS: usize = 20;
-const DUPLICATE_CANDIDATE_LIMIT: usize = 5;
 
 pub async fn process_predict_calibrate(
   job: PredictCalibrateJob,
@@ -797,7 +796,6 @@ async fn find_similar_facts<C: ConnectionTrait>(
   for row in rows {
     results.push(semantic_memory::Model::from_query_result(&row, "")?);
   }
-  results.truncate(DUPLICATE_CANDIDATE_LIMIT);
   Ok(results)
 }
 
