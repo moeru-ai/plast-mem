@@ -70,7 +70,6 @@ const benchmarkRunConfigSchema = z.object({
 const variantCheckpointSchema = z.object({
   eval_done: z.boolean(),
   results: z.array(pendingQAResultSchema),
-  score_done: z.boolean(),
 })
 
 const sampleCheckpointSchema = z.object({

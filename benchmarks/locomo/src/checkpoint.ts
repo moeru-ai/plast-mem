@@ -47,13 +47,11 @@ export interface SampleCheckpoint {
 export interface VariantCheckpoint {
   eval_done: boolean
   results: PendingQAResult[]
-  score_done: boolean
 }
 
 const createVariantCheckpoint = (): VariantCheckpoint => ({
   eval_done: false,
   results: [],
-  score_done: false,
 })
 
 const createSampleCheckpoint = (
