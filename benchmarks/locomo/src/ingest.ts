@@ -19,6 +19,20 @@ interface BatchMessage {
   timestamp?: number
 }
 
+const appendImageContext = (parts: string[], caption?: string, query?: string): void => {
+  const normalizedCaption = caption?.trim()
+  if (normalizedCaption == null || normalizedCaption.length === 0)
+    return
+
+  const normalizedQuery = query?.trim()
+  if (normalizedQuery != null && normalizedQuery.length > 0) {
+    parts.push(`[Image: ${normalizedCaption}; Image Retrieval Keywords: ${normalizedQuery}]`)
+    return
+  }
+
+  parts.push(`[Image: ${normalizedCaption}]`)
+}
+
 const SESSION_DATE_RE = /^(\d{1,2}):(\d{2})\s*(am|pm)\s+on\s+(\d{1,2})\s+(\w+),\s+(\d{4})$/i
 const MONTH_INDEX_BY_NAME: Record<string, number> = {
   april: 3,
@@ -124,8 +138,10 @@ const buildMessages = (sample: LoCoMoSample): BatchMessage[] => {
         continue
 
       const timestamp = getTurnTimestampMs(session.date, i)
+      const parts = [turn.text.trim()]
+      appendImageContext(parts, turn.blip_caption, turn.query ?? turn.search_query)
       messages.push({
-        content: turn.text,
+        content: parts.join(' '),
         role: turn.speaker.trim() || 'User',
         ...(timestamp != null ? { timestamp } : {}),
       })

@@ -60,6 +60,7 @@ export interface DialogTurn {
   compressed_text?: string
   dia_id: string // e.g. "S1:D0"
   img_file?: string
+  query?: string
   search_query?: string
   speaker: string
   text: string

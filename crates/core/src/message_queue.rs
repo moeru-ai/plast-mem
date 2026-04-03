@@ -14,12 +14,12 @@ use uuid::Uuid;
 // Trigger constants
 // ──────────────────────────────────────────────────
 
-const WINDOW_BASE: usize = 30;
-const WINDOW_MAX: usize = 40;
+const WINDOW_BASE: usize = 20;
+const WINDOW_MAX: usize = 30;
 pub const FENCE_TTL_MINUTES: i64 = 120;
 const GAP_TRIGGER_HOURS: i64 = 3;
 
-pub const ADD_BACKPRESSURE_LIMIT: i32 = 35;
+pub const ADD_BACKPRESSURE_LIMIT: i32 = 25;
 
 // ──────────────────────────────────────────────────
 // Types

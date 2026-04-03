@@ -150,7 +150,7 @@ export const getContext = async (
         episodic_limit: 10,
         query: question,
         query_embedding: queryEmbedding,
-        semantic_limit: 5,
+        semantic_limit: 20,
       }
       const res = await retrieveMemory({
         baseUrl,
