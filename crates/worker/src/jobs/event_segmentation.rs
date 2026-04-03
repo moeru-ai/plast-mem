@@ -11,7 +11,7 @@ use plastmem_core::MessageQueue;
 
 const FLASHBULB_SURPRISE_THRESHOLD: f32 = 0.85;
 // Keep this in sync with `crates/core/src/message_queue.rs` WINDOW_MAX.
-const FORCE_SINGLE_SEGMENT_QUEUE_LEN: usize = 40;
+const FORCE_SINGLE_SEGMENT_QUEUE_LEN: usize = 30;
 use plastmem_entities::episodic_memory;
 use plastmem_shared::{APP_ENV, AppError, Message};
 use schemars::JsonSchema;

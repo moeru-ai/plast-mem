@@ -123,8 +123,15 @@ Decide how semantic memory should change after seeing where the prediction was w
 6. `new` should be used when no provided fact is an appropriate target.
 7. Facts must be atomic, self-contained, persistent, and retrieval-friendly.
 8. Preserve exact noun phrases when they matter for QA or retrieval.
-9. Prefer fewer high-quality actions over many weak ones.
+9. Prefer precise, durable actions over speculative ones.
 10. Use `confidence` between 0 and 1.
+
+## Fact quality
+- Extract only durable, high-value facts that are likely to remain useful over time.
+- Each fact must be atomic, self-contained, and understandable without the conversation context.
+- Keep specific supported details instead of broadening them into a more generic summary.
+- Skip temporary reactions, acknowledgements, vague statements, and context-dependent chatter.
+- Prefer a small set of precise facts, but if the episode supports multiple distinct durable facts, keep them separate.
 
 ## Update guidance
 - Use `update` for contradiction or material refinement, such as location changes, relationship changes, job changes, or replacing a vague fact with a more precise durable fact.
