@@ -41,6 +41,11 @@ interface EvaluationProgressState {
   clear: () => void
 }
 
+const NOOP_EVALUATION_PROGRESS_STATE: EvaluationProgressState = {
+  advance: () => {},
+  clear: () => {},
+}
+
 const isScoredResult = (result: PendingQAResult): result is QAResult =>
   result.llm_judge_score != null
   && result.nemori_f1_score != null
@@ -355,10 +360,7 @@ const runSample = async (
             sample,
             sampleCheckpoint,
             checkpoint.config,
-            evaluationProgress ?? {
-              advance: () => {},
-              clear: () => {},
-            },
+            evaluationProgress ?? NOOP_EVALUATION_PROGRESS_STATE,
           )
           variantCheckpoint.eval_done = true
           await persistState(checkpointPath, checkpoint)
