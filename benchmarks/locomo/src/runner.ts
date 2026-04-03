@@ -15,7 +15,7 @@ import type {
 import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 
-import { spinner as createSpinner, log, note } from '@clack/prompts'
+import { progress as createProgress, spinner as createSpinner, log, note } from '@clack/prompts'
 
 import { getVariantOrder, saveCheckpoint } from './checkpoint'
 import { runWithConcurrency } from './concurrency'
@@ -27,13 +27,24 @@ import { getContext } from './retrieve'
 import {
   computeComparison,
   computeStats,
-  printSampleComparison,
+  renderComparisonMarkdown,
+  renderSampleSummaryBlock,
   renderComparison,
+  renderStatsMarkdown,
   renderStats,
 } from './stats'
-import { waitForAll } from './wait'
 
 const QA_CONCURRENCY = 4
+
+interface EvaluationProgressState {
+  advance: (step: number, message: string) => void
+  clear: () => void
+}
+
+const NOOP_EVALUATION_PROGRESS_STATE: EvaluationProgressState = {
+  advance: () => {},
+  clear: () => {},
+}
 
 const isScoredResult = (result: PendingQAResult): result is QAResult =>
   result.llm_judge_score != null
@@ -55,19 +66,32 @@ const buildMeta = (config: BenchmarkRunConfig): BenchmarkMeta => ({
 })
 
 const getVariantLabel = (variant: BenchmarkVariant): string =>
-  variant === 'plastmem' ? 'plast-mem' : 'Full Context'
+  variant === 'plastmem' ? 'plast-mem' : 'full-context'
 
-const formatSampleResultLine = (
-  label: string,
-  sampleId: string,
-  stats: QAResult[],
+const renderBenchmarkMarkdown = (
+  output: BenchmarkOutput,
+  completedAt: null | string,
 ): string => {
-  const summary = computeStats(stats).overall
-  return `${label} ${sampleId}  `
-    + `F1 ${(summary.overall * 100).toFixed(2)}%  `
-    + `NemoriF1 ${(summary.overall_nemori_f1 * 100).toFixed(2)}%  `
-    + `LLM ${(summary.overall_llm * 100).toFixed(2)}%  `
-    + `n=${summary.total}`
+  const sections = [`# ${completedAt ?? output.meta.timestamp}`]
+
+  const plastmem = output.variants.plastmem
+  if (plastmem != null) {
+    sections.push('## plast-mem')
+    sections.push(renderStatsMarkdown(plastmem.stats))
+  }
+
+  const fullContext = output.variants.full_context
+  if (fullContext != null) {
+    sections.push('## full-context')
+    sections.push(renderStatsMarkdown(fullContext.stats))
+  }
+
+  if (output.comparison != null) {
+    sections.push('## delta')
+    sections.push(renderComparisonMarkdown(output.comparison))
+  }
+
+  return `${sections.join('\n\n')}\n`
 }
 
 export const buildBenchmarkOutput = (checkpoint: RunCheckpoint): BenchmarkOutput => {
@@ -104,8 +128,11 @@ const writeOutput = async (
   outFile: string,
   checkpoint: RunCheckpoint,
 ): Promise<void> => {
+  const output = buildBenchmarkOutput(checkpoint)
+  const markdownFile = outFile.replace(/\.json$/i, '.md')
   await mkdir(dirname(outFile), { recursive: true })
-  await writeFile(outFile, JSON.stringify(buildBenchmarkOutput(checkpoint), null, 2))
+  await writeFile(outFile, JSON.stringify(output, null, 2))
+  await writeFile(markdownFile, renderBenchmarkMarkdown(output, checkpoint.completed_at))
 }
 
 const persistState = async (
@@ -138,15 +165,22 @@ const evaluateVariant = async (
   sample: LoCoMoSample,
   sampleCheckpoint: SampleCheckpoint,
   config: BenchmarkRunConfig,
+  progressState: EvaluationProgressState,
 ): Promise<PendingQAResult[]> => {
   const qaPairs = sample.qa.filter(qa => qa.category !== 5)
-  const spinner = createSpinner()
-  spinner.start(`Evaluating ${qaPairs.length} questions`)
+  let retrievedCount = 0
+  let answeredCount = 0
+  const variantLabel = getVariantLabel(variant)
 
   const contexts = Array.from<string>({ length: qaPairs.length }).fill('')
   await runWithConcurrency(
     qaPairs.map((qa, index) => async () => {
       contexts[index] = await getContextForVariant(variant, sample, sampleCheckpoint, config, qa.question)
+      retrievedCount += 1
+      progressState.advance(
+        1,
+        `Evaluating ${sample.sample_id} ${variantLabel} (${retrievedCount}/${qaPairs.length} retrieved, ${answeredCount}/${qaPairs.length} answered)`,
+      )
     }),
     QA_CONCURRENCY,
   )
@@ -173,16 +207,43 @@ const evaluateVariant = async (
         sample_id: sample.sample_id,
         score: null,
       }
+      answeredCount += 1
+      progressState.advance(
+        1,
+        `Evaluating ${sample.sample_id} ${variantLabel} (${retrievedCount}/${qaPairs.length} retrieved, ${answeredCount}/${qaPairs.length} answered)`,
+      )
     }),
     QA_CONCURRENCY,
   )
-
-  spinner.stop(`Evaluated ${qaPairs.length} questions`)
   return results.map((result, index) => {
     if (result == null)
       throw new Error(`Missing evaluated result for sample ${sample.sample_id} question #${index + 1}`)
     return result
   })
+}
+
+const createEvaluationProgress = (
+  sample: LoCoMoSample,
+  sampleCheckpoint: SampleCheckpoint,
+  compareFullContext: boolean,
+): EvaluationProgressState | null => {
+  const qaPairs = sample.qa.filter(qa => qa.category !== 5)
+  const variantsToEvaluate = getVariantOrder(compareFullContext)
+    .filter((variant) => {
+      const variantCheckpoint = sampleCheckpoint.variants[variant]
+      return variantCheckpoint != null && !variantCheckpoint.eval_done
+    })
+
+  const totalSteps = variantsToEvaluate.length * qaPairs.length * 2
+  if (totalSteps === 0)
+    return null
+
+  const progress = createProgress({ max: totalSteps })
+  progress.start(`Evaluating ${sample.sample_id}`)
+  return {
+    advance: (step, message) => progress.advance(step, message),
+    clear: () => progress.clear(),
+  }
 }
 
 const scoreVariant = async (
@@ -191,9 +252,8 @@ const scoreVariant = async (
   config: BenchmarkRunConfig,
   results: PendingQAResult[],
 ): Promise<QAResult[]> => {
-  const label = getVariantLabel(variant)
   const spinner = createSpinner()
-  spinner.start(`Scoring ${results.length} answers`)
+  spinner.start(`Scoring ${getVariantLabel(variant)} (${results.length} answers)`)
 
   const scored = Array.from<null | QAResult>({ length: results.length }).fill(null)
   await runWithConcurrency(
@@ -221,8 +281,7 @@ const scoreVariant = async (
     QA_CONCURRENCY,
   )
 
-  const completed = scored.filter((result): result is QAResult => result != null)
-  spinner.stop(formatSampleResultLine(label, sample.sample_id, completed))
+  spinner.clear()
   return scored.map((result, index) => {
     if (result == null)
       throw new Error(`Missing scored result for sample ${sample.sample_id} question #${index + 1}`)
@@ -235,10 +294,14 @@ const printCompletedSampleSummary = (sample: LoCoMoSample, sampleCheckpoint: Sam
   const fullContextResults = getScoredResults(sampleCheckpoint.variants.full_context?.results ?? [])
 
   if (plastmemResults.length > 0 && fullContextResults.length > 0) {
+    const plastmemSummary = computeStats(plastmemResults).overall
+    const fullContextSummary = computeStats(fullContextResults).overall
     const comparison = computeComparison(plastmemResults, fullContextResults)
     const sampleDelta = comparison.by_sample[sample.sample_id]
-    if (sampleDelta != null)
-      printSampleComparison(sample.sample_id, sampleDelta)
+    note(
+      renderSampleSummaryBlock(plastmemSummary, fullContextSummary, sampleDelta),
+      `${sample.sample_id}  n=${plastmemSummary.total}`,
+    )
   }
 }
 
@@ -268,13 +331,6 @@ const ingestSampleIfNeeded = async (
 
   sampleCheckpoint.conversation_id = ids[sample.sample_id] ?? sampleCheckpoint.conversation_id
   sampleCheckpoint.ingest_done = true
-
-  if (config.waitForBackground) {
-    const conversationId = sampleCheckpoint.conversation_id
-    if (conversationId == null || conversationId.length === 0)
-      throw new Error(`No conversation_id after ingest for sample ${sample.sample_id}`)
-    await waitForAll([conversationId], config.baseUrl)
-  }
 }
 
 const runSample = async (
@@ -291,23 +347,34 @@ const runSample = async (
     log.step(`Sample ${sample.sample_id}`)
     await ingestSampleIfNeeded(sample, sampleCheckpoint, checkpoint.config, checkpoint, checkpointPath)
     await persistState(checkpointPath, checkpoint)
+    const evaluationProgress = createEvaluationProgress(sample, sampleCheckpoint, checkpoint.config.compareFullContext)
+    try {
+      for (const variant of getVariantOrder(checkpoint.config.compareFullContext)) {
+        const variantCheckpoint = sampleCheckpoint.variants[variant]
+        if (variantCheckpoint == null)
+          continue
 
-    for (const variant of getVariantOrder(checkpoint.config.compareFullContext)) {
-      const variantCheckpoint = sampleCheckpoint.variants[variant]
-      if (variantCheckpoint == null)
-        continue
+        if (!variantCheckpoint.eval_done) {
+          variantCheckpoint.results = await evaluateVariant(
+            variant,
+            sample,
+            sampleCheckpoint,
+            checkpoint.config,
+            evaluationProgress ?? NOOP_EVALUATION_PROGRESS_STATE,
+          )
+          variantCheckpoint.eval_done = true
+          await persistState(checkpointPath, checkpoint)
+        }
 
-      if (!variantCheckpoint.eval_done) {
-        variantCheckpoint.results = await evaluateVariant(variant, sample, sampleCheckpoint, checkpoint.config)
-        variantCheckpoint.eval_done = true
-        await persistState(checkpointPath, checkpoint)
+        if (!variantCheckpoint.score_done) {
+          variantCheckpoint.results = await scoreVariant(variant, sample, checkpoint.config, variantCheckpoint.results)
+          variantCheckpoint.score_done = true
+          await persistState(checkpointPath, checkpoint)
+        }
       }
-
-      if (!variantCheckpoint.score_done) {
-        variantCheckpoint.results = await scoreVariant(variant, sample, checkpoint.config, variantCheckpoint.results)
-        variantCheckpoint.score_done = true
-        await persistState(checkpointPath, checkpoint)
-      }
+    }
+    finally {
+      evaluationProgress?.clear()
     }
 
     sampleCheckpoint.status = 'complete'
@@ -350,7 +417,7 @@ export const printFinalSummary = (checkpoint: RunCheckpoint): void => {
 
   const fullContext = output.variants.full_context
   if (fullContext != null)
-    note(renderStats(fullContext.stats), 'Full Context')
+    note(renderStats(fullContext.stats), 'full-context')
 
   if (output.comparison != null)
     note(renderComparison(output.comparison), 'Delta vs Full Context')

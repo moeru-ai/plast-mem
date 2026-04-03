@@ -142,6 +142,9 @@ const loadLatestCheckpoint = async (): Promise<null | { checkpoint: RunCheckpoin
   if (checkpoint == null)
     return null
 
+  if (checkpoint.completed_at != null)
+    return null
+
   note(describeCheckpoint(checkpoint), 'Latest checkpoint found')
   const shouldResume = await prompt<boolean>(confirm({
     initialValue: true,
@@ -195,7 +198,7 @@ const promptForConfig = async (): Promise<BenchmarkRunConfig> => {
     message: 'Comparison mode',
     options: [
       { label: 'plast-mem only', value: 'plastmem' },
-      { label: 'plast-mem + Full Context', value: 'compare' },
+      { label: 'plast-mem + full-context', value: 'compare' },
     ],
   }))
 
@@ -262,7 +265,7 @@ const main = async (): Promise<void> => {
     `seed: ${config.seed ?? 'unset'}`,
     `baseUrl: ${config.baseUrl}`,
     `llmJudge: ${config.useLlmJudge ? 'on' : 'off'}`,
-    `compare: ${config.compareFullContext ? 'plast-mem + Full Context' : 'plast-mem only'}`,
+    `compare: ${config.compareFullContext ? 'plast-mem + full-context' : 'plast-mem only'}`,
   ].join('\n'), 'Run configuration')
 
   log.step('Running selected samples')

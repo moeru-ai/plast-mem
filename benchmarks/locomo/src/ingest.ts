@@ -206,13 +206,13 @@ export const ingestAll = async (
       progress.advance(1, `${getSampleLabel(sample.sample_id)} ingesting ${done}/${total}`)
     })
     if (settleAndFlushAfterSampleIngest) {
-      progress.stop(`${getSampleLabel(sample.sample_id)} ingested ${totalMessages}/${totalMessages}`)
+      progress.stop(`${getSampleLabel(sample.sample_id)} ingested ${totalMessages} messages`)
       const spinner = createSpinner()
       spinner.start(`${getSampleLabel(sample.sample_id)} waiting for background jobs`)
       const flushed = await flushConversationTailWhenReady(baseUrl, conversationId)
       if (flushed)
         spinner.message(`${getSampleLabel(sample.sample_id)} flushed pending tail`)
-      spinner.stop(`${getSampleLabel(sample.sample_id)} ingested`)
+      spinner.stop(`${getSampleLabel(sample.sample_id)} ready`)
     }
     else {
       progress.stop(`${getSampleLabel(sample.sample_id)} ingested`)

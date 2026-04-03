@@ -118,12 +118,19 @@ export const computeComparison = (
   }
 }
 
-const formatMetric = (label: string, value: number): string =>
-  `${label} ${(value * 100).toFixed(2)}%`
-
 const formatPercent = (value: number): string => `${(value * 100).toFixed(2)}%`
 
 const formatDeltaPercent = (value: number): string => `${value >= 0 ? '+' : ''}${(value * 100).toFixed(2)}%`
+
+const formatInlineSummary = (summary: BenchmarkScoreSummary): string =>
+  `F1 ${formatPercent(summary.overall)}  `
+  + `NemoriF1 ${formatPercent(summary.overall_nemori_f1)}  `
+  + `LLM ${formatPercent(summary.overall_llm)}`
+
+const formatInlineDelta = (metric: BenchmarkComparisonMetric): string =>
+  `F1 ${formatDeltaPercent(metric.score_delta)}  `
+  + `NemoriF1 ${formatDeltaPercent(metric.nemori_f1_delta)}  `
+  + `LLM ${formatDeltaPercent(metric.llm_judge_delta)}`
 
 const padCell = (value: string, width: number, align: 'left' | 'right' = 'left'): string =>
   align === 'right' ? value.padStart(width) : value.padEnd(width)
@@ -150,11 +157,19 @@ const buildTable = (
   return [headerLine, separatorLine, ...bodyLines].join('\n')
 }
 
-const formatSummaryLine = (summary: BenchmarkScoreSummary): string =>
-  `${formatMetric('F1', summary.overall)}  `
-  + `${formatMetric('NemoriF1', summary.overall_nemori_f1)}  `
-  + `${formatMetric('LLM', summary.overall_llm)}  `
-  + `n=${summary.total}`
+const buildMarkdownTable = (
+  headers: string[],
+  rows: string[][],
+  alignments: Array<'left' | 'right'>,
+): string => {
+  const alignmentRow = alignments.map(alignment => alignment === 'right' ? '---:' : ':---')
+  const lines = [
+    `| ${headers.join(' | ')} |`,
+    `| ${alignmentRow.join(' | ')} |`,
+    ...rows.map(row => `| ${row.join(' | ')} |`),
+  ]
+  return lines.join('\n')
+}
 
 export const renderStats = (stats: BenchmarkStats): string => {
   const sections: string[] = []
@@ -211,6 +226,61 @@ export const renderStats = (stats: BenchmarkStats): string => {
   return sections.join('\n\n')
 }
 
+export const renderStatsMarkdown = (stats: BenchmarkStats): string => {
+  const sections: string[] = []
+
+  sections.push('### Overall')
+  sections.push(buildMarkdownTable(
+    ['split', 'F1', 'NemoriF1', 'LLM', 'n'],
+    [[
+      'overall',
+      formatPercent(stats.overall.overall),
+      formatPercent(stats.overall.overall_nemori_f1),
+      formatPercent(stats.overall.overall_llm),
+      String(stats.overall.total),
+    ]],
+    ['left', 'right', 'right', 'right', 'right'],
+  ))
+
+  const sampleRows = Object.entries(stats.by_sample)
+    .map(([sampleId, summary]) => [
+      sampleId,
+      formatPercent(summary.overall),
+      formatPercent(summary.overall_nemori_f1),
+      formatPercent(summary.overall_llm),
+      String(summary.total),
+    ])
+
+  if (sampleRows.length > 0) {
+    sections.push('### Samples')
+    sections.push(buildMarkdownTable(
+      ['sample', 'F1', 'NemoriF1', 'LLM', 'n'],
+      sampleRows,
+      ['left', 'right', 'right', 'right', 'right'],
+    ))
+  }
+
+  const categoryRows = CATEGORIES
+    .filter(category => stats.overall.by_category_count[category] > 0)
+    .map(category => [
+      `c${category}`,
+      CATEGORY_NAMES[category],
+      formatPercent(stats.overall.by_category[category]),
+      formatPercent(stats.overall.by_category_nemori_f1[category]),
+      formatPercent(stats.overall.by_category_llm[category]),
+      String(stats.overall.by_category_count[category]),
+    ])
+
+  sections.push('### Categories')
+  sections.push(buildMarkdownTable(
+    ['id', 'category', 'F1', 'NemoriF1', 'LLM', 'n'],
+    categoryRows,
+    ['left', 'left', 'right', 'right', 'right', 'right'],
+  ))
+
+  return sections.join('\n\n')
+}
+
 export const renderComparison = (comparison: BenchmarkComparisonSummary): string => {
   const sections: string[] = []
 
@@ -228,7 +298,7 @@ export const renderComparison = (comparison: BenchmarkComparisonSummary): string
   sections.push('CATEGORY DELTA')
   sections.push(buildTable(
     ['id', 'category', 'F1', 'NemoriF1', 'LLM'],
-    CATEGORIES.map(category => [
+    CATEGORIES.filter(category => category !== 5).map(category => [
       `c${category}`,
       CATEGORY_NAMES[category],
       formatDeltaPercent(comparison.by_category[category].score_delta),
@@ -241,28 +311,50 @@ export const renderComparison = (comparison: BenchmarkComparisonSummary): string
   return sections.join('\n\n')
 }
 
-export const printSampleSummary = (
-  label: string,
-  sampleId: string,
-  summary: BenchmarkScoreSummary,
-): void => {
-  log.message(`${label} ${sampleId}  ${formatSummaryLine(summary)}`)
+export const renderComparisonMarkdown = (comparison: BenchmarkComparisonSummary): string => {
+  const sections: string[] = []
+
+  sections.push('### Overall Delta')
+  sections.push(buildMarkdownTable(
+    ['metric', 'delta'],
+    [
+      ['F1', formatDeltaPercent(comparison.overall.score_delta)],
+      ['NemoriF1', formatDeltaPercent(comparison.overall.nemori_f1_delta)],
+      ['LLM', formatDeltaPercent(comparison.overall.llm_judge_delta)],
+    ],
+    ['left', 'right'],
+  ))
+
+  sections.push('### Category Delta')
+  sections.push(buildMarkdownTable(
+    ['id', 'category', 'F1', 'NemoriF1', 'LLM'],
+    CATEGORIES.filter(category => category !== 5).map(category => [
+      `c${category}`,
+      CATEGORY_NAMES[category],
+      formatDeltaPercent(comparison.by_category[category].score_delta),
+      formatDeltaPercent(comparison.by_category[category].nemori_f1_delta),
+      formatDeltaPercent(comparison.by_category[category].llm_judge_delta),
+    ]),
+    ['left', 'left', 'right', 'right', 'right'],
+  ))
+
+  return sections.join('\n\n')
 }
 
-export const printSampleComparison = (
-  sampleId: string,
-  metric: BenchmarkComparisonMetric,
-): void => {
-  log.message([
-    'delta ',
-    sampleId,
-    '  ',
-    formatMetric('F1', metric.score_delta),
-    '  ',
-    formatMetric('NemoriF1', metric.nemori_f1_delta),
-    '  ',
-    formatMetric('LLM', metric.llm_judge_delta),
-  ].join(''))
+export const renderSampleSummaryBlock = (
+  plastmem: BenchmarkScoreSummary,
+  fullContext: BenchmarkScoreSummary,
+  delta?: BenchmarkComparisonMetric,
+): string => {
+  const lines = [
+    `plast-mem     ${formatInlineSummary(plastmem)}`,
+    `full-context  ${formatInlineSummary(fullContext)}`,
+  ]
+
+  if (delta != null)
+    lines.push(`delta         ${formatInlineDelta(delta)}`)
+
+  return lines.join('\n')
 }
 
 export const printStats = (stats: BenchmarkStats): void => {
