@@ -1,7 +1,7 @@
 import type {
   BenchmarkVariant,
   LoCoMoSample,
-  PendingQAResult,
+  QAResult,
 } from './types'
 
 import { createHash } from 'node:crypto'
@@ -46,14 +46,12 @@ export interface SampleCheckpoint {
 
 export interface VariantCheckpoint {
   eval_done: boolean
-  results: PendingQAResult[]
-  score_done: boolean
+  results: QAResult[]
 }
 
 const createVariantCheckpoint = (): VariantCheckpoint => ({
   eval_done: false,
   results: [],
-  score_done: false,
 })
 
 const createSampleCheckpoint = (

@@ -8,14 +8,13 @@ import type {
   BenchmarkOutput,
   BenchmarkVariant,
   LoCoMoSample,
-  PendingQAResult,
   QAResult,
 } from './types'
 
 import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 
-import { progress as createProgress, spinner as createSpinner, log, note } from '@clack/prompts'
+import { progress as createProgress, log, note } from '@clack/prompts'
 
 import { getVariantOrder, saveCheckpoint } from './checkpoint'
 import { runWithConcurrency } from './concurrency'
@@ -27,11 +26,11 @@ import { getContext } from './retrieve'
 import {
   computeComparison,
   computeStats,
+  renderComparison,
   renderComparisonMarkdown,
   renderSampleSummaryBlock,
-  renderComparison,
-  renderStatsMarkdown,
   renderStats,
+  renderStatsMarkdown,
 } from './stats'
 
 const QA_CONCURRENCY = 4
@@ -45,14 +44,6 @@ const NOOP_EVALUATION_PROGRESS_STATE: EvaluationProgressState = {
   advance: () => {},
   clear: () => {},
 }
-
-const isScoredResult = (result: PendingQAResult): result is QAResult =>
-  result.llm_judge_score != null
-  && result.nemori_f1_score != null
-  && result.score != null
-
-const getScoredResults = (results: PendingQAResult[]): QAResult[] =>
-  results.filter(isScoredResult)
 
 const buildMeta = (config: BenchmarkRunConfig): BenchmarkMeta => ({
   base_url: config.baseUrl,
@@ -96,10 +87,10 @@ const renderBenchmarkMarkdown = (
 
 export const buildBenchmarkOutput = (checkpoint: RunCheckpoint): BenchmarkOutput => {
   const plastmemResults = Object.values(checkpoint.samples)
-    .flatMap(sample => getScoredResults(sample.variants.plastmem?.results ?? []))
+    .flatMap(sample => sample.variants.plastmem?.results ?? [])
 
   const fullContextResults = Object.values(checkpoint.samples)
-    .flatMap(sample => getScoredResults(sample.variants.full_context?.results ?? []))
+    .flatMap(sample => sample.variants.full_context?.results ?? [])
 
   const variants: BenchmarkOutput['variants'] = {
     plastmem: {
@@ -166,10 +157,10 @@ const evaluateVariant = async (
   sampleCheckpoint: SampleCheckpoint,
   config: BenchmarkRunConfig,
   progressState: EvaluationProgressState,
-): Promise<PendingQAResult[]> => {
+): Promise<QAResult[]> => {
   const qaPairs = sample.qa.filter(qa => qa.category !== 5)
   let retrievedCount = 0
-  let answeredCount = 0
+  let scoredCount = 0
   const variantLabel = getVariantLabel(variant)
 
   const contexts = Array.from<string>({ length: qaPairs.length }).fill('')
@@ -179,13 +170,13 @@ const evaluateVariant = async (
       retrievedCount += 1
       progressState.advance(
         1,
-        `Evaluating ${sample.sample_id} ${variantLabel} (${retrievedCount}/${qaPairs.length} retrieved, ${answeredCount}/${qaPairs.length} answered)`,
+        `Evaluating ${sample.sample_id} ${variantLabel} (${retrievedCount}/${qaPairs.length} retrieved, ${scoredCount}/${qaPairs.length} scored)`,
       )
     }),
     QA_CONCURRENCY,
   )
 
-  const results = Array.from<null | PendingQAResult>({ length: qaPairs.length }).fill(null)
+  const results = Array.from<null | QAResult>({ length: qaPairs.length }).fill(null)
   await runWithConcurrency(
     qaPairs.map((qa, index) => async () => {
       const prediction = await generateAnswer(
@@ -195,22 +186,34 @@ const evaluateVariant = async (
         config.model,
         config.seed,
       )
+      const score = scoreAnswer(prediction, qa.answer, qa.category)
+      const nemoriF1Score = scoreAnswerNemoriF1(prediction, qa.answer)
+      const llmScore = config.useLlmJudge
+        ? await llmJudge(
+            prediction,
+            qa.answer,
+            qa.question,
+            qa.category,
+            config.model,
+            config.seed,
+          )
+        : 0
       results[index] = {
         category: qa.category,
         context_retrieved: contexts[index] ?? '',
         evidence: qa.evidence,
         gold_answer: qa.answer,
-        llm_judge_score: null,
-        nemori_f1_score: null,
+        llm_judge_score: llmScore,
+        nemori_f1_score: nemoriF1Score,
         prediction,
         question: qa.question,
         sample_id: sample.sample_id,
-        score: null,
+        score,
       }
-      answeredCount += 1
+      scoredCount += 1
       progressState.advance(
         1,
-        `Evaluating ${sample.sample_id} ${variantLabel} (${retrievedCount}/${qaPairs.length} retrieved, ${answeredCount}/${qaPairs.length} answered)`,
+        `Evaluating ${sample.sample_id} ${variantLabel} (${retrievedCount}/${qaPairs.length} retrieved, ${scoredCount}/${qaPairs.length} scored)`,
       )
     }),
     QA_CONCURRENCY,
@@ -246,52 +249,9 @@ const createEvaluationProgress = (
   }
 }
 
-const scoreVariant = async (
-  variant: BenchmarkVariant,
-  sample: LoCoMoSample,
-  config: BenchmarkRunConfig,
-  results: PendingQAResult[],
-): Promise<QAResult[]> => {
-  const spinner = createSpinner()
-  spinner.start(`Scoring ${getVariantLabel(variant)} (${results.length} answers)`)
-
-  const scored = Array.from<null | QAResult>({ length: results.length }).fill(null)
-  await runWithConcurrency(
-    results.map((result, index) => async () => {
-      const score = scoreAnswer(result.prediction, result.gold_answer, result.category)
-      const nemoriF1Score = scoreAnswerNemoriF1(result.prediction, result.gold_answer)
-      const llmScore = config.useLlmJudge
-        ? await llmJudge(
-            result.prediction,
-            result.gold_answer,
-            result.question,
-            result.category,
-            config.model,
-            config.seed,
-          )
-        : 0
-
-      scored[index] = {
-        ...result,
-        llm_judge_score: llmScore,
-        nemori_f1_score: nemoriF1Score,
-        score,
-      }
-    }),
-    QA_CONCURRENCY,
-  )
-
-  spinner.clear()
-  return scored.map((result, index) => {
-    if (result == null)
-      throw new Error(`Missing scored result for sample ${sample.sample_id} question #${index + 1}`)
-    return result
-  })
-}
-
 const printCompletedSampleSummary = (sample: LoCoMoSample, sampleCheckpoint: SampleCheckpoint): void => {
-  const plastmemResults = getScoredResults(sampleCheckpoint.variants.plastmem?.results ?? [])
-  const fullContextResults = getScoredResults(sampleCheckpoint.variants.full_context?.results ?? [])
+  const plastmemResults = sampleCheckpoint.variants.plastmem?.results ?? []
+  const fullContextResults = sampleCheckpoint.variants.full_context?.results ?? []
 
   if (plastmemResults.length > 0 && fullContextResults.length > 0) {
     const plastmemSummary = computeStats(plastmemResults).overall
@@ -363,12 +323,6 @@ const runSample = async (
             evaluationProgress ?? NOOP_EVALUATION_PROGRESS_STATE,
           )
           variantCheckpoint.eval_done = true
-          await persistState(checkpointPath, checkpoint)
-        }
-
-        if (!variantCheckpoint.score_done) {
-          variantCheckpoint.results = await scoreVariant(variant, sample, checkpoint.config, variantCheckpoint.results)
-          variantCheckpoint.score_done = true
           await persistState(checkpointPath, checkpoint)
         }
       }

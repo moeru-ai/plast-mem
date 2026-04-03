@@ -42,17 +42,17 @@ const qAPairSchema = z.object({
   return z.NEVER
 })
 
-const pendingQAResultSchema = z.object({
+const qAResultSchema = z.object({
   category: qACategorySchema,
   context_retrieved: z.string(),
   evidence: z.array(z.string()),
   gold_answer: z.union([z.number(), z.string()]),
-  llm_judge_score: z.number().nullable(),
-  nemori_f1_score: z.number().nullable(),
+  llm_judge_score: z.number(),
+  nemori_f1_score: z.number(),
   prediction: z.string(),
   question: z.string(),
   sample_id: z.string(),
-  score: z.number().nullable(),
+  score: z.number(),
 })
 
 const benchmarkRunConfigSchema = z.object({
@@ -69,8 +69,7 @@ const benchmarkRunConfigSchema = z.object({
 
 const variantCheckpointSchema = z.object({
   eval_done: z.boolean(),
-  results: z.array(pendingQAResultSchema),
-  score_done: z.boolean(),
+  results: z.array(qAResultSchema),
 })
 
 const sampleCheckpointSchema = z.object({
