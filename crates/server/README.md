@@ -94,6 +94,11 @@ See [recent_memory.rs](src/api/recent_memory.rs) for implementation.
 
 Recent episodic memories as JSON array.
 
+### Benchmark Endpoints
+
+`/api/v0/benchmark/flush` and `/api/v0/benchmark/job_status` are compiled only in development builds
+(`debug_assertions`). They are not available in release builds and are omitted from the release OpenAPI spec.
+
 ## Running the Server
 
 ```rust

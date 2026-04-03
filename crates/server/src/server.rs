@@ -7,7 +7,9 @@ use apalis_board_api::{
 use apalis_postgres::PostgresStorage;
 #[cfg(not(debug_assertions))]
 use axum::response::Html;
-use axum::{Extension, Router, response::Redirect, routing::get};
+use axum::{Router, routing::get};
+#[cfg(debug_assertions)]
+use axum::{Extension, response::Redirect};
 use plastmem_shared::AppError;
 use plastmem_worker::{EventSegmentationJob, MemoryReviewJob, PredictCalibrateJob};
 use sea_orm::DatabaseConnection;
