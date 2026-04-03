@@ -72,12 +72,6 @@ export interface LoCoMoSample {
   sample_id: string
 }
 
-export interface PendingQAResult extends Omit<QAResult, 'llm_judge_score' | 'nemori_f1_score' | 'score'> {
-  llm_judge_score: null | number
-  nemori_f1_score: null | number
-  score: null | number
-}
-
 // 1 = multi-hop, 2 = temporal, 3 = open-domain, 4 = single-hop, 5 = adversarial
 export type QACategory = 1 | 2 | 3 | 4 | 5
 

@@ -8,7 +8,6 @@ import type {
   BenchmarkOutput,
   BenchmarkVariant,
   LoCoMoSample,
-  PendingQAResult,
   QAResult,
 } from './types'
 
@@ -45,14 +44,6 @@ const NOOP_EVALUATION_PROGRESS_STATE: EvaluationProgressState = {
   advance: () => {},
   clear: () => {},
 }
-
-const isScoredResult = (result: PendingQAResult): result is QAResult =>
-  result.llm_judge_score != null
-  && result.nemori_f1_score != null
-  && result.score != null
-
-const getScoredResults = (results: PendingQAResult[]): QAResult[] =>
-  results.filter(isScoredResult)
 
 const buildMeta = (config: BenchmarkRunConfig): BenchmarkMeta => ({
   base_url: config.baseUrl,
@@ -96,10 +87,10 @@ const renderBenchmarkMarkdown = (
 
 export const buildBenchmarkOutput = (checkpoint: RunCheckpoint): BenchmarkOutput => {
   const plastmemResults = Object.values(checkpoint.samples)
-    .flatMap(sample => getScoredResults(sample.variants.plastmem?.results ?? []))
+    .flatMap(sample => sample.variants.plastmem?.results ?? [])
 
   const fullContextResults = Object.values(checkpoint.samples)
-    .flatMap(sample => getScoredResults(sample.variants.full_context?.results ?? []))
+    .flatMap(sample => sample.variants.full_context?.results ?? [])
 
   const variants: BenchmarkOutput['variants'] = {
     plastmem: {
@@ -259,8 +250,8 @@ const createEvaluationProgress = (
 }
 
 const printCompletedSampleSummary = (sample: LoCoMoSample, sampleCheckpoint: SampleCheckpoint): void => {
-  const plastmemResults = getScoredResults(sampleCheckpoint.variants.plastmem?.results ?? [])
-  const fullContextResults = getScoredResults(sampleCheckpoint.variants.full_context?.results ?? [])
+  const plastmemResults = sampleCheckpoint.variants.plastmem?.results ?? []
+  const fullContextResults = sampleCheckpoint.variants.full_context?.results ?? []
 
   if (plastmemResults.length > 0 && fullContextResults.length > 0) {
     const plastmemSummary = computeStats(plastmemResults).overall
