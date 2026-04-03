@@ -27,11 +27,11 @@ import { getContext } from './retrieve'
 import {
   computeComparison,
   computeStats,
+  renderComparison,
   renderComparisonMarkdown,
   renderSampleSummaryBlock,
-  renderComparison,
-  renderStatsMarkdown,
   renderStats,
+  renderStatsMarkdown,
 } from './stats'
 
 const QA_CONCURRENCY = 4
