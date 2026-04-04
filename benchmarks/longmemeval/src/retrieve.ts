@@ -113,5 +113,5 @@ export const getSampleContext = async (
   getContext({
     baseUrl,
     conversationId,
-    question: sample.improved_question ?? sample.question,
+    question: sample.question,
   })

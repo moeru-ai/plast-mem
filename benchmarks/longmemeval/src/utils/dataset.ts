@@ -11,8 +11,8 @@ import { downloadFileToCacheDir, getHFHubCachePath, getRepoFolderName } from '@h
 
 import * as p from '@clack/prompts'
 
-const REPO_ID = 'xiaowu0162/longmemeval-cleaned'
-const FILE_ID = 'longmemeval_s_cleaned.json'
+export const DATASET_REPO_ID = 'xiaowu0162/longmemeval-cleaned'
+export const DATASET_FILE_ID = 'longmemeval_s_cleaned.json'
 
 const longMemEvalTurnSchema = z.object({
   content: z.string(),
@@ -49,12 +49,12 @@ const longMemEvalDatasetSchema = z.array(longMemEvalSampleSchema).min(1, 'LongMe
 
 export const checkDataset = async (): Promise<string | undefined> => {
   const cacheDir = getHFHubCachePath()
-  const repoFolderName = getRepoFolderName({ name: REPO_ID, type: 'dataset' })
+  const repoFolderName = getRepoFolderName({ name: DATASET_REPO_ID, type: 'dataset' })
 
   const repoDir = join(cacheDir, repoFolderName)
   if (!existsSync(repoDir))
     return
-  p.log.info(`repo: ${REPO_ID}`)
+  p.log.info(`repo: ${DATASET_REPO_ID}`)
 
   const repoSnapshotsDir = join(repoDir, 'snapshots')
   if (!existsSync(repoSnapshotsDir))
@@ -65,10 +65,10 @@ export const checkDataset = async (): Promise<string | undefined> => {
     return
   p.log.info(`revision: ${revisions[0]}`)
 
-  const filePath = join(repoDir, 'snapshots', revisions[0], FILE_ID)
+  const filePath = join(repoDir, 'snapshots', revisions[0], DATASET_FILE_ID)
   if (!existsSync(filePath))
     return
-  p.log.info(`file: ${FILE_ID}`)
+  p.log.info(`file: ${DATASET_FILE_ID}`)
 
   return filePath
 }
@@ -88,10 +88,10 @@ export const downloadDataset = async () => {
   }
 
   return downloadFileToCacheDir({
-    accessToken: env.HF_TOKEN ?? hfToken, // TODO: loadEnvFile
-    path: FILE_ID,
+    accessToken: env.HF_TOKEN ?? hfToken,
+    path: DATASET_FILE_ID,
     repo: {
-      name: REPO_ID,
+      name: DATASET_REPO_ID,
       type: 'dataset',
     },
   })

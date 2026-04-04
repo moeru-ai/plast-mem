@@ -9,6 +9,8 @@ export interface GenerateAnswerOptions {
   model?: string
   question: string
   questionDate?: string
+  questionType?: LongMemEvalSample['question_type']
+  seed?: number
 }
 
 const getRequiredEnv = (key: 'OPENAI_API_KEY' | 'OPENAI_BASE_URL' | 'OPENAI_CHAT_MODEL'): string => {
@@ -23,13 +25,19 @@ const buildAnswerPrompt = ({
   context,
   question,
   questionDate,
+  questionType,
 }: GenerateAnswerOptions): string => [
-  'You are answering a LongMemEval question using retrieved memory snippets.',
-  'Use only the provided context.',
-  'If the context is insufficient, answer "Insufficient information."',
-  'Prefer the most recent fact when the context shows updates or contradictions.',
-  'Answer briefly and directly. Do not explain your reasoning.',
+  'You are a memory benchmark assistant answering a LongMemEval question from retrieved memories.',
+  'Use only the retrieved context. Do not invent facts, dates, names, counts, or recommendations.',
+  'If the retrieved context does not contain enough evidence, answer "Insufficient information."',
+  'When memories conflict, prefer the most recent supported state.',
+  'Convert relative time references to absolute dates or years before answering.',
+  'For counting questions, scan all relevant memories, deduplicate repeated references, and answer with the final count only.',
+  'For comparison questions, if one side is missing from the evidence, say that the information is insufficient.',
+  'For recommendation or preference questions, describe the kind of thing the user would prefer based on memory; do not fabricate specific recommendations.',
+  'Keep the final answer concise and direct. Do not explain your reasoning unless the question requires a computed value.',
   '',
+  questionType == null ? '' : `Question type: ${questionType}`,
   questionDate == null || questionDate.length === 0 ? '' : `Question date: ${questionDate}`,
   `Question: ${question}`,
   '',
@@ -44,6 +52,8 @@ export const generateAnswer = async ({
   model,
   question,
   questionDate,
+  questionType,
+  seed,
 }: GenerateAnswerOptions): Promise<string> => {
   const apiKey = getRequiredEnv('OPENAI_API_KEY')
   const baseURL = getRequiredEnv('OPENAI_BASE_URL')
@@ -58,10 +68,12 @@ export const generateAnswer = async ({
         context,
         question,
         questionDate,
+        questionType,
       }),
       role: 'user',
     }],
     model: resolvedModel,
+    seed,
     temperature: 0,
   })
 
@@ -72,10 +84,13 @@ export const generateSampleAnswer = async (
   sample: LongMemEvalSample,
   context: string,
   model?: string,
+  seed?: number,
 ): Promise<string> =>
   generateAnswer({
     context,
     model,
-    question: sample.improved_question ?? sample.question,
+    question: sample.question,
     questionDate: sample.question_date,
+    questionType: sample.question_type,
+    seed,
   })

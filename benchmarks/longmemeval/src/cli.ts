@@ -1,13 +1,16 @@
+import type { BenchmarkRunConfig, RunCheckpoint } from './checkpoint'
 import type {
   LongMemEvalDataset,
   LongMemEvalOutput,
+  LongMemEvalOutputItem,
   LongMemEvalQuestionType,
   LongMemEvalResult,
+  LongMemEvalSample,
 } from './types'
 
 import process, { env, loadEnvFile } from 'node:process'
 
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, writeFile } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
@@ -20,25 +23,56 @@ import { benchmarkJobStatus } from 'plastmem'
 import * as p from '@clack/prompts'
 
 import { name } from '../package.json'
+import {
+  buildCheckpointFingerprint,
+  buildCheckpointPath,
+  collectResults,
+  createCheckpoint,
+  loadCheckpoint,
+  saveCheckpoint,
+} from './checkpoint'
 import { judgeAnswer } from './evaluation'
-import { ingestSample, loadConversationIds, saveConversationIds } from './ingest'
+import { ingestSampleWithProgress } from './ingest'
 import { generateSampleAnswer } from './llm'
 import { getSampleContext } from './retrieve'
 import { computeStats } from './stats'
-import { checkDataset, downloadDataset, loadDataset } from './utils/dataset'
+import {
+  checkDataset,
+  DATASET_FILE_ID,
+  downloadDataset,
+  loadDataset,
+} from './utils/dataset'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
-const INITIAL_WAIT_MS = 10_000
-const POLL_INTERVAL_MS = 10_000
-
-type ConversationIdMap = Record<string, string>
+const INITIAL_WAIT_MS = 1_000
+const POLL_INTERVAL_MS = 5_000
+const CHECKPOINT_FILE_SUFFIX = '.checkpoint.json'
+const COLON_DOT_RE = /[:.]/g
 
 interface ConversationStatus {
-  apalis_active: number
+  admissible_for_add: boolean
   done: boolean
   fence_active: boolean
+  flushable: boolean
   messages_pending: number
+  predict_calibrate_jobs_active: number
+  segmentation_jobs_active: number
+}
+
+interface PreparedRunState {
+  checkpoint: RunCheckpoint
+  checkpointPath: string
+  config: BenchmarkRunConfig
+  dataset: LongMemEvalDataset
+  datasetById: Map<string, LongMemEvalSample>
+  datasetPath: string
+  latestOutFile: string
+  pendingDataset: LongMemEvalDataset
+  resumed: null | {
+    checkpoint: RunCheckpoint
+    checkpointPath: string
+  }
 }
 
 const getRequiredEnv = (key: 'OPENAI_CHAT_MODEL' | 'PLASTMEM_BASE_URL'): string => {
@@ -47,6 +81,17 @@ const getRequiredEnv = (key: 'OPENAI_CHAT_MODEL' | 'PLASTMEM_BASE_URL'): string 
     throw new Error(`Missing required environment variable: ${key}`)
   }
   return value
+}
+
+const getOptionalChatSeed = (): number | undefined => {
+  const rawSeed = env.OPENAI_CHAT_SEED?.trim()
+  if (rawSeed == null || rawSeed.length === 0)
+    return undefined
+
+  if (!/^-?\d+$/.test(rawSeed))
+    return undefined
+
+  return Number.parseInt(rawSeed, 10)
 }
 
 const loadWorkspaceEnv = (): void => {
@@ -137,7 +182,15 @@ const getStatus = async (
     query: { conversation_id: conversationId },
     throwOnError: true,
   })
-  return res.data as ConversationStatus
+  return {
+    admissible_for_add: res.data.admissible_for_add,
+    done: res.data.done,
+    fence_active: res.data.fence_active,
+    flushable: res.data.flushable,
+    messages_pending: res.data.messages_pending,
+    predict_calibrate_jobs_active: res.data.predict_calibrate_jobs_active,
+    segmentation_jobs_active: res.data.segmentation_jobs_active,
+  }
 }
 
 const waitForConversation = async (
@@ -150,26 +203,23 @@ const waitForConversation = async (
 
   while (true) {
     const status = await getStatus(baseUrl, conversationId)
-    if (status.done) {
+    if (status.done)
       return
-    }
 
     onStatus(
       `Waiting ${conversationId.slice(0, 8)} `
-      + `pending=${status.messages_pending} fence=${status.fence_active ? 1 : 0} apalis=${status.apalis_active}`,
+      + `pending=${status.messages_pending} fence=${status.fence_active ? 1 : 0} `
+      + `segmentation=${status.segmentation_jobs_active} predict_calibrate=${status.predict_calibrate_jobs_active}`,
     )
     await sleep(POLL_INTERVAL_MS)
   }
 }
 
 const buildOutputPath = (): string =>
-  resolve(__dirname, `../results/${new Date().toISOString().replace(/[:.]/g, '-')}.json`)
+  resolve(__dirname, `../results/${new Date().toISOString().replace(COLON_DOT_RE, '-')}.json`)
 
 const buildLatestOutputPath = (): string =>
   resolve(__dirname, '../results/latest.json')
-
-const buildConversationIdsPath = (): string =>
-  resolve(__dirname, '../results/conversation-ids.json')
 
 const resolveDatasetPath = async (): Promise<string> => {
   const cachedPath = await checkDataset()
@@ -177,7 +227,7 @@ const resolveDatasetPath = async (): Promise<string> => {
     return cachedPath
 
   const confirmDownload = await p.confirm({
-    message: 'The LongMemEval-S dataset was not found. Would you like to download it?',
+    message: 'The LongMemEval-S cleaned dataset was not found. Would you like to download it?',
   })
 
   if (confirmDownload !== true) {
@@ -199,7 +249,10 @@ const resolveDatasetPath = async (): Promise<string> => {
   }
 }
 
-const selectSamples = async (dataset: LongMemEvalDataset): Promise<LongMemEvalDataset> => {
+const selectSamples = async (dataset: LongMemEvalDataset): Promise<{
+  selectedDataset: LongMemEvalDataset
+  selectedQuestionTypes: LongMemEvalQuestionType[]
+}> => {
   const selectedQuestionTypes = await promptQuestionTypes(dataset)
   const filteredDataset = dataset.filter(sample => selectedQuestionTypes.includes(sample.question_type))
 
@@ -222,7 +275,10 @@ const selectSamples = async (dataset: LongMemEvalDataset): Promise<LongMemEvalDa
     `selected type counts: ${summarizeQuestionTypes(limitedDataset)}`,
   ].join('\n'), 'Run Summary')
 
-  return limitedDataset
+  return {
+    selectedDataset: limitedDataset,
+    selectedQuestionTypes,
+  }
 }
 
 const logFirstSampleSummary = (dataset: LongMemEvalDataset): void => {
@@ -236,97 +292,75 @@ const logFirstSampleSummary = (dataset: LongMemEvalDataset): void => {
   p.log.info(`first question: ${firstSample.question}`)
 }
 
-const loadArtifact = async (path: string): Promise<LongMemEvalOutput | null> => {
+const loadDatasetForPath = async (path: string): Promise<LongMemEvalDataset> => loadDataset(path)
+
+const getLatestCheckpointPath = async (): Promise<null | string> => {
   try {
-    const content = await readFile(path, 'utf-8')
-    return JSON.parse(content) as LongMemEvalOutput
+    const resultsDir = resolve(__dirname, '../results')
+    const entries = await readdir(resultsDir, { withFileTypes: true })
+    const checkpointNames = entries
+      .filter(entry => entry.isFile() && entry.name.endsWith(CHECKPOINT_FILE_SUFFIX))
+      .map(entry => entry.name)
+      .toSorted((left, right) => right.localeCompare(left))
+
+    return checkpointNames[0] == null ? null : resolve(resultsDir, checkpointNames[0])
   }
   catch {
     return null
   }
 }
 
-const promptReuseArtifact = async (existingCount: number): Promise<boolean> => {
-  const reuseExisting = await p.confirm({
+const describeCheckpoint = (checkpointPath: string, checkpoint: RunCheckpoint): string => {
+  const samples = Object.values(checkpoint.samples)
+  const complete = samples.filter(sample => sample.status === 'complete').length
+  const failed = samples.filter(sample => sample.status === 'failed').length
+  const running = samples.filter(sample => sample.status === 'running').length
+  const pending = samples.length - complete - failed - running
+
+  return [
+    `checkpoint: ${checkpointPath}`,
+    `started: ${checkpoint.started_at}`,
+    `updated: ${checkpoint.updated_at}`,
+    `complete: ${complete}`,
+    `failed: ${failed}`,
+    `running: ${running}`,
+    `pending: ${pending}`,
+  ].join('\n')
+}
+
+const loadLatestResumeCheckpoint = async () => {
+  const checkpointPath = await getLatestCheckpointPath()
+  if (checkpointPath == null)
+    return null
+
+  const checkpoint = await loadCheckpoint(checkpointPath)
+  if (checkpoint == null || checkpoint.completed_at != null)
+    return null
+
+  p.note(describeCheckpoint(checkpointPath, checkpoint), 'Latest checkpoint found')
+  const shouldResume = await p.confirm({
     initialValue: true,
-    message: `Reuse ${existingCount} completed results from the latest artifact?`,
+    message: 'Resume from the latest checkpoint?',
   })
 
-  if (p.isCancel(reuseExisting)) {
+  if (shouldResume !== true) {
+    if (!p.isCancel(shouldResume))
+      return null
     p.cancel('Operation cancelled.')
     process.exit(0)
   }
 
-  return reuseExisting
+  return { checkpoint, checkpointPath }
 }
 
-const promptReuseConversationIds = async (
-  reusableCount: number,
-  totalCount: number,
-): Promise<boolean> => {
-  const reuseExisting = await p.confirm({
-    initialValue: true,
-    message: `Reuse ${reusableCount}/${totalCount} existing conversation ids?`,
-  })
-
-  if (p.isCancel(reuseExisting)) {
-    p.cancel('Operation cancelled.')
-    process.exit(0)
+const loadDatasetForCheckpoint = async (config: BenchmarkRunConfig): Promise<LongMemEvalDataset> => {
+  try {
+    return await loadDatasetForPath(config.dataFile)
   }
-
-  return reuseExisting
-}
-
-const resolveConversationIds = async (
-  dataset: LongMemEvalDataset,
-): Promise<ConversationIdMap> => {
-  const conversationIdsPath = buildConversationIdsPath()
-  const cachedConversationIds = await loadConversationIds(conversationIdsPath)
-  const reusableEntries = Object.fromEntries(
-    dataset
-      .map(sample => [sample.question_id, cachedConversationIds[sample.question_id]])
-      .filter(([, conversationId]) => conversationId != null && conversationId.length > 0),
-  ) as ConversationIdMap
-
-  let conversationIds: ConversationIdMap = {}
-  if (Object.keys(reusableEntries).length > 0) {
-    const reuseExisting = await promptReuseConversationIds(
-      Object.keys(reusableEntries).length,
-      dataset.length,
-    )
-    if (reuseExisting)
-      conversationIds = reusableEntries
+  catch {
+    const fallbackPath = await resolveDatasetPath()
+    return loadDatasetForPath(fallbackPath)
   }
-
-  const pendingSamples = dataset.filter((sample) => {
-    const conversationId = conversationIds[sample.question_id]
-    return conversationId == null || conversationId.length === 0
-  })
-
-  if (pendingSamples.length > 0)
-    await saveConversationIds(conversationIdsPath, { ...cachedConversationIds, ...conversationIds })
-
-  return conversationIds
-}
-
-const ensureConversationId = async (
-  sample: LongMemEvalDataset[number],
-  baseUrl: string,
-  conversationIds: ConversationIdMap,
-  onStatus: (message: string) => void,
-): Promise<string> => {
-  const existingConversationId = conversationIds[sample.question_id]
-  if (existingConversationId != null && existingConversationId.length > 0)
-    return existingConversationId
-
-  const conversationId = uuid.v7()
-  const conversationIdsPath = buildConversationIdsPath()
-  onStatus(`Ingesting ${sample.question_id}`)
-  await ingestSample(sample, conversationId, baseUrl)
-
-  conversationIds[sample.question_id] = conversationId
-  await saveConversationIds(conversationIdsPath, conversationIds)
-  return conversationId
 }
 
 const formatStatsSummary = (results: LongMemEvalResult[]): string => {
@@ -343,63 +377,304 @@ const formatStatsSummary = (results: LongMemEvalResult[]): string => {
   ].join('\n')
 }
 
+const summarizeFailures = (checkpoint: RunCheckpoint): string[] =>
+  Object.values(checkpoint.samples)
+    .filter(sample => sample.status === 'failed')
+    .map(sample => `${sample.question_id}: ${sample.error ?? 'Unknown error'}`)
+
+const buildOutputItems = (results: LongMemEvalResult[], datasetById: Map<string, LongMemEvalSample>): LongMemEvalOutputItem[] =>
+  results.map((result) => {
+    const sample = datasetById.get(result.question_id)
+    const answer = sample == null ? result.gold_answer : String(sample.answer)
+
+    return {
+      item_id: result.question_id,
+      metrics: {
+        accuracy: result.score,
+        detailed_results: [{
+          ...result,
+          answer,
+          is_correct: result.score === 1,
+          is_invalid: false,
+          question_date: sample?.question_date ?? '',
+          response: result.prediction,
+        }],
+        is_correct: result.score === 1,
+        is_invalid: false,
+      },
+    }
+  })
+
 const writeArtifact = async (
-  outFile: string,
+  checkpointPath: string,
   latestOutFile: string,
-  baseUrl: string,
-  model: string,
-  results: LongMemEvalResult[],
+  checkpoint: Parameters<typeof collectResults>[0],
+  datasetById: Map<string, LongMemEvalSample>,
 ): Promise<void> => {
+  const results = collectResults(checkpoint)
   const output: LongMemEvalOutput = {
+    item_results: buildOutputItems(results, datasetById),
     meta: {
-      base_url: baseUrl,
-      model,
+      base_url: checkpoint.config.baseUrl,
+      checkpoint_path: checkpointPath,
+      dataset: checkpoint.config.datasetName,
+      model: checkpoint.config.model,
+      seed: checkpoint.config.seed,
       timestamp: new Date().toISOString(),
     },
-    results,
     stats: computeStats(results),
   }
 
-  await mkdir(dirname(outFile), { recursive: true })
-  await writeFile(outFile, JSON.stringify(output, null, 2))
+  await mkdir(dirname(checkpoint.config.outFile), { recursive: true })
+  await writeFile(checkpoint.config.outFile, JSON.stringify(output, null, 2))
   await writeFile(latestOutFile, JSON.stringify(output, null, 2))
 }
 
-const resolveRunState = async (
-  dataset: LongMemEvalDataset,
+const persistState = async (
+  checkpointPath: string,
   latestOutFile: string,
-): Promise<{
-  pendingDataset: LongMemEvalDataset
-  results: LongMemEvalResult[]
+  checkpoint: Parameters<typeof collectResults>[0],
+  datasetById: Map<string, LongMemEvalSample>,
+): Promise<void> => {
+  await saveCheckpoint(checkpointPath, checkpoint)
+  await writeArtifact(checkpointPath, latestOutFile, checkpoint, datasetById)
+}
+
+const createRunConfig = (
+  baseUrl: string,
+  model: string,
+  seed: number | undefined,
+  dataFile: string,
+  selectedQuestionTypes: LongMemEvalQuestionType[],
+  dataset: LongMemEvalDataset,
+): BenchmarkRunConfig => ({
+  baseUrl,
+  dataFile,
+  datasetName: DATASET_FILE_ID,
+  model,
+  outFile: buildOutputPath(),
+  questionTypes: [...selectedQuestionTypes],
+  sampleIds: dataset.map(sample => sample.question_id),
+  seed,
+  waitForBackground: true,
+})
+
+const createRunResult = (
+  sample: LongMemEvalSample,
+  conversationId: string,
+  context: string,
+  prediction: string,
+  score: 0 | 1,
+  verdict: string,
+): LongMemEvalResult => ({
+  context,
+  conversation_id: conversationId,
+  gold_answer: String(sample.answer),
+  prediction,
+  question: sample.question,
+  question_id: sample.question_id,
+  question_type: sample.question_type,
+  score,
+  verdict,
+})
+
+const resolveFreshRun = async (): Promise<{
+  checkpoint: RunCheckpoint
+  checkpointPath: string
+  config: BenchmarkRunConfig
+  dataset: LongMemEvalDataset
+  datasetPath: string
 }> => {
-  const artifact = await loadArtifact(latestOutFile)
-  if (artifact == null || artifact.results.length === 0) {
-    return {
-      pendingDataset: dataset,
-      results: [],
-    }
-  }
+  const baseUrl = getRequiredEnv('PLASTMEM_BASE_URL')
+  const model = getRequiredEnv('OPENAI_CHAT_MODEL')
+  const seed = getOptionalChatSeed()
+  const datasetPath = await resolveDatasetPath()
+  const allDataset = await loadDatasetForPath(datasetPath)
 
-  const reuseExisting = await promptReuseArtifact(artifact.results.length)
-  if (!reuseExisting) {
-    return {
-      pendingDataset: dataset,
-      results: [],
-    }
-  }
+  p.log.info(`file path: ${datasetPath}`)
+  p.log.info(`loaded samples: ${allDataset.length}`)
+  p.log.info(`question types: ${summarizeQuestionTypes(allDataset)}`)
 
-  const completedQuestionIds = new Set(artifact.results.map(result => result.question_id))
-  const pendingDataset = dataset.filter(sample => !completedQuestionIds.has(sample.question_id))
-
-  p.note([
-    `completed results reused: ${artifact.results.length}`,
-    `remaining samples: ${pendingDataset.length}/${dataset.length}`,
-  ].join('\n'), 'Resume Summary')
+  const selected = await selectSamples(allDataset)
+  const dataset = selected.selectedDataset
+  const config = createRunConfig(baseUrl, model, seed, datasetPath, selected.selectedQuestionTypes, dataset)
+  const checkpoint = createCheckpoint(config, dataset)
+  const checkpointPath = buildCheckpointPath(config.outFile)
 
   return {
-    pendingDataset,
-    results: artifact.results,
+    checkpoint,
+    checkpointPath,
+    config,
+    dataset,
+    datasetPath,
   }
+}
+
+const prepareRunState = async (): Promise<PreparedRunState> => {
+  const resumed = await loadLatestResumeCheckpoint()
+  const latestOutFile = buildLatestOutputPath()
+
+  let checkpoint: RunCheckpoint
+  let checkpointPath: string
+  let config: BenchmarkRunConfig
+  let dataset: LongMemEvalDataset
+  let datasetPath: string
+
+  if (resumed != null) {
+    checkpoint = resumed.checkpoint
+    checkpointPath = resumed.checkpointPath
+    config = checkpoint.config
+    dataset = await loadDatasetForCheckpoint(config)
+    datasetPath = config.dataFile
+  }
+  else {
+    const fresh = await resolveFreshRun()
+    checkpoint = fresh.checkpoint
+    checkpointPath = fresh.checkpointPath
+    config = fresh.config
+    dataset = fresh.dataset
+    datasetPath = fresh.datasetPath
+  }
+
+  const selectedIdSet = new Set(config.sampleIds)
+  const orderedDataset = dataset
+    .filter(sample => selectedIdSet.has(sample.question_id))
+    .toSorted((left, right) => config.sampleIds.indexOf(left.question_id) - config.sampleIds.indexOf(right.question_id))
+
+  if (buildCheckpointFingerprint(config) !== checkpoint.fingerprint)
+    throw new Error('Checkpoint fingerprint mismatch.')
+
+  const datasetById = new Map(orderedDataset.map(sample => [sample.question_id, sample]))
+  const pendingDataset = orderedDataset.filter((sample) => {
+    const sampleCheckpoint = checkpoint.samples[sample.question_id]
+    return sampleCheckpoint == null || sampleCheckpoint.status !== 'complete'
+  })
+
+  return {
+    checkpoint,
+    checkpointPath,
+    config,
+    dataset: orderedDataset,
+    datasetById,
+    datasetPath,
+    latestOutFile,
+    pendingDataset,
+    resumed,
+  }
+}
+
+const printRunConfig = (state: PreparedRunState): void => {
+  p.note([
+    `dataset: ${state.config.datasetName}`,
+    `file path: ${state.datasetPath}`,
+    `selected samples: ${state.dataset.length}`,
+    `question types: ${state.config.questionTypes.join(', ')}`,
+    `seed: ${state.config.seed ?? 'unset'}`,
+    `checkpoint: ${state.checkpointPath}`,
+    `output: ${state.config.outFile}`,
+  ].join('\n'), state.resumed == null ? 'Run Config' : 'Resumed Config')
+}
+
+const finalizeCompletedRun = async (state: PreparedRunState): Promise<void> => {
+  const results = collectResults(state.checkpoint)
+  await writeArtifact(state.checkpointPath, state.latestOutFile, state.checkpoint, state.datasetById)
+  p.note([
+    formatStatsSummary(results),
+    `results file: ${state.config.outFile}`,
+  ].join('\n'), 'Results')
+  p.outro('LongMemEval run complete.')
+}
+
+const runPendingSamples = async (state: PreparedRunState): Promise<void> => {
+  logFirstSampleSummary(state.pendingDataset)
+  const runSpinner = p.spinner()
+  let spinnerActive = false
+  const startSpinner = (message: string) => {
+    if (spinnerActive)
+      runSpinner.stop(message)
+    runSpinner.start(message)
+    spinnerActive = true
+  }
+  const stopSpinner = (message?: string) => {
+    if (!spinnerActive)
+      return
+    runSpinner.stop(message)
+    spinnerActive = false
+  }
+
+  startSpinner(`Running retrieval and evaluation for ${state.pendingDataset.length} samples`)
+
+  for (const [index, sample] of state.pendingDataset.entries()) {
+    const sampleCheckpoint = state.checkpoint.samples[sample.question_id]
+    if (sampleCheckpoint == null)
+      throw new Error(`Missing checkpoint entry for ${sample.question_id}`)
+
+    const setStage = (stage: string) => {
+      runSpinner.message(
+        `[${index + 1}/${state.pendingDataset.length}] ${stage} `
+        + `${sample.question_id} (${sample.question_type})`,
+      )
+    }
+
+    sampleCheckpoint.status = 'running'
+    sampleCheckpoint.error = null
+    await persistState(state.checkpointPath, state.latestOutFile, state.checkpoint, state.datasetById)
+
+    try {
+      let conversationId = sampleCheckpoint.conversation_id
+      if (conversationId == null || conversationId.length === 0) {
+        conversationId = uuid.v7()
+        sampleCheckpoint.conversation_id = conversationId
+      }
+
+      if (!sampleCheckpoint.ingest_done) {
+        setStage('Ingesting')
+        stopSpinner()
+        await ingestSampleWithProgress(sample, conversationId, state.config.baseUrl)
+        startSpinner(`Running retrieval and evaluation for ${state.pendingDataset.length} samples`)
+        sampleCheckpoint.ingest_done = true
+        await persistState(state.checkpointPath, state.latestOutFile, state.checkpoint, state.datasetById)
+      }
+
+      if (state.config.waitForBackground)
+        await waitForConversation(conversationId, state.config.baseUrl, setStage)
+
+      setStage('Retrieving')
+      const context = await getSampleContext(sample, conversationId, state.config.baseUrl)
+
+      setStage('Answering')
+      const prediction = await generateSampleAnswer(sample, context, state.config.model, state.config.seed)
+
+      setStage('Judging')
+      const judged = await judgeAnswer({
+        model: state.config.model,
+        prediction,
+        sample,
+        seed: state.config.seed,
+      })
+
+      sampleCheckpoint.result = createRunResult(
+        sample,
+        conversationId,
+        context,
+        prediction,
+        judged.score,
+        judged.verdict,
+      )
+      sampleCheckpoint.status = 'complete'
+      await persistState(state.checkpointPath, state.latestOutFile, state.checkpoint, state.datasetById)
+    }
+    catch (error) {
+      sampleCheckpoint.error = error instanceof Error ? error.message : String(error)
+      sampleCheckpoint.status = 'failed'
+      await persistState(state.checkpointPath, state.latestOutFile, state.checkpoint, state.datasetById)
+      p.log.error(`Sample ${sample.question_id} failed: ${sampleCheckpoint.error}`)
+    }
+  }
+
+  state.checkpoint.completed_at = new Date().toISOString()
+  await persistState(state.checkpointPath, state.latestOutFile, state.checkpoint, state.datasetById)
+  stopSpinner(`Evaluated ${state.pendingDataset.length} samples`)
 }
 
 const main = async () => {
@@ -410,81 +685,26 @@ const main = async () => {
 
   p.intro(c.bgCyan(c.black(` ${name} `)))
 
-  const baseUrl = getRequiredEnv('PLASTMEM_BASE_URL')
-  const model = getRequiredEnv('OPENAI_CHAT_MODEL')
-  const path = await resolveDatasetPath()
+  const state = await prepareRunState()
+  printRunConfig(state)
 
-  const dataset = await loadDataset(path)
+  if (state.pendingDataset.length === 0)
+    return finalizeCompletedRun(state)
 
-  p.log.info(`file path: ${path}`)
-  p.log.info(`loaded samples: ${dataset.length}`)
-  p.log.info(`question types: ${summarizeQuestionTypes(dataset)}`)
+  await runPendingSamples(state)
 
-  const filteredDataset = await selectSamples(dataset)
-  const outFile = buildOutputPath()
-  const latestOutFile = buildLatestOutputPath()
-  const runState = await resolveRunState(filteredDataset, latestOutFile)
-
-  if (runState.pendingDataset.length === 0) {
-    p.note([
-      formatStatsSummary(runState.results),
-      `results file: ${latestOutFile}`,
-    ].join('\n'), 'Results')
-    p.outro('LongMemEval run complete.')
-    return
-  }
-
-  logFirstSampleSummary(runState.pendingDataset)
-
-  const results = [...runState.results]
-  const conversationIds = await resolveConversationIds(runState.pendingDataset)
-  const runSpinner = p.spinner()
-  runSpinner.start(`Running retrieval and evaluation for ${runState.pendingDataset.length} samples`)
-  for (const [index, sample] of runState.pendingDataset.entries()) {
-    const setStage = (stage: string) => {
-      runSpinner.message(
-        `[${index + 1}/${runState.pendingDataset.length}] ${stage} `
-        + `${sample.question_id} (${sample.question_type})`,
-      )
-    }
-
-    const conversationId = await ensureConversationId(sample, baseUrl, conversationIds, setStage)
-    await waitForConversation(conversationId, baseUrl, setStage)
-
-    setStage('Retrieving')
-    const context = await getSampleContext(sample, conversationId, baseUrl)
-    setStage('Answering')
-    const prediction = await generateSampleAnswer(sample, context, model)
-    setStage('Judging')
-    const judged = await judgeAnswer({
-      model,
-      prediction,
-      sample,
-    })
-
-    results.push({
-      context,
-      conversation_id: conversationId,
-      gold_answer: String(sample.improved_answer ?? sample.answer),
-      prediction,
-      question: sample.improved_question ?? sample.question,
-      question_id: sample.question_id,
-      question_type: sample.question_type,
-      score: judged.score,
-      verdict: judged.verdict,
-    })
-    setStage('Saving')
-    await writeArtifact(outFile, latestOutFile, baseUrl, model, results)
-  }
-  runSpinner.stop(`Evaluated ${runState.pendingDataset.length} samples`)
-
-  await writeArtifact(outFile, latestOutFile, baseUrl, model, results)
-
+  const results = collectResults(state.checkpoint)
+  const failures = summarizeFailures(state.checkpoint)
   p.note([
     formatStatsSummary(results),
-    `latest results: ${latestOutFile}`,
-    `timestamped results: ${outFile}`,
+    `failed: ${failures.length}`,
+    `latest results: ${state.latestOutFile}`,
+    `timestamped results: ${state.config.outFile}`,
+    `checkpoint: ${state.checkpointPath}`,
   ].join('\n'), 'Results')
+
+  if (failures.length > 0)
+    p.log.error(`Failed samples:\n${failures.join('\n')}`)
 
   p.outro('LongMemEval run complete.')
 }

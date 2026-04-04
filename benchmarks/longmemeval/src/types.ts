@@ -1,13 +1,34 @@
 export type LongMemEvalDataset = LongMemEvalSample[]
 
+export interface LongMemEvalDetailedResult extends LongMemEvalResult {
+  answer: string
+  is_correct: boolean
+  is_invalid: boolean
+  question_date: string
+  response: string
+}
+
 export interface LongMemEvalOutput {
+  item_results: LongMemEvalOutputItem[]
   meta: {
     base_url: string
+    checkpoint_path?: string
+    dataset: string
     model: string
+    seed?: number
     timestamp: string
   }
-  results: LongMemEvalResult[]
   stats: LongMemEvalStats
+}
+
+export interface LongMemEvalOutputItem {
+  item_id: string
+  metrics: {
+    accuracy: number
+    detailed_results: LongMemEvalDetailedResult[]
+    is_correct: boolean
+    is_invalid: boolean
+  }
 }
 
 export type LongMemEvalQuestionType
