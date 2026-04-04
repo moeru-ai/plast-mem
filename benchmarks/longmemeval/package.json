@@ -13,7 +13,6 @@
     "@moeru/std": "catalog:",
     "@xsai/generate-text": "catalog:",
     "@xsai/tool": "catalog:",
-    "picospinner": "catalog:",
     "plastmem": "workspace:*",
     "tinyrainbow": "catalog:",
     "zod": "catalog:"
