@@ -157,12 +157,15 @@ export const ingestSample = async (
   await flushConversationTail(baseUrl, conversationId)
 }
 
+export const countSampleMessages = (sample: LongMemEvalSample): number =>
+  buildMessages(sample).length
+
 export const ingestSampleWithProgress = async (
   sample: LongMemEvalSample,
   conversationId: string,
   baseUrl: string,
 ): Promise<void> => {
-  const total = buildMessages(sample).length
+  const total = countSampleMessages(sample)
   const progress = createProgress({ max: Math.max(total, 1) })
   progress.start(`Ingesting ${sample.question_id} 0/${total}`)
 

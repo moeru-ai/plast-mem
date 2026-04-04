@@ -31,8 +31,9 @@ import {
   loadCheckpoint,
   saveCheckpoint,
 } from './checkpoint'
+import { runWithConcurrency } from './concurrency'
 import { judgeAnswer } from './evaluation'
-import { ingestSampleWithProgress } from './ingest'
+import { countSampleMessages, ingestSample, ingestSampleWithProgress } from './ingest'
 import { generateSampleAnswer } from './llm'
 import { getSampleContext } from './retrieve'
 import { computeStats } from './stats'
@@ -49,6 +50,7 @@ const INITIAL_WAIT_MS = 1_000
 const POLL_INTERVAL_MS = 5_000
 const CHECKPOINT_FILE_SUFFIX = '.checkpoint.json'
 const COLON_DOT_RE = /[:.]/g
+const INGEST_CONCURRENCY = 2
 
 interface ConversationStatus {
   admissible_for_add: boolean
@@ -575,6 +577,77 @@ const printRunConfig = (state: PreparedRunState): void => {
   ].join('\n'), state.resumed == null ? 'Run Config' : 'Resumed Config')
 }
 
+const ingestPendingSamples = async (state: PreparedRunState): Promise<void> => {
+  const samplesToIngest = state.pendingDataset.filter((sample) => {
+    const sampleCheckpoint = state.checkpoint.samples[sample.question_id]
+    return sampleCheckpoint != null && !sampleCheckpoint.ingest_done && sampleCheckpoint.status !== 'failed'
+  })
+  if (samplesToIngest.length === 0)
+    return
+
+  const ingestProgress = p.progress({ max: Math.max(samplesToIngest.length, 1) })
+  let completed = 0
+  let failed = 0
+  let persistChain = Promise.resolve()
+
+  const persistSequentially = async (): Promise<void> => {
+    persistChain = persistChain.then(async () => {
+      await persistState(state.checkpointPath, state.latestOutFile, state.checkpoint, state.datasetById)
+    })
+    await persistChain
+  }
+
+  ingestProgress.start(
+    `Pre-ingesting ${samplesToIngest.length} samples `
+    + `(concurrency ${INGEST_CONCURRENCY}, completed ${completed}/${samplesToIngest.length})`,
+  )
+
+  const tasks = samplesToIngest.map(sample => async () => {
+    const sampleCheckpoint = state.checkpoint.samples[sample.question_id]
+    if (sampleCheckpoint == null)
+      throw new Error(`Missing checkpoint entry for ${sample.question_id}`)
+
+    let conversationId = sampleCheckpoint.conversation_id
+    if (conversationId == null || conversationId.length === 0) {
+      conversationId = uuid.v7()
+      sampleCheckpoint.conversation_id = conversationId
+      await persistSequentially()
+    }
+
+    try {
+      await ingestSample(sample, conversationId, state.config.baseUrl)
+      sampleCheckpoint.ingest_done = true
+      sampleCheckpoint.error = null
+      completed += 1
+      ingestProgress.advance(
+        1,
+        `Pre-ingesting ${samplesToIngest.length} samples `
+        + `(concurrency ${INGEST_CONCURRENCY}, completed ${completed}/${samplesToIngest.length}, failed ${failed})`,
+      )
+      await persistSequentially()
+      p.log.info(`Ingested ${sample.question_id} (${countSampleMessages(sample)} messages)`)
+    }
+    catch (error) {
+      sampleCheckpoint.error = error instanceof Error ? error.message : String(error)
+      sampleCheckpoint.status = 'failed'
+      failed += 1
+      ingestProgress.advance(
+        1,
+        `Pre-ingesting ${samplesToIngest.length} samples `
+        + `(concurrency ${INGEST_CONCURRENCY}, completed ${completed}/${samplesToIngest.length}, failed ${failed})`,
+      )
+      await persistSequentially()
+      p.log.error(`Sample ${sample.question_id} failed during ingest: ${sampleCheckpoint.error}`)
+    }
+  })
+
+  await runWithConcurrency(tasks, INGEST_CONCURRENCY)
+  ingestProgress.stop(
+    `Pre-ingested ${samplesToIngest.length} samples `
+    + `(completed ${completed}, failed ${failed})`,
+  )
+}
+
 const finalizeCompletedRun = async (state: PreparedRunState): Promise<void> => {
   const results = collectResults(state.checkpoint)
   await writeArtifact(state.checkpointPath, state.latestOutFile, state.checkpoint, state.datasetById)
@@ -586,34 +659,29 @@ const finalizeCompletedRun = async (state: PreparedRunState): Promise<void> => {
 }
 
 const runPendingSamples = async (state: PreparedRunState): Promise<void> => {
-  logFirstSampleSummary(state.pendingDataset)
-  const runSpinner = p.spinner()
-  let spinnerActive = false
-  const startSpinner = (message: string) => {
-    if (spinnerActive)
-      runSpinner.stop(message)
-    runSpinner.start(message)
-    spinnerActive = true
-  }
-  const stopSpinner = (message?: string) => {
-    if (!spinnerActive)
-      return
-    runSpinner.stop(message)
-    spinnerActive = false
-  }
+  await ingestPendingSamples(state)
 
-  startSpinner(`Running retrieval and evaluation for ${state.pendingDataset.length} samples`)
+  const evaluableDataset = state.pendingDataset.filter((sample) => {
+    const sampleCheckpoint = state.checkpoint.samples[sample.question_id]
+    return sampleCheckpoint != null && sampleCheckpoint.status !== 'failed'
+  })
 
-  for (const [index, sample] of state.pendingDataset.entries()) {
+  if (evaluableDataset.length === 0)
+    return
+
+  logFirstSampleSummary(evaluableDataset)
+  const evaluationProgress = p.progress({ max: Math.max(evaluableDataset.length, 1) })
+  evaluationProgress.start(`Evaluating ${evaluableDataset.length} samples 0/${evaluableDataset.length}`)
+  let finished = 0
+
+  for (const [index, sample] of evaluableDataset.entries()) {
     const sampleCheckpoint = state.checkpoint.samples[sample.question_id]
     if (sampleCheckpoint == null)
       throw new Error(`Missing checkpoint entry for ${sample.question_id}`)
 
+    const samplePrefix = `[${index + 1}/${evaluableDataset.length}] ${sample.question_id} (${sample.question_type})`
     const setStage = (stage: string) => {
-      runSpinner.message(
-        `[${index + 1}/${state.pendingDataset.length}] ${stage} `
-        + `${sample.question_id} (${sample.question_type})`,
-      )
+      p.log.info(`${samplePrefix} ${stage}`)
     }
 
     sampleCheckpoint.status = 'running'
@@ -629,9 +697,7 @@ const runPendingSamples = async (state: PreparedRunState): Promise<void> => {
 
       if (!sampleCheckpoint.ingest_done) {
         setStage('Ingesting')
-        stopSpinner()
         await ingestSampleWithProgress(sample, conversationId, state.config.baseUrl)
-        startSpinner(`Running retrieval and evaluation for ${state.pendingDataset.length} samples`)
         sampleCheckpoint.ingest_done = true
         await persistState(state.checkpointPath, state.latestOutFile, state.checkpoint, state.datasetById)
       }
@@ -663,18 +729,22 @@ const runPendingSamples = async (state: PreparedRunState): Promise<void> => {
       )
       sampleCheckpoint.status = 'complete'
       await persistState(state.checkpointPath, state.latestOutFile, state.checkpoint, state.datasetById)
+      finished += 1
+      evaluationProgress.advance(1, `Evaluating ${evaluableDataset.length} samples ${finished}/${evaluableDataset.length}`)
     }
     catch (error) {
       sampleCheckpoint.error = error instanceof Error ? error.message : String(error)
       sampleCheckpoint.status = 'failed'
       await persistState(state.checkpointPath, state.latestOutFile, state.checkpoint, state.datasetById)
       p.log.error(`Sample ${sample.question_id} failed: ${sampleCheckpoint.error}`)
+      finished += 1
+      evaluationProgress.advance(1, `Evaluating ${evaluableDataset.length} samples ${finished}/${evaluableDataset.length}`)
     }
   }
 
   state.checkpoint.completed_at = new Date().toISOString()
   await persistState(state.checkpointPath, state.latestOutFile, state.checkpoint, state.datasetById)
-  stopSpinner(`Evaluated ${state.pendingDataset.length} samples`)
+  evaluationProgress.stop(`Evaluated ${evaluableDataset.length} samples`)
 }
 
 const main = async () => {
