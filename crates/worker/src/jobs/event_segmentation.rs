@@ -282,7 +282,7 @@ fn score_candidate_boundaries(
       _ => 0.0,
     };
 
-    let cue_phrase = if starts_with_topic_cue(&current.joined_content) {
+    let cue_phrase = if unit_starts_with_topic_cue(current) {
       0.7
     } else {
       0.0
@@ -605,7 +605,13 @@ async fn persist_closed_spans(
     });
   }
 
-  let open_tail_start_seq = if eof_seen {
+  let effective_eof_seen = state_model.eof_seen || eof_seen;
+  let processed_all_seen_messages = state_model
+    .last_seen_seq
+    .is_none_or(|last_seen_seq| last_seen_seq <= claimed_until_seq);
+  let can_finalize_tail_now = effective_eof_seen && processed_all_seen_messages;
+
+  let open_tail_start_seq = if can_finalize_tail_now {
     None
   } else if let Some(last_closed_end_seq) = max_closed_end_seq {
     Some(last_closed_end_seq + 1)
@@ -613,17 +619,17 @@ async fn persist_closed_spans(
     Some(units.first().map_or(state_model.next_unsegmented_seq, |unit| unit.start_seq))
   };
 
-  if eof_seen && max_closed_end_seq.is_none() {
+  if can_finalize_tail_now && max_closed_end_seq.is_none() {
     next_unsegmented_seq = claimed_until_seq + 1;
   }
 
-  let should_clear_eof = eof_seen && open_tail_start_seq.is_none();
+  let should_clear_eof = effective_eof_seen && open_tail_start_seq.is_none() && processed_all_seen_messages;
   let mut active_state: segmentation_state::ActiveModel = state_model.into_active_model();
   active_state.next_unsegmented_seq = Set(next_unsegmented_seq);
   active_state.open_tail_start_seq = Set(open_tail_start_seq);
   active_state.in_progress_until_seq = Set(None);
   active_state.in_progress_since = Set(None);
-  active_state.eof_seen = Set(if should_clear_eof { false } else { eof_seen });
+  active_state.eof_seen = Set(if should_clear_eof { false } else { effective_eof_seen });
   active_state.last_closed_boundary_context = Set(last_boundary_context);
   active_state.updated_at = Set(Utc::now().into());
   active_state.update(&txn).await?;
@@ -891,6 +897,17 @@ fn starts_with_topic_cue(text: &str) -> bool {
   ]
   .iter()
   .any(|cue| normalized.starts_with(cue))
+}
+
+fn unit_starts_with_topic_cue(unit: &AnalysisUnit) -> bool {
+  unit
+    .messages
+    .iter()
+    .find_map(|record| {
+      let content = record.message.content.trim();
+      (!content.is_empty()).then_some(content)
+    })
+    .is_some_and(starts_with_topic_cue)
 }
 
 fn to_messages(records: &[ConversationMessageRecord]) -> Vec<Message> {

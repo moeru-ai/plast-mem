@@ -251,7 +251,7 @@ pub async fn append_messages(
     .map(serde_json::from_value)
     .transpose()?;
   let prior_in_progress_until_seq = state_model.in_progress_until_seq;
-  let eof_seen = eof;
+  let eof_seen = state_model.eof_seen || eof;
 
   let state_snapshot = SegmentationState {
     conversation_id,
