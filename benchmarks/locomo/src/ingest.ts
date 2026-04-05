@@ -2,7 +2,7 @@ import type { ImportMessages } from 'plastmem'
 
 import type { DialogTurn, LoCoMoSample } from './types'
 
-import { progress as createProgress, spinner as createSpinner, log } from '@clack/prompts'
+import { progress as createProgress, log } from '@clack/prompts'
 import { uuid } from '@insel-null/uuid'
 import { messagesImport } from 'plastmem'
 
@@ -180,10 +180,7 @@ export const ingestAll = async (
     })
     if (settleAndFlushAfterSampleIngest) {
       progress.stop(`${getSampleLabel(sample.sample_id)} ingested ${totalMessages} messages`)
-      const spinner = createSpinner()
-      spinner.start(`${getSampleLabel(sample.sample_id)} waiting for background jobs`)
       await waitForAll([conversationId], baseUrl)
-      spinner.stop(`${getSampleLabel(sample.sample_id)} ready`)
     }
     else {
       progress.stop(`${getSampleLabel(sample.sample_id)} ingested`)
