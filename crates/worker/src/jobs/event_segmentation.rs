@@ -38,6 +38,8 @@ Decide whether the candidate boundary is a real episodic split.
 
 Use these principles:
 - Favor topic shift, intent shift, temporal gap, and surprise discontinuity.
+- Do NOT split ordinary back-and-forth turns, acknowledgements, answers, or follow-up questions when they are still about the same local exchange.
+- Keep short question-answer exchanges together unless there is a clear new topic, a clear new activity, or a strong temporal/session break.
 - A boundary must land on the first message of the new segment.
 - `boundary_reason` must be exactly one of:
   `topic_shift`, `intent_shift`, `surprise_shift`, `temporal_gap`, `session_break`
@@ -126,6 +128,7 @@ struct CandidateBoundary {
   cue_phrase: f32,
   semantic_drop: f32,
   online_surprise_prior: f32,
+  micro_exchange_penalty: f32,
 }
 
 #[derive(Debug, Clone)]
@@ -251,10 +254,6 @@ fn should_merge_into_unit(unit: &AnalysisUnit, next: &ConversationMessageRecord)
     return false;
   }
 
-  if starts_with_topic_cue(&next.message.content) {
-    return false;
-  }
-
   let combined_chars = unit
     .messages
     .iter()
@@ -282,18 +281,20 @@ fn score_candidate_boundaries(
       _ => 0.0,
     };
 
-    let cue_phrase = if unit_starts_with_topic_cue(current) {
-      0.7
-    } else {
-      0.0
-    };
+    let cue_phrase = structural_boundary_cue(previous, current);
 
-    let semantic_drop = semantic_drop_score(&previous.token_set, &current.token_set);
+    let micro_exchange_penalty = micro_exchange_penalty(previous, current, time_gap, cue_phrase);
+    let semantic_drop =
+      (semantic_drop_score(&previous.token_set, &current.token_set) - micro_exchange_penalty * 0.45)
+        .clamp(0.0, 1.0);
     let online_surprise_prior =
       online_surprise_prior(previous, current, boundary_context, time_gap, cue_phrase, semantic_drop);
-    let score = time_gap + cue_phrase + semantic_drop + online_surprise_prior;
+    let score =
+      (time_gap + cue_phrase + semantic_drop + online_surprise_prior - micro_exchange_penalty).max(0.0);
 
-    if score >= 1.2 || time_gap >= 0.8 || cue_phrase >= 0.7 {
+    let strong_context_free_candidate =
+      semantic_drop >= 0.82 && online_surprise_prior >= 0.38 && micro_exchange_penalty < 0.25;
+    if score >= 1.55 || time_gap >= 0.8 || cue_phrase >= 0.7 || strong_context_free_candidate {
       candidates.push(CandidateBoundary {
         next_unit_index,
         score,
@@ -301,6 +302,7 @@ fn score_candidate_boundaries(
         cue_phrase,
         semantic_drop,
         online_surprise_prior,
+        micro_exchange_penalty,
       });
     }
   }
@@ -358,13 +360,68 @@ fn online_surprise_prior(
     .zip(current.messages.first())
     .is_some_and(|(prev, next)| prev.message.role != next.message.role)
   {
-    0.1
+    0.05
   } else {
     0.0
   };
 
-  (0.35 * time_gap + 0.25 * cue_phrase + 0.25 * semantic_drop + 0.15 * context_novelty + speaker_shift)
+  (0.4 * time_gap + 0.25 * cue_phrase + 0.15 * semantic_drop + 0.15 * context_novelty + speaker_shift)
     .clamp(0.0, 1.0)
+}
+
+fn micro_exchange_penalty(
+  previous: &AnalysisUnit,
+  current: &AnalysisUnit,
+  time_gap: f32,
+  cue_phrase: f32,
+) -> f32 {
+  if time_gap > 0.0 || cue_phrase > 0.0 {
+    return 0.0;
+  }
+
+  let Some(previous_last) = previous.messages.last() else {
+    return 0.0;
+  };
+  let Some(current_first) = current.messages.first() else {
+    return 0.0;
+  };
+
+  if previous_last.message.role == current_first.message.role {
+    return 0.0;
+  }
+
+  let previous_text = previous_last.message.content.trim();
+  let current_text = current_first.message.content.trim();
+  let previous_short = previous_text.len() <= 220;
+  let current_short = current_text.len() <= 220;
+  if !previous_short || !current_short {
+    return 0.0;
+  }
+
+  let previous_tokens = &previous.token_set;
+  let current_tokens = &current.token_set;
+  let shared_tokens = previous_tokens
+    .iter()
+    .filter(|token| current_tokens.contains(*token))
+    .count();
+  let question_answer_shape =
+    ends_with_question_marker(previous_text) || ends_with_question_marker(current_text);
+  let char_overlap = char_ngram_overlap(previous_text, current_text);
+  let compact_turn_pair = previous_text.len() <= 140 && current_text.len() <= 140;
+
+  if question_answer_shape {
+    return 0.6;
+  }
+
+  if shared_tokens >= 1 || (compact_turn_pair && char_overlap >= 0.18) {
+    return 0.45;
+  }
+
+  if compact_turn_pair && previous.messages.len() == 1 && current.messages.len() == 1 {
+    return 0.2;
+  }
+
+  0.0
 }
 
 async fn refine_candidate_boundaries(
@@ -430,12 +487,14 @@ async fn request_boundary_refinement(
      - time_gap: {:.2}\n\
      - cue_phrase: {:.2}\n\
      - semantic_drop: {:.2}\n\
-     - online_surprise_prior: {:.2}\n\n\
+     - online_surprise_prior: {:.2}\n\
+     - micro_exchange_penalty: {:.2}\n\n\
      Local units:\n{}",
     candidate.time_gap,
     candidate.cue_phrase,
     candidate.semantic_drop,
     candidate.online_surprise_prior,
+    candidate.micro_exchange_penalty,
     lines.join("\n\n")
   );
 
@@ -453,7 +512,9 @@ async fn request_boundary_refinement(
 }
 
 fn fallback_boundary_refinement(candidate: &CandidateBoundary) -> LocalBoundaryRefinerOutput {
-  let is_boundary = candidate.score >= 1.6 || candidate.time_gap >= 0.8 || candidate.cue_phrase >= 0.7;
+  let is_boundary = candidate.score >= 1.85
+    || candidate.time_gap >= 0.8
+    || (candidate.cue_phrase >= 0.7 && candidate.micro_exchange_penalty < 0.25);
   let boundary_reason = if candidate.time_gap >= 0.8 {
     BoundaryReason::TemporalGap
   } else if candidate.cue_phrase >= 0.7 {
@@ -881,35 +942,119 @@ fn truncate(text: &str, max_len: usize) -> String {
   truncated
 }
 
-fn starts_with_topic_cue(text: &str) -> bool {
-  let normalized = text.trim().to_ascii_lowercase();
-  [
-    "by the way",
-    "anyway",
-    "quick question",
-    "speaking of",
-    "changing topics",
-    "also",
-    "顺便",
-    "另外",
-    "话说",
-    "换个话题",
-  ]
-  .iter()
-  .any(|cue| normalized.starts_with(cue))
+fn structural_boundary_cue(_previous: &AnalysisUnit, _current: &AnalysisUnit) -> f32 {
+  // Keep the cue_phrase slot in the scoring model, but avoid language-specific
+  // lexical cue lists. We currently rely on language-agnostic structural
+  // signals from other channels instead of hard-coded phrases.
+  0.0
 }
 
-fn unit_starts_with_topic_cue(unit: &AnalysisUnit) -> bool {
-  unit
-    .messages
+fn ends_with_question_marker(text: &str) -> bool {
+  let trimmed = text.trim_end();
+  trimmed.ends_with('?') || trimmed.ends_with('？')
+}
+
+fn char_ngram_overlap(left: &str, right: &str) -> f32 {
+  let left_ngrams = char_ngrams(left, 3);
+  let right_ngrams = char_ngrams(right, 3);
+  if left_ngrams.is_empty() || right_ngrams.is_empty() {
+    return 0.0;
+  }
+
+  let overlap = left_ngrams
     .iter()
-    .find_map(|record| {
-      let content = record.message.content.trim();
-      (!content.is_empty()).then_some(content)
-    })
-    .is_some_and(starts_with_topic_cue)
+    .filter(|ngram| right_ngrams.contains(*ngram))
+    .count() as f32;
+  let union = left_ngrams.union(&right_ngrams).count() as f32;
+  if union <= 0.0 {
+    0.0
+  } else {
+    overlap / union
+  }
+}
+
+fn char_ngrams(text: &str, n: usize) -> BTreeSet<String> {
+  let normalized = text
+    .chars()
+    .filter(|ch| ch.is_alphanumeric())
+    .flat_map(|ch| ch.to_lowercase())
+    .collect::<Vec<_>>();
+
+  if normalized.len() < n {
+    return BTreeSet::new();
+  }
+
+  normalized
+    .windows(n)
+    .map(|window| window.iter().collect::<String>())
+    .collect()
 }
 
 fn to_messages(records: &[ConversationMessageRecord]) -> Vec<Message> {
   records.iter().map(|record| record.message.clone()).collect()
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use chrono::TimeZone;
+  use plastmem_shared::MessageRole;
+
+  fn record(seq: i64, role: &str, content: &str) -> ConversationMessageRecord {
+    ConversationMessageRecord {
+      id: Uuid::now_v7(),
+      conversation_id: Uuid::nil(),
+      seq,
+      message: Message {
+        role: MessageRole(role.to_owned()),
+        content: content.to_owned(),
+        timestamp: Utc.timestamp_opt(seq, 0).single().expect("valid timestamp"),
+      },
+      created_at: Utc.timestamp_opt(seq, 0).single().expect("valid timestamp"),
+    }
+  }
+
+  fn record_at(seq: i64, timestamp: i64, role: &str, content: &str) -> ConversationMessageRecord {
+    ConversationMessageRecord {
+      id: Uuid::now_v7(),
+      conversation_id: Uuid::nil(),
+      seq,
+      message: Message {
+        role: MessageRole(role.to_owned()),
+        content: content.to_owned(),
+        timestamp: Utc
+          .timestamp_opt(timestamp, 0)
+          .single()
+          .expect("valid timestamp"),
+      },
+      created_at: Utc
+        .timestamp_opt(timestamp, 0)
+        .single()
+        .expect("valid timestamp"),
+    }
+  }
+
+  #[test]
+  fn candidate_scorer_skips_plain_question_answer_exchange() {
+    let units = build_analysis_units(&[
+      record(0, "John", "What game are you playing right now?"),
+      record(1, "James", "I'm playing The Witcher 3 at the moment."),
+      record(2, "John", "Nice, I keep hearing good things about it."),
+    ]);
+
+    let candidates = score_candidate_boundaries(&units, None);
+    assert!(candidates.is_empty());
+  }
+
+  #[test]
+  fn candidate_scorer_keeps_temporal_gap_boundary() {
+    let units = build_analysis_units(&[
+      record_at(0, 0, "John", "What game are you playing right now?"),
+      record_at(1, 60, "James", "I'm playing The Witcher 3 at the moment."),
+      record_at(2, 60 * 60 * 4, "John", "How was your trip last weekend?"),
+    ]);
+
+    let candidates = score_candidate_boundaries(&units, None);
+    assert!(candidates.iter().any(|candidate| candidate.next_unit_index == 2));
+  }
 }
