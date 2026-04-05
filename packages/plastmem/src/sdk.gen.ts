@@ -2,7 +2,7 @@
 
 import type { Client, Options as Options2, TDataShape } from './client';
 import { client } from './client.gen';
-import type { AddMessageData, AddMessageErrors, AddMessageResponses, BenchmarkFlushData, BenchmarkFlushErrors, BenchmarkFlushResponses, BenchmarkJobStatusData, BenchmarkJobStatusErrors, BenchmarkJobStatusResponses, ContextPreRetrieveData, ContextPreRetrieveErrors, ContextPreRetrieveResponses, RecentMemoryData, RecentMemoryRawData, RecentMemoryRawResponses, RecentMemoryResponses, RetrieveMemoryData, RetrieveMemoryErrors, RetrieveMemoryRawData, RetrieveMemoryRawErrors, RetrieveMemoryRawResponses, RetrieveMemoryResponses } from './types.gen';
+import type { AddMessageData, AddMessageErrors, AddMessageResponses, BenchmarkFlushData, BenchmarkFlushErrors, BenchmarkFlushResponses, BenchmarkJobStatusData, BenchmarkJobStatusErrors, BenchmarkJobStatusResponses, ContextPreRetrieveData, ContextPreRetrieveErrors, ContextPreRetrieveResponses, MessagesAppendData, MessagesAppendErrors, MessagesAppendResponses, MessagesImportData, MessagesImportErrors, MessagesImportResponses, RecentMemoryData, RecentMemoryRawData, RecentMemoryRawResponses, RecentMemoryResponses, RetrieveMemoryData, RetrieveMemoryErrors, RetrieveMemoryRawData, RetrieveMemoryRawErrors, RetrieveMemoryRawResponses, RetrieveMemoryResponses, SegmentationStateData, SegmentationStateErrors, SegmentationStateResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean> = Options2<TData, ThrowOnError> & {
     /**
@@ -30,6 +30,24 @@ export const addMessage = <ThrowOnError extends boolean = false>(options: Option
     }
 });
 
+export const messagesAppend = <ThrowOnError extends boolean = false>(options: Options<MessagesAppendData, ThrowOnError>) => (options.client ?? client).post<MessagesAppendResponses, MessagesAppendErrors, ThrowOnError>({
+    url: '/api/v1/messages:append',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+export const messagesImport = <ThrowOnError extends boolean = false>(options: Options<MessagesImportData, ThrowOnError>) => (options.client ?? client).post<MessagesImportResponses, MessagesImportErrors, ThrowOnError>({
+    url: '/api/v1/messages:import',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
 export const benchmarkFlush = <ThrowOnError extends boolean = false>(options: Options<BenchmarkFlushData, ThrowOnError>) => (options.client ?? client).post<BenchmarkFlushResponses, BenchmarkFlushErrors, ThrowOnError>({
     url: '/api/v0/benchmark/flush',
     ...options,
@@ -46,6 +64,8 @@ export const benchmarkFlush = <ThrowOnError extends boolean = false>(options: Op
  * processed into episodic memories before running evaluation.
  */
 export const benchmarkJobStatus = <ThrowOnError extends boolean = false>(options: Options<BenchmarkJobStatusData, ThrowOnError>) => (options.client ?? client).get<BenchmarkJobStatusResponses, BenchmarkJobStatusErrors, ThrowOnError>({ url: '/api/v0/benchmark/job_status', ...options });
+
+export const segmentationState = <ThrowOnError extends boolean = false>(options: Options<SegmentationStateData, ThrowOnError>) => (options.client ?? client).get<SegmentationStateResponses, SegmentationStateErrors, ThrowOnError>({ url: '/api/v1/segmentation_state', ...options });
 
 /**
  * Retrieve semantic memories as markdown for pre-retrieval context injection.

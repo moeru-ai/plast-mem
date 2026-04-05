@@ -28,6 +28,7 @@ pub async fn worker(
   Monitor::new()
     .register({
       let db = db.clone();
+      let segmentation_backend = segmentation_backend.clone();
       let review_backend = review_backend.clone();
       let semantic_backend = semantic_backend.clone();
       move |_run_id| {
@@ -36,11 +37,12 @@ pub async fn worker(
           .concurrency(1)
           .enable_tracing()
           .data(db.clone())
+          .data(segmentation_backend.clone())
           .data(review_backend.clone())
           .data(semantic_backend.clone())
           .build(
-            move |job, data, review_storage, semantic_storage| async move {
-              process_event_segmentation(job, data, review_storage, semantic_storage)
+            move |job, data, segmentation_storage, review_storage, semantic_storage| async move {
+              process_event_segmentation(job, data, segmentation_storage, review_storage, semantic_storage)
                 .await
                 .map_err(WorkerError::from)
             },

@@ -2,14 +2,18 @@
 
 use sea_orm::entity::prelude::*;
 
-#[expect(clippy::derive_partial_eq_without_eq, reason = "generated")]
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
-#[sea_orm(table_name = "message_queue")]
+#[sea_orm(table_name = "episode_span")]
 pub struct Model {
   #[sea_orm(primary_key, auto_increment = false)]
   pub id: Uuid,
-  #[sea_orm(column_type = "JsonBinary", nullable)]
-  pub pending_reviews: Option<Json>,
+  pub conversation_id: Uuid,
+  pub start_seq: i64,
+  pub end_seq: i64,
+  pub boundary_reason: String,
+  pub surprise_level: String,
+  pub status: String,
+  pub created_at: DateTimeWithTimeZone,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
