@@ -40,6 +40,7 @@ Use these principles:
 - Favor topic shift, intent shift, temporal gap, and surprise discontinuity.
 - Do NOT split ordinary back-and-forth turns, acknowledgements, answers, or follow-up questions when they are still about the same local exchange.
 - Keep short question-answer exchanges together unless there is a clear new topic, a clear new activity, or a strong temporal/session break.
+- Approve clear same-session topic changes when the new turns open a materially different subject, activity, or event, even without a temporal gap.
 - A boundary must land on the first message of the new segment.
 - `boundary_reason` must be exactly one of:
   `topic_shift`, `intent_shift`, `surprise_shift`, `temporal_gap`, `session_break`
@@ -283,18 +284,20 @@ fn score_candidate_boundaries(
 
     let cue_phrase = structural_boundary_cue(previous, current);
 
-    let micro_exchange_penalty = micro_exchange_penalty(previous, current, time_gap, cue_phrase);
+    let micro_exchange_penalty =
+      micro_exchange_penalty(units, next_unit_index, time_gap, cue_phrase);
+    let adjacent_drop = semantic_drop_score(previous, current);
+    let window_drop = window_semantic_drop(units, next_unit_index);
     let semantic_drop =
-      (semantic_drop_score(&previous.token_set, &current.token_set) - micro_exchange_penalty * 0.45)
-        .clamp(0.0, 1.0);
+      (adjacent_drop.max(window_drop) - micro_exchange_penalty * 0.35).clamp(0.0, 1.0);
     let online_surprise_prior =
       online_surprise_prior(previous, current, boundary_context, time_gap, cue_phrase, semantic_drop);
     let score =
       (time_gap + cue_phrase + semantic_drop + online_surprise_prior - micro_exchange_penalty).max(0.0);
 
     let strong_context_free_candidate =
-      semantic_drop >= 0.82 && online_surprise_prior >= 0.38 && micro_exchange_penalty < 0.25;
-    if score >= 1.55 || time_gap >= 0.8 || cue_phrase >= 0.7 || strong_context_free_candidate {
+      semantic_drop >= 0.76 && online_surprise_prior >= 0.18 && micro_exchange_penalty < 0.25;
+    if score >= 1.45 || time_gap >= 0.8 || cue_phrase >= 0.7 || strong_context_free_candidate {
       candidates.push(CandidateBoundary {
         next_unit_index,
         score,
@@ -310,7 +313,13 @@ fn score_candidate_boundaries(
   candidates
 }
 
-fn semantic_drop_score(previous: &BTreeSet<String>, current: &BTreeSet<String>) -> f32 {
+fn semantic_drop_score(previous: &AnalysisUnit, current: &AnalysisUnit) -> f32 {
+  let token_drop = lexical_set_distance(&previous.token_set, &current.token_set);
+  let char_drop = 1.0 - char_ngram_overlap(&unit_surface_text(previous), &unit_surface_text(current));
+  (0.6 * token_drop + 0.4 * char_drop).clamp(0.0, 1.0)
+}
+
+fn lexical_set_distance(previous: &BTreeSet<String>, current: &BTreeSet<String>) -> f32 {
   if previous.is_empty() || current.is_empty() {
     return 0.1;
   }
@@ -318,6 +327,26 @@ fn semantic_drop_score(previous: &BTreeSet<String>, current: &BTreeSet<String>) 
   let overlap = previous.iter().filter(|token| current.contains(*token)).count() as f32;
   let union = previous.union(current).count() as f32;
   (1.0 - overlap / union).clamp(0.0, 1.0)
+}
+
+fn window_semantic_drop(units: &[AnalysisUnit], next_unit_index: usize) -> f32 {
+  let previous_start = next_unit_index.saturating_sub(3);
+  let current_end = (next_unit_index + 2).min(units.len());
+  let previous_window = &units[previous_start..next_unit_index];
+  let current_window = &units[next_unit_index..current_end];
+  if previous_window.is_empty() || current_window.is_empty() {
+    return 0.0;
+  }
+
+  let previous_tokens = aggregate_token_set(previous_window);
+  let current_tokens = aggregate_token_set(current_window);
+  let token_drop = lexical_set_distance(&previous_tokens, &current_tokens);
+  let char_drop = 1.0
+    - char_ngram_overlap(
+      &aggregate_window_text(previous_window),
+      &aggregate_window_text(current_window),
+    );
+  (0.55 * token_drop + 0.45 * char_drop).clamp(0.0, 1.0)
 }
 
 fn online_surprise_prior(
@@ -370,11 +399,14 @@ fn online_surprise_prior(
 }
 
 fn micro_exchange_penalty(
-  previous: &AnalysisUnit,
-  current: &AnalysisUnit,
+  units: &[AnalysisUnit],
+  next_unit_index: usize,
   time_gap: f32,
   cue_phrase: f32,
 ) -> f32 {
+  let previous = &units[next_unit_index - 1];
+  let current = &units[next_unit_index];
+
   if time_gap > 0.0 || cue_phrase > 0.0 {
     return 0.0;
   }
@@ -417,11 +449,50 @@ fn micro_exchange_penalty(
     return 0.45;
   }
 
+  if forms_recent_question_answer_exchange(units, next_unit_index, compact_turn_pair) {
+    return 0.35;
+  }
+
   if compact_turn_pair && previous.messages.len() == 1 && current.messages.len() == 1 {
-    return 0.2;
+    return 0.1;
   }
 
   0.0
+}
+
+fn forms_recent_question_answer_exchange(
+  units: &[AnalysisUnit],
+  next_unit_index: usize,
+  compact_turn_pair: bool,
+) -> bool {
+  if next_unit_index < 2 || !compact_turn_pair {
+    return false;
+  }
+
+  let anchor = &units[next_unit_index - 2];
+  let previous = &units[next_unit_index - 1];
+  let current = &units[next_unit_index];
+  let Some(anchor_last) = anchor.messages.last() else {
+    return false;
+  };
+  let Some(previous_last) = previous.messages.last() else {
+    return false;
+  };
+  let Some(current_first) = current.messages.first() else {
+    return false;
+  };
+
+  if !ends_with_question_marker(&anchor_last.message.content) {
+    return false;
+  }
+
+  let alternating_roles = anchor_last.message.role == current_first.message.role
+    && anchor_last.message.role != previous_last.message.role;
+  let compact_triads = anchor_last.message.content.len() <= 220
+    && previous_last.message.content.len() <= 220
+    && current_first.message.content.len() <= 220;
+
+  alternating_roles && compact_triads
 }
 
 async fn refine_candidate_boundaries(
@@ -932,6 +1003,33 @@ fn top_keywords(messages: &[Message], limit: usize) -> Vec<String> {
   seen.into_iter().collect()
 }
 
+fn unit_surface_text(unit: &AnalysisUnit) -> String {
+  unit
+    .messages
+    .iter()
+    .map(|record| record.message.content.trim())
+    .filter(|content| !content.is_empty())
+    .collect::<Vec<_>>()
+    .join(" ")
+}
+
+fn aggregate_window_text(units: &[AnalysisUnit]) -> String {
+  units
+    .iter()
+    .map(unit_surface_text)
+    .filter(|text| !text.is_empty())
+    .collect::<Vec<_>>()
+    .join(" ")
+}
+
+fn aggregate_token_set(units: &[AnalysisUnit]) -> BTreeSet<String> {
+  let mut tokens = BTreeSet::new();
+  for unit in units {
+    tokens.extend(unit.token_set.iter().cloned());
+  }
+  tokens
+}
+
 fn truncate(text: &str, max_len: usize) -> String {
   if text.len() <= max_len {
     return text.to_owned();
@@ -1052,6 +1150,19 @@ mod tests {
       record_at(0, 0, "John", "What game are you playing right now?"),
       record_at(1, 60, "James", "I'm playing The Witcher 3 at the moment."),
       record_at(2, 60 * 60 * 4, "John", "How was your trip last weekend?"),
+    ]);
+
+    let candidates = score_candidate_boundaries(&units, None);
+    assert!(candidates.iter().any(|candidate| candidate.next_unit_index == 2));
+  }
+
+  #[test]
+  fn candidate_scorer_keeps_clear_same_session_topic_shift() {
+    let units = build_analysis_units(&[
+      record(0, "John", "I've been playing The Witcher 3 a lot this week."),
+      record(1, "James", "Nice, I love open world games and long story quests."),
+      record(2, "John", "My two dogs kept me busy at the park this morning."),
+      record(3, "James", "Dogs always make the day better, especially energetic ones."),
     ]);
 
     let candidates = score_candidate_boundaries(&units, None);
