@@ -32,6 +32,7 @@ postgresql
 # Benchmark data and results
 benchmarks/locomo/data/
 benchmarks/locomo/results/
+benchmarks/longmemeval/results/
 
 # Claude Code
 .claude
@@ -49,3 +50,5 @@ node_modules
 dist
 dist-ssr
 *.local
+
+.eslintcache
