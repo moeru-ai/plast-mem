@@ -310,7 +310,44 @@ fn score_candidate_boundaries(
     }
   }
 
-  candidates
+  suppress_dense_same_session_candidates(candidates)
+}
+
+fn suppress_dense_same_session_candidates(
+  candidates: Vec<CandidateBoundary>,
+) -> Vec<CandidateBoundary> {
+  let mut filtered = Vec::new();
+  let mut index = 0usize;
+
+  while index < candidates.len() {
+    let candidate = &candidates[index];
+    if candidate.time_gap > 0.0 || candidate.cue_phrase > 0.0 {
+      filtered.push(candidate.clone());
+      index += 1;
+      continue;
+    }
+
+    let mut best = candidate.clone();
+    let mut end = index + 1;
+    while end < candidates.len() {
+      let next = &candidates[end];
+      let same_session_cluster = next.time_gap == 0.0
+        && next.cue_phrase == 0.0
+        && next.next_unit_index.saturating_sub(candidates[end - 1].next_unit_index) <= 2;
+      if !same_session_cluster {
+        break;
+      }
+      if next.score >= best.score {
+        best = next.clone();
+      }
+      end += 1;
+    }
+
+    filtered.push(best);
+    index = end;
+  }
+
+  filtered
 }
 
 fn semantic_drop_score(previous: &AnalysisUnit, current: &AnalysisUnit) -> f32 {
@@ -1167,5 +1204,26 @@ mod tests {
 
     let candidates = score_candidate_boundaries(&units, None);
     assert!(candidates.iter().any(|candidate| candidate.next_unit_index == 2));
+  }
+
+  #[test]
+  fn candidate_scorer_suppresses_dense_same_session_cluster() {
+    let units = build_analysis_units(&[
+      record(12, "John", "Aww, they're adorable! What are the names of your pets? And what are your plans for the app?"),
+      record(13, "James", "Max and Daisy. The goal is to connect pet owners with reliable dog walkers and provide helpful pet care guidance."),
+      record(14, "John", "Sounds good, James! What sets it apart from other existing apps?"),
+      record(15, "James", "The personal touch really sets it apart. Users can add their pup's preferences and needs."),
+      record(16, "John", "That's a great idea! What motivates you to work on your programming projects?"),
+      record(17, "James", "Creating something and seeing it come to life gives me a great sense of accomplishment."),
+      record(18, "John", "What are you working on that has you feeling so accomplished?"),
+      record(19, "James", "I'm working on a game project I've wanted to make since I was a kid."),
+    ]);
+
+    let candidates = score_candidate_boundaries(&units, None);
+    let dense_candidates = candidates
+      .iter()
+      .filter(|candidate| candidate.time_gap == 0.0 && candidate.cue_phrase == 0.0)
+      .count();
+    assert!(dense_candidates <= 1, "dense candidates: {candidates:?}");
   }
 }
