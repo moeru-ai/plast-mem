@@ -55,6 +55,43 @@ const MIN_CHARS_FOR_HIGH_SURPRISE_CONSOLIDATION: usize = 420;
 const MIN_MESSAGES_FOR_STRONG_BREAK_CONSOLIDATION: usize = 3;
 const MIN_CHARS_FOR_STRONG_BREAK_CONSOLIDATION: usize = 180;
 const MIN_DURATION_MINUTES_FOR_IMMEDIATE_CONSOLIDATION: i64 = 120;
+const EPISODIC_PROJECTION_SYSTEM_PROMPT: &str = r#"
+You are turning a conversation segment into an episodic memory record.
+Return only JSON with `title` and `content`.
+
+Requirements:
+1. The title must be concise, descriptive, and easy to search. Keep it within 10-20 words and name the main topic, activity, or event.
+2. The content must be a factual observation log, like a concise case note or incident record. It is not a prose paragraph and it is not a message-by-message transcript.
+3. Group observations under shared time-block headers using `At: Mon DD, YYYY h AM/PM` when the observations belong to the same approximate hour. If an hour-level header would be misleading or cannot be inferred cleanly, use `At: Mon DD, YYYY`.
+4. A single `At:` header may cover multiple bullets. Do not repeat the same header for every bullet.
+5. Round headers to the hour. Do not include minutes unless minute-level precision is clearly important for understanding the event.
+6. Keep bullets in chronological order within each header block.
+7. Each bullet should capture one dense factual observation: a concrete event, statement, action, result, preference, question, intention, or outcome. Merge adjacent turns when they belong to one coherent micro-exchange.
+8. Distinguish statements, questions, requests, intentions, plans, and completed events accurately.
+9. Make state changes explicit in natural language only when the change itself matters for later retrieval, such as a change in belief, feeling, plan, role, diagnosis, or outcome. Do not add a special label for state changes.
+10. If an observation refers to another concrete time, keep the original time phrase in the sentence and resolve it inline in parentheses immediately after the phrase, for example `last month (July 2023)` or `the previous weekend (June 17-18, 2023)`.
+11. If the time can be resolved more precisely from the message timestamps, include that grounded date, range, or hour in the parentheses. If it cannot be resolved cleanly, keep the original phrase without inventing specifics.
+12. The observation text must be retrieval-friendly, specific, and source-grounded. It should read like a factual record, not a vague summary.
+13. Use actor-explicit wording. Use the speaker labels that appear in the segment consistently when the actor matters for retrieval. Only fall back to generic role labels when no better speaker label is available.
+14. Use precise source verbs such as `said`, `asked`, `planned`, `confirmed`, `reported`, `mentioned`, `suggested`, `showed`, or `shared`.
+15. Preserve names, places, quantities, identifiers, specific roles, and distinguishing details that make the memory searchable later.
+16. Preserve nicknames, short forms, product or game titles, place names, titles of works, device names, diagnosis-like wording, and other distinctive wording verbatim when they may matter for later retrieval or QA.
+17. Do not replace a specific original term with a fuller, broader, or more generic paraphrase if the original wording is supported by the conversation.
+18. When possible, bind the time, place, actor, and event in the same bullet instead of scattering them across separate lines.
+19. Prefer compression over repetition, but do not compress away named entities, rare lexical clues, exact labels, grounded time references, or concrete formulations that may be directly asked about later.
+20. Use terse, dense wording. Avoid filler, narrative glue, broad moralizing summaries, and unsupported causal claims.
+21. Do not use any bracketed metadata tags such as `[spoken_at: ...]`, `[type: ...]`, `[time_expression: ...]`, `[referenced_time: ...]`, or `[time_confidence: ...]`.
+
+Format:
+- Write one or more shared `At:` headers as needed.
+- Under each header, write one bullet per observation using this style:
+  `* Observation text`
+- Example:
+  At: Jun 15, 2026 3 PM
+  * Sam said he planned to visit his parents that weekend (June 20-21, 2026).
+  * Evan asked for help comparing adoption agencies.
+  * Sam said he moved from Sweden four years earlier (2022).
+"#;
 
 const LOCAL_BOUNDARY_REFINER_SYSTEM_PROMPT: &str = r#"
 You are validating one candidate event boundary in a conversation.
@@ -136,6 +173,12 @@ struct LocalBoundaryRefinerOutput {
   is_boundary: bool,
   boundary_reason: BoundaryReason,
   surprise_level: SurpriseLevel,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct EpisodicProjectionOutput {
+  title: String,
+  content: String,
 }
 
 #[derive(Debug, Clone)]
@@ -1187,8 +1230,7 @@ async fn build_prepared_closed_span(
 ) -> Result<PreparedClosedSpan, AppError> {
   let now = Utc::now();
   let span_id = Uuid::now_v7();
-  let title = build_provisional_title(span);
-  let content = build_provisional_content(span);
+  let (title, content) = build_projection_text(span).await;
   let embedding_input = if title.is_empty() {
     content.clone()
   } else {
@@ -1235,6 +1277,69 @@ async fn build_prepared_closed_span(
   })
 }
 
+async fn build_projection_text(span: &ClosedSpan) -> (String, String) {
+  match request_episodic_projection(span).await {
+    Ok(output) => {
+      let title = sanitize_projection_title(&output.title);
+      let content = sanitize_projection_content(&output.content);
+      if !title.is_empty() && !content.is_empty() {
+        return (title, content);
+      }
+      tracing::warn!("LLM episodic projection returned empty fields, falling back to deterministic projection");
+    }
+    Err(error) => {
+      tracing::warn!("LLM episodic projection failed, falling back to deterministic projection: {error}");
+    }
+  }
+
+  (build_provisional_title(span), build_provisional_content(span))
+}
+
+async fn request_episodic_projection(
+  span: &ClosedSpan,
+) -> Result<EpisodicProjectionOutput, AppError> {
+  let user = format!("Conversation segment:\n{}", format_messages(&span.messages));
+
+  generate_object::<EpisodicProjectionOutput>(
+    vec![
+      ChatCompletionRequestMessage::System(ChatCompletionRequestSystemMessage::from(
+        EPISODIC_PROJECTION_SYSTEM_PROMPT.trim(),
+      )),
+      ChatCompletionRequestMessage::User(ChatCompletionRequestUserMessage::from(user)),
+    ],
+    "episodic_projection_output".to_owned(),
+    Some("Episodic memory title and content".to_owned()),
+  )
+  .await
+}
+
+fn sanitize_projection_title(title: &str) -> String {
+  let trimmed = title.trim().trim_matches('"').trim();
+  if trimmed.is_empty() {
+    return String::new();
+  }
+
+  let title = trimmed
+    .split_whitespace()
+    .take(20)
+    .collect::<Vec<_>>()
+    .join(" ");
+  if title.is_empty() {
+    "Conversation Segment".to_owned()
+  } else {
+    title
+  }
+}
+
+fn sanitize_projection_content(content: &str) -> String {
+  let trimmed = content.trim();
+  if trimmed.is_empty() {
+    return "Episode content unavailable.".to_owned();
+  }
+
+  trimmed.to_owned()
+}
+
 fn build_provisional_title(span: &ClosedSpan) -> String {
   let seed = span
     .messages
@@ -1269,6 +1374,23 @@ fn build_provisional_content(span: &ClosedSpan) -> String {
   }
 
   lines.join("\n")
+}
+
+fn format_messages(messages: &[Message]) -> String {
+  messages
+    .iter()
+    .enumerate()
+    .map(|(i, m)| {
+      format!(
+        "[{}] {} [{}] {}",
+        i,
+        m.timestamp.format("%Y-%m-%dT%H:%M:%SZ"),
+        m.role,
+        m.content
+      )
+    })
+    .collect::<Vec<_>>()
+    .join("\n")
 }
 
 fn build_boundary_context(span: &ClosedSpan, title: &str) -> SegmentationBoundaryContext {
