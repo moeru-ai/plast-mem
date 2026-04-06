@@ -197,6 +197,35 @@ Conclusion:
 - do not try to make provisional title selection smarter in the hot path without very strong evidence
 - the simple seed-title approach is safer for now
 
+### 5. LLM title only, deterministic content
+
+We also tried a narrower LLM experiment:
+
+- keep deterministic full `content`
+- generate only the `title` with LLM
+- let embedding use `LLM title + deterministic content`
+
+This was also negative.
+
+Representative numbers on `conv-47`:
+
+- stable rollback baseline: overall F1 `52.03%`
+- after `LLM title only`: overall F1 `48.84%`
+- multi-hop: `25.22% -> 20.59%`
+- temporal: `24.90% -> 21.36%`
+- open-domain: `20.82% -> 13.13%`
+
+Failure mode:
+
+- even without touching `content`, changing `title` was enough to degrade the retrieval surface
+- using the LLM title inside the embedding input amplified that effect
+- the retrieval stack seems more robust to a simple seed title than to a more abstract generated label
+
+Conclusion:
+
+- do not use LLM-generated title in the current provisional episodic path
+- keep both provisional `title` and `content` deterministic for now
+
 ## Case Studies
 
 ### `conv-42`
@@ -252,6 +281,7 @@ At this point the evidence is fairly consistent:
 2. The provisional retrieval surface should stay mostly deterministic.
    - LLM-generated episodic content was not a stable win.
    - Compressed retrieval-only text was also not a win.
+   - LLM-generated title alone was also not a win.
 
 3. The main remaining problem is repeated-theme disambiguation, especially for temporal questions.
    - This is not fully solved by changing the segmentation shape.
