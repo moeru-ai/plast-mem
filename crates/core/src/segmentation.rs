@@ -273,8 +273,7 @@ pub async fn append_messages(
   next_state.eof_seen = Set(eof_seen);
   next_state.updated_at = Set(now.into());
 
-  let has_processable_work =
-    state_snapshot.last_seen_seq.is_some() && pending_message_count(&state_snapshot) > 0;
+  let has_processable_work = pending_message_count(&state_snapshot) > 0;
   let should_schedule = state_snapshot.in_progress_until_seq.is_none()
     && (gap_trigger
       || pending_message_count(&state_snapshot) >= SEGMENTATION_WINDOW_BASE
