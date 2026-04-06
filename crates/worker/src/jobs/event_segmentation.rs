@@ -183,6 +183,13 @@ struct CreatedEpisode {
   surprise_level: SurpriseLevel,
 }
 
+struct PreparedClosedSpan {
+  span: ClosedSpan,
+  span_id: Uuid,
+  episodic_memory: plastmem_core::EpisodicMemory,
+  boundary_context: SegmentationBoundaryContext,
+}
+
 pub async fn process_event_segmentation(
   job: EventSegmentationJob,
   db: Data<DatabaseConnection>,
@@ -957,6 +964,7 @@ async fn persist_closed_spans(
   closed_spans: &[ClosedSpan],
   db: &DatabaseConnection,
 ) -> Result<Vec<CreatedEpisode>, AppError> {
+  let prepared_spans = prepare_closed_spans(conversation_id, closed_spans).await?;
   let txn = db.begin().await?;
   let Some(state_model) = segmentation_state::Entity::find_by_id(conversation_id)
     .lock_exclusive()
@@ -971,41 +979,45 @@ async fn persist_closed_spans(
   let mut next_unsegmented_seq = state_model.next_unsegmented_seq;
   let mut last_boundary_context = state_model.last_closed_boundary_context.clone();
 
-  for span in closed_spans {
-    let span_id = Uuid::now_v7();
+  for prepared in prepared_spans {
     let now = Utc::now();
-    let source_model = build_episodic_projection(conversation_id, span_id, span).await?;
-    let boundary_context = build_boundary_context(span, &source_model.title);
-
     episode_span::ActiveModel {
-      id: Set(span_id),
+      id: Set(prepared.span_id),
       conversation_id: Set(conversation_id),
-      start_seq: Set(span.start_seq),
-      end_seq: Set(span.end_seq),
-      boundary_reason: Set(span.boundary_reason.as_str().to_owned()),
-      surprise_level: Set(span.surprise_level.as_str().to_owned()),
+      start_seq: Set(prepared.span.start_seq),
+      end_seq: Set(prepared.span.end_seq),
+      boundary_reason: Set(prepared.span.boundary_reason.as_str().to_owned()),
+      surprise_level: Set(prepared.span.surprise_level.as_str().to_owned()),
       status: Set("derived".to_owned()),
       created_at: Set(now.into()),
     }
     .insert(&txn)
     .await?;
 
-    let episodic_active_model: episodic_memory::ActiveModel = source_model.to_model()?.into();
+    let episodic_active_model: episodic_memory::ActiveModel =
+      prepared.episodic_memory.to_model()?.into();
     episodic_memory::Entity::insert(episodic_active_model)
       .exec(&txn)
       .await?;
 
-    max_closed_end_seq = Some(span.end_seq);
-    next_unsegmented_seq = span.end_seq + 1;
-    last_boundary_context = Some(serde_json::to_value(boundary_context)?);
+    max_closed_end_seq = Some(prepared.span.end_seq);
+    next_unsegmented_seq = prepared.span.end_seq + 1;
+    last_boundary_context = Some(serde_json::to_value(prepared.boundary_context)?);
     created.push(CreatedEpisode {
-      id: source_model.id,
-      surprise: source_model.surprise,
-      message_count: span.messages.len(),
-      total_chars: span.messages.iter().map(|message| message.content.len()).sum(),
-      duration_minutes: (end_at_for_span(span) - start_at_for_span(span)).num_minutes().max(0),
-      boundary_reason: span.boundary_reason,
-      surprise_level: span.surprise_level,
+      id: prepared.episodic_memory.id,
+      surprise: prepared.episodic_memory.surprise,
+      message_count: prepared.span.messages.len(),
+      total_chars: prepared
+        .span
+        .messages
+        .iter()
+        .map(|message| message.content.len())
+        .sum(),
+      duration_minutes: (prepared.episodic_memory.end_at - prepared.episodic_memory.start_at)
+        .num_minutes()
+        .max(0),
+      boundary_reason: prepared.span.boundary_reason,
+      surprise_level: prepared.span.surprise_level,
     });
   }
 
@@ -1040,6 +1052,27 @@ async fn persist_closed_spans(
 
   txn.commit().await?;
   Ok(created)
+}
+
+async fn prepare_closed_spans(
+  conversation_id: Uuid,
+  closed_spans: &[ClosedSpan],
+) -> Result<Vec<PreparedClosedSpan>, AppError> {
+  let mut prepared = Vec::with_capacity(closed_spans.len());
+
+  for span in closed_spans {
+    let span_id = Uuid::now_v7();
+    let episodic_memory = build_episodic_projection(conversation_id, span_id, span).await?;
+    let boundary_context = build_boundary_context(span, &episodic_memory.title);
+    prepared.push(PreparedClosedSpan {
+      span: span.clone(),
+      span_id,
+      episodic_memory,
+      boundary_context,
+    });
+  }
+
+  Ok(prepared)
 }
 
 async fn build_episodic_projection(
@@ -1366,14 +1399,6 @@ fn aggregate_token_set(units: &[AnalysisUnit]) -> BTreeSet<String> {
 
 fn count_messages(units: &[AnalysisUnit]) -> usize {
   units.iter().map(|unit| unit.messages.len()).sum()
-}
-
-fn start_at_for_span(span: &ClosedSpan) -> DateTime<Utc> {
-  span.messages.first().map_or_else(Utc::now, |message| message.timestamp)
-}
-
-fn end_at_for_span(span: &ClosedSpan) -> DateTime<Utc> {
-  span.messages.last().map_or_else(Utc::now, |message| message.timestamp)
 }
 
 fn span_surface_text(span: &ClosedSpan) -> String {

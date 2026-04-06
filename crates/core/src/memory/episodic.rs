@@ -128,6 +128,7 @@ impl EpisodicMemory {
       m.end_at,
       m.created_at,
       m.last_reviewed_at,
+      m.consolidated_at,
       m.derivation_status,
       r.score AS score
     FROM rrf_score r
