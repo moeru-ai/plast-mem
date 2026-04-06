@@ -39,6 +39,15 @@ const MIN_OBSERVED_TAIL_MESSAGES_FOR_NON_TEMPORAL_CLOSE: usize = 3;
 const MIN_TOPIC_SHIFT_BOUNDARY_STRENGTH: f32 = 1.95;
 const MIN_INTENT_SHIFT_BOUNDARY_STRENGTH: f32 = 2.05;
 const MIN_SURPRISE_SHIFT_BOUNDARY_STRENGTH: f32 = 1.9;
+const LARGE_SAME_SESSION_SEGMENT_MESSAGES: usize = 18;
+const LARGE_SAME_SESSION_SEGMENT_UNITS: usize = 8;
+const LARGE_SAME_SESSION_TOPIC_SHIFT_RELAXATION: f32 = 0.18;
+const LARGE_SAME_SESSION_INTENT_SHIFT_RELAXATION: f32 = 0.14;
+const PRE_GAP_TRAILING_REPLY_MAX_CHARS: usize = 120;
+const PRE_GAP_TRAILING_REPLY_AFFINITY_THRESHOLD: f32 = 0.08;
+const PRE_GAP_TRAILING_REPLY_AFFINITY_MARGIN: f32 = 0.04;
+const PRE_GAP_TRAILING_REPLY_PREVIOUS_MAX_MINUTES: i64 = 10;
+const PRE_GAP_TRAILING_REPLY_NEXT_MIN_MINUTES: i64 = 60;
 const MIN_MESSAGES_FOR_IMMEDIATE_CONSOLIDATION: usize = 10;
 const MIN_CHARS_FOR_IMMEDIATE_CONSOLIDATION: usize = 700;
 const MIN_MESSAGES_FOR_HIGH_SURPRISE_CONSOLIDATION: usize = 6;
@@ -804,7 +813,44 @@ fn should_close_boundary(
     return false;
   }
 
-  boundary_strength >= min_strength
+  let relaxed_strength = relaxed_non_temporal_min_strength(
+    previous_messages,
+    previous_units,
+    observed_tail_messages,
+    boundary,
+    min_strength,
+  );
+
+  boundary_strength >= relaxed_strength
+}
+
+fn relaxed_non_temporal_min_strength(
+  previous_messages: usize,
+  previous_units: usize,
+  observed_tail_messages: usize,
+  boundary: &RefinedBoundary,
+  min_strength: f32,
+) -> f32 {
+  if previous_messages < LARGE_SAME_SESSION_SEGMENT_MESSAGES
+    || previous_units < LARGE_SAME_SESSION_SEGMENT_UNITS
+    || observed_tail_messages < MIN_OBSERVED_TAIL_MESSAGES_FOR_NON_TEMPORAL_CLOSE + 1
+  {
+    return min_strength;
+  }
+
+  match boundary.boundary_reason {
+    BoundaryReason::TopicShift
+      if boundary.semantic_drop >= 0.78 && boundary.online_surprise_prior >= 0.16 =>
+    {
+      (min_strength - LARGE_SAME_SESSION_TOPIC_SHIFT_RELAXATION).max(0.0)
+    }
+    BoundaryReason::IntentShift
+      if boundary.semantic_drop >= 0.82 && boundary.online_surprise_prior >= 0.18 =>
+    {
+      (min_strength - LARGE_SAME_SESSION_INTENT_SHIFT_RELAXATION).max(0.0)
+    }
+    _ => min_strength,
+  }
 }
 
 fn is_force_close_boundary(boundary: &RefinedBoundary) -> bool {
@@ -866,6 +912,8 @@ fn build_closed_span(
 }
 
 fn normalize_closed_spans(mut spans: Vec<ClosedSpan>) -> Vec<ClosedSpan> {
+  absorb_pre_gap_trailing_singletons(&mut spans);
+
   let mut index = 0usize;
   while index < spans.len() {
     if !should_merge_short_span(&spans, index) {
@@ -914,6 +962,72 @@ fn normalize_closed_spans(mut spans: Vec<ClosedSpan>) -> Vec<ClosedSpan> {
   }
 
   spans
+}
+
+fn absorb_pre_gap_trailing_singletons(spans: &mut Vec<ClosedSpan>) {
+  let mut index = 1usize;
+  while index + 1 < spans.len() {
+    if !should_absorb_pre_gap_trailing_singleton(spans, index) {
+      index += 1;
+      continue;
+    }
+
+    let previous_affinity = span_affinity(&spans[index - 1], &spans[index]);
+    let next_affinity = span_affinity(&spans[index], &spans[index + 1]);
+    let timing_supports_absorb = has_pre_gap_trailing_reply_timing(spans, index);
+    if !timing_supports_absorb
+      && (previous_affinity < PRE_GAP_TRAILING_REPLY_AFFINITY_THRESHOLD
+        || previous_affinity < next_affinity + PRE_GAP_TRAILING_REPLY_AFFINITY_MARGIN)
+    {
+      index += 1;
+      continue;
+    }
+
+    let trailing = spans.remove(index);
+    spans[index - 1].end_seq = trailing.end_seq;
+    spans[index - 1].messages.extend(trailing.messages);
+  }
+}
+
+fn should_absorb_pre_gap_trailing_singleton(spans: &[ClosedSpan], index: usize) -> bool {
+  let span = &spans[index];
+  let next = &spans[index + 1];
+
+  if span.messages.len() != 1 || !is_strong_start_boundary(next) {
+    return false;
+  }
+
+  if !matches!(
+    span.boundary_reason,
+    BoundaryReason::SessionBreak | BoundaryReason::TopicShift | BoundaryReason::IntentShift
+  ) || span.surprise_level != SurpriseLevel::Low
+  {
+    return false;
+  }
+
+  let message = &span.messages[0];
+  let content = message.content.trim();
+  !content.is_empty()
+    && content.len() <= PRE_GAP_TRAILING_REPLY_MAX_CHARS
+    && !ends_with_question_marker(content)
+}
+
+fn has_pre_gap_trailing_reply_timing(spans: &[ClosedSpan], index: usize) -> bool {
+  let Some(previous_at) = spans[index - 1].messages.last().map(|message| message.timestamp) else {
+    return false;
+  };
+  let Some(current_at) = spans[index].messages.last().map(|message| message.timestamp) else {
+    return false;
+  };
+  let Some(next_at) = spans[index + 1].messages.first().map(|message| message.timestamp) else {
+    return false;
+  };
+
+  let previous_gap_minutes = (current_at - previous_at).num_minutes();
+  let next_gap_minutes = (next_at - current_at).num_minutes();
+  previous_gap_minutes >= 0
+    && previous_gap_minutes <= PRE_GAP_TRAILING_REPLY_PREVIOUS_MAX_MINUTES
+    && next_gap_minutes >= PRE_GAP_TRAILING_REPLY_NEXT_MIN_MINUTES
 }
 
 fn should_merge_short_span(spans: &[ClosedSpan], index: usize) -> bool {
@@ -1679,6 +1793,38 @@ mod tests {
   }
 
   #[test]
+  fn stabilize_refined_boundaries_allows_strong_topic_shift_after_large_same_session_segment() {
+    let mut records = Vec::new();
+    for seq in 0..18 {
+      let role = if seq % 2 == 0 { "John" } else { "James" };
+      records.push(record(
+        seq,
+        role,
+        "We kept talking about a shared game project, coding details, and gameplay ideas.",
+      ));
+    }
+    records.push(record(18, "John", "I spent last weekend hiking with my dogs near the lake."));
+    records.push(record(19, "James", "The hike sounds great, and the dogs must have loved the trails."));
+    records.push(record(20, "John", "They absolutely loved the water and the long nature walk."));
+    records.push(record(21, "James", "Nature days with dogs always feel refreshing and memorable."));
+
+    let units = build_analysis_units(&records);
+    let boundaries = vec![refined_boundary(
+      18,
+      BoundaryReason::TopicShift,
+      SurpriseLevel::High,
+      1.8,
+      0.0,
+      0.82,
+      0.2,
+    )];
+
+    let stabilized = stabilize_refined_boundaries(&units, &boundaries, true);
+    assert_eq!(stabilized.len(), 1);
+    assert_eq!(stabilized[0].next_unit_index, 18);
+  }
+
+  #[test]
   fn normalize_closed_spans_merges_weak_singleton_into_more_affine_neighbor() {
     let spans = vec![
       ClosedSpan {
@@ -1757,6 +1903,46 @@ mod tests {
     assert_eq!(normalized[0].start_seq, 0);
     assert_eq!(normalized[0].end_seq, 3);
     assert_eq!(normalized[1].start_seq, 4);
+  }
+
+  #[test]
+  fn normalize_closed_spans_absorbs_trailing_singleton_before_temporal_gap() {
+    let spans = vec![
+      ClosedSpan {
+        start_seq: 58,
+        end_seq: 79,
+        messages: vec![
+          message("John", "I finally advanced to the next level in the game.", 58),
+          message("James", "That sounds like a huge accomplishment after all the effort.", 59),
+          message("John", "Trying new genres has been exciting lately.", 60),
+        ],
+        boundary_reason: BoundaryReason::TemporalGap,
+        surprise_level: SurpriseLevel::High,
+      },
+      ClosedSpan {
+        start_seq: 80,
+        end_seq: 80,
+        messages: vec![message("John", "Thanks! Can't wait to hear about it. Bye!", 61)],
+        boundary_reason: BoundaryReason::SessionBreak,
+        surprise_level: SurpriseLevel::Low,
+      },
+      ClosedSpan {
+        start_seq: 81,
+        end_seq: 90,
+        messages: vec![
+          message("John", "Hey James! Long time no chat.", 1_000_000),
+          message("James", "I joined an online gaming tournament yesterday.", 1_000_060),
+        ],
+        boundary_reason: BoundaryReason::TemporalGap,
+        surprise_level: SurpriseLevel::High,
+      },
+    ];
+
+    let normalized = normalize_closed_spans(spans);
+    assert_eq!(normalized.len(), 2);
+    assert_eq!(normalized[0].start_seq, 58);
+    assert_eq!(normalized[0].end_seq, 80);
+    assert_eq!(normalized[1].start_seq, 81);
   }
 
   #[test]
