@@ -689,7 +689,7 @@ fn close_segments(
     ));
   }
 
-  closed
+  normalize_closed_spans(closed)
 }
 
 fn build_closed_span(
@@ -717,6 +717,102 @@ fn build_closed_span(
     boundary_reason,
     surprise_level,
   }
+}
+
+fn normalize_closed_spans(mut spans: Vec<ClosedSpan>) -> Vec<ClosedSpan> {
+  let mut index = 0usize;
+  while index < spans.len() {
+    if !should_merge_short_span(&spans, index) {
+      index += 1;
+      continue;
+    }
+
+    let can_merge_into_previous = index > 0;
+    let can_merge_into_next = index + 1 < spans.len() && !is_strong_start_boundary(&spans[index + 1]);
+
+    let previous_affinity = if can_merge_into_previous {
+      span_affinity(&spans[index - 1], &spans[index])
+    } else {
+      -1.0
+    };
+    let next_affinity = if can_merge_into_next {
+      span_affinity(&spans[index], &spans[index + 1])
+    } else {
+      -1.0
+    };
+    let merge_threshold = merge_affinity_threshold(&spans[index]);
+
+    let merged = if previous_affinity >= next_affinity && previous_affinity >= merge_threshold {
+      let messages = spans[index].messages.clone();
+      let end_seq = spans[index].end_seq;
+      spans[index - 1].end_seq = end_seq;
+      spans[index - 1].messages.extend(messages);
+      spans.remove(index);
+      true
+    } else if next_affinity >= merge_threshold {
+      let current = spans.remove(index);
+      spans[index].start_seq = current.start_seq;
+      spans[index].boundary_reason = current.boundary_reason;
+      spans[index].surprise_level = current.surprise_level;
+      let mut messages = current.messages;
+      messages.extend(spans[index].messages.clone());
+      spans[index].messages = messages;
+      true
+    } else {
+      false
+    };
+
+    if !merged {
+      index += 1;
+    }
+  }
+
+  spans
+}
+
+fn should_merge_short_span(spans: &[ClosedSpan], index: usize) -> bool {
+  let span = &spans[index];
+  span.messages.len() <= 2
+    && matches!(span.boundary_reason, BoundaryReason::TopicShift | BoundaryReason::IntentShift)
+    && span.surprise_level != SurpriseLevel::ExtremelyHigh
+}
+
+fn merge_affinity_threshold(span: &ClosedSpan) -> f32 {
+  match (span.messages.len(), span.surprise_level) {
+    (0, _) => 1.0,
+    (1, SurpriseLevel::Low) => 0.08,
+    (1, SurpriseLevel::High) => 0.15,
+    (2, SurpriseLevel::Low) => 0.14,
+    (2, SurpriseLevel::High) => 0.20,
+    _ => 1.0,
+  }
+}
+
+fn is_strong_start_boundary(span: &ClosedSpan) -> bool {
+  matches!(
+    span.boundary_reason,
+    BoundaryReason::TemporalGap | BoundaryReason::SessionBreak | BoundaryReason::SurpriseShift
+  ) || span.surprise_level == SurpriseLevel::ExtremelyHigh
+}
+
+fn span_affinity(left: &ClosedSpan, right: &ClosedSpan) -> f32 {
+  let left_text = span_surface_text(left);
+  let right_text = span_surface_text(right);
+  let char_affinity = char_ngram_overlap(&left_text, &right_text);
+  let left_tokens = span_token_set(left);
+  let right_tokens = span_token_set(right);
+  let shared_tokens = left_tokens
+    .iter()
+    .filter(|token| right_tokens.contains(*token))
+    .count() as f32;
+  let token_affinity = if left_tokens.is_empty() || right_tokens.is_empty() {
+    0.0
+  } else {
+    1.0 - lexical_set_distance(&left_tokens, &right_tokens)
+  };
+  let shared_token_boost = (shared_tokens.min(3.0) / 3.0) * 0.12;
+
+  (0.5 * char_affinity + 0.38 * token_affinity + shared_token_boost).clamp(0.0, 1.0)
 }
 
 async fn persist_closed_spans(
@@ -1067,6 +1163,24 @@ fn aggregate_token_set(units: &[AnalysisUnit]) -> BTreeSet<String> {
   tokens
 }
 
+fn span_surface_text(span: &ClosedSpan) -> String {
+  span
+    .messages
+    .iter()
+    .map(|message| message.content.trim())
+    .filter(|content| !content.is_empty())
+    .collect::<Vec<_>>()
+    .join(" ")
+}
+
+fn span_token_set(span: &ClosedSpan) -> BTreeSet<String> {
+  span
+    .messages
+    .iter()
+    .flat_map(|message| tokenize(&message.content))
+    .collect()
+}
+
 fn truncate(text: &str, max_len: usize) -> String {
   if text.len() <= max_len {
     return text.to_owned();
@@ -1169,6 +1283,17 @@ mod tests {
     }
   }
 
+  fn message(role: &str, content: &str, timestamp: i64) -> Message {
+    Message {
+      role: MessageRole(role.to_owned()),
+      content: content.to_owned(),
+      timestamp: Utc
+        .timestamp_opt(timestamp, 0)
+        .single()
+        .expect("valid timestamp"),
+    }
+  }
+
   #[test]
   fn candidate_scorer_skips_plain_question_answer_exchange() {
     let units = build_analysis_units(&[
@@ -1225,5 +1350,86 @@ mod tests {
       .filter(|candidate| candidate.time_gap == 0.0 && candidate.cue_phrase == 0.0)
       .count();
     assert!(dense_candidates <= 1, "dense candidates: {candidates:?}");
+  }
+
+  #[test]
+  fn normalize_closed_spans_merges_weak_singleton_into_more_affine_neighbor() {
+    let spans = vec![
+      ClosedSpan {
+        start_seq: 0,
+        end_seq: 1,
+        messages: vec![
+          message("John", "My dogs had a checkup at the vet today.", 0),
+          message("James", "I hope Max and Daisy are doing well.", 1),
+        ],
+        boundary_reason: BoundaryReason::SessionBreak,
+        surprise_level: SurpriseLevel::Low,
+      },
+      ClosedSpan {
+        start_seq: 2,
+        end_seq: 2,
+        messages: vec![message("John", "The vet said Daisy needs more exercise.", 2)],
+        boundary_reason: BoundaryReason::TopicShift,
+        surprise_level: SurpriseLevel::Low,
+      },
+      ClosedSpan {
+        start_seq: 3,
+        end_seq: 4,
+        messages: vec![
+          message("James", "I went bowling after work yesterday.", 3),
+          message("John", "Bowling sounds fun for a weekend outing.", 4),
+        ],
+        boundary_reason: BoundaryReason::TopicShift,
+        surprise_level: SurpriseLevel::Low,
+      },
+    ];
+
+    let normalized = normalize_closed_spans(spans);
+    assert_eq!(normalized.len(), 2);
+    assert_eq!(normalized[0].start_seq, 0);
+    assert_eq!(normalized[0].end_seq, 2);
+    assert_eq!(normalized[1].start_seq, 3);
+  }
+
+  #[test]
+  fn normalize_closed_spans_can_merge_short_high_span_when_affinity_is_clear() {
+    let spans = vec![
+      ClosedSpan {
+        start_seq: 0,
+        end_seq: 1,
+        messages: vec![
+          message("John", "My dogs had a checkup at the vet today.", 0),
+          message("James", "The vet said Daisy is healthy and just needs more exercise.", 1),
+        ],
+        boundary_reason: BoundaryReason::SessionBreak,
+        surprise_level: SurpriseLevel::Low,
+      },
+      ClosedSpan {
+        start_seq: 2,
+        end_seq: 3,
+        messages: vec![
+          message("John", "Daisy needs more exercise after the vet visit.", 2),
+          message("James", "I should probably walk Daisy more after dinner.", 3),
+        ],
+        boundary_reason: BoundaryReason::TopicShift,
+        surprise_level: SurpriseLevel::High,
+      },
+      ClosedSpan {
+        start_seq: 4,
+        end_seq: 5,
+        messages: vec![
+          message("John", "I went bowling after work yesterday.", 4),
+          message("James", "Bowling sounds fun for a weekend outing.", 5),
+        ],
+        boundary_reason: BoundaryReason::TopicShift,
+        surprise_level: SurpriseLevel::Low,
+      },
+    ];
+
+    let normalized = normalize_closed_spans(spans);
+    assert_eq!(normalized.len(), 2);
+    assert_eq!(normalized[0].start_seq, 0);
+    assert_eq!(normalized[0].end_seq, 3);
+    assert_eq!(normalized[1].start_seq, 4);
   }
 }
