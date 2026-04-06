@@ -114,22 +114,7 @@ impl EpisodicMemory {
       GROUP BY id
     )
     SELECT
-      m.id,
-      m.conversation_id,
-      m.source_span_id,
-      m.messages,
-      m.title,
-      m.content,
-      m.embedding,
-      m.stability,
-      m.difficulty,
-      m.surprise,
-      m.start_at,
-      m.end_at,
-      m.created_at,
-      m.last_reviewed_at,
-      m.consolidated_at,
-      m.derivation_status,
+      m.*,
       r.score AS score
     FROM rrf_score r
     JOIN episodic_memory m USING (id)

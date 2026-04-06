@@ -184,8 +184,13 @@ struct CreatedEpisode {
 }
 
 struct PreparedClosedSpan {
-  span: ClosedSpan,
   span_id: Uuid,
+  start_seq: i64,
+  end_seq: i64,
+  boundary_reason: BoundaryReason,
+  surprise_level: SurpriseLevel,
+  message_count: usize,
+  total_chars: usize,
   episodic_memory: plastmem_core::EpisodicMemory,
   boundary_context: SegmentationBoundaryContext,
 }
@@ -984,10 +989,10 @@ async fn persist_closed_spans(
     episode_span::ActiveModel {
       id: Set(prepared.span_id),
       conversation_id: Set(conversation_id),
-      start_seq: Set(prepared.span.start_seq),
-      end_seq: Set(prepared.span.end_seq),
-      boundary_reason: Set(prepared.span.boundary_reason.as_str().to_owned()),
-      surprise_level: Set(prepared.span.surprise_level.as_str().to_owned()),
+      start_seq: Set(prepared.start_seq),
+      end_seq: Set(prepared.end_seq),
+      boundary_reason: Set(prepared.boundary_reason.as_str().to_owned()),
+      surprise_level: Set(prepared.surprise_level.as_str().to_owned()),
       status: Set("derived".to_owned()),
       created_at: Set(now.into()),
     }
@@ -1000,24 +1005,19 @@ async fn persist_closed_spans(
       .exec(&txn)
       .await?;
 
-    max_closed_end_seq = Some(prepared.span.end_seq);
-    next_unsegmented_seq = prepared.span.end_seq + 1;
+    max_closed_end_seq = Some(prepared.end_seq);
+    next_unsegmented_seq = prepared.end_seq + 1;
     last_boundary_context = Some(serde_json::to_value(prepared.boundary_context)?);
     created.push(CreatedEpisode {
       id: prepared.episodic_memory.id,
       surprise: prepared.episodic_memory.surprise,
-      message_count: prepared.span.messages.len(),
-      total_chars: prepared
-        .span
-        .messages
-        .iter()
-        .map(|message| message.content.len())
-        .sum(),
+      message_count: prepared.message_count,
+      total_chars: prepared.total_chars,
       duration_minutes: (prepared.episodic_memory.end_at - prepared.episodic_memory.start_at)
         .num_minutes()
         .max(0),
-      boundary_reason: prepared.span.boundary_reason,
-      surprise_level: prepared.span.surprise_level,
+      boundary_reason: prepared.boundary_reason,
+      surprise_level: prepared.surprise_level,
     });
   }
 
@@ -1061,26 +1061,18 @@ async fn prepare_closed_spans(
   let mut prepared = Vec::with_capacity(closed_spans.len());
 
   for span in closed_spans {
-    let span_id = Uuid::now_v7();
-    let episodic_memory = build_episodic_projection(conversation_id, span_id, span).await?;
-    let boundary_context = build_boundary_context(span, &episodic_memory.title);
-    prepared.push(PreparedClosedSpan {
-      span: span.clone(),
-      span_id,
-      episodic_memory,
-      boundary_context,
-    });
+    prepared.push(build_prepared_closed_span(conversation_id, span).await?);
   }
 
   Ok(prepared)
 }
 
-async fn build_episodic_projection(
+async fn build_prepared_closed_span(
   conversation_id: Uuid,
-  source_span_id: Uuid,
   span: &ClosedSpan,
-) -> Result<plastmem_core::EpisodicMemory, AppError> {
+) -> Result<PreparedClosedSpan, AppError> {
   let now = Utc::now();
+  let span_id = Uuid::now_v7();
   let title = build_provisional_title(span);
   let content = build_provisional_content(span);
   let embedding_input = if title.is_empty() {
@@ -1096,11 +1088,10 @@ async fn build_episodic_projection(
   let boosted_stability = initial_state.stability * (1.0 + surprise * SURPRISE_BOOST_FACTOR);
   let start_at = span.messages.first().map_or(now, |message| message.timestamp);
   let end_at = span.messages.last().map_or(now, |message| message.timestamp);
-
-  Ok(plastmem_core::EpisodicMemory {
+  let episodic_memory = plastmem_core::EpisodicMemory {
     id: Uuid::now_v7(),
     conversation_id,
-    source_span_id: Some(source_span_id),
+    source_span_id: Some(span_id),
     messages: span.messages.clone(),
     title,
     content,
@@ -1114,6 +1105,19 @@ async fn build_episodic_projection(
     last_reviewed_at: now,
     consolidated_at: None,
     derivation_status: "provisional".to_owned(),
+  };
+  let boundary_context = build_boundary_context(span, &episodic_memory.title);
+
+  Ok(PreparedClosedSpan {
+    span_id,
+    start_seq: span.start_seq,
+    end_seq: span.end_seq,
+    boundary_reason: span.boundary_reason,
+    surprise_level: span.surprise_level,
+    message_count: span.messages.len(),
+    total_chars: span.messages.iter().map(|message| message.content.len()).sum(),
+    episodic_memory,
+    boundary_context,
   })
 }
 
