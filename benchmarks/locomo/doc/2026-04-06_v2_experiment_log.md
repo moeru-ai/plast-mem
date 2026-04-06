@@ -21,7 +21,8 @@ Most experiments below were run on `conv-47`, with additional inspection on `con
 Reference points:
 
 - Old baseline before v2 comparison point: 2026-04-03 10:19 run
-- Best v2 run so far: 2026-04-06 08:22 run
+- Earlier best v2 run: 2026-04-06 08:22 run
+- Current best v2 run after rolling back failed title experiments: 2026-04-06 14:08 run
 
 Key numbers:
 
@@ -29,10 +30,12 @@ Key numbers:
 | :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | 2026-04-03 10:19 baseline | 49.78% | 47.34% | 66.00% | 24.93% | 26.76% | 20.82% | 69.73% |
 | 2026-04-06 08:22 best v2 | 51.06% | 47.34% | 65.33% | 26.38% | 24.34% | 20.82% | 72.69% |
+| 2026-04-06 14:08 current best v2 | 52.03% | 49.21% | 66.00% | 25.22% | 24.90% | 20.82% | 74.49% |
 
 Takeaway:
 
 - v2 can beat the earlier baseline overall.
+- the current best v2 run is now above both the earlier baseline and the previous best v2 checkpoint.
 - The remaining weak category is still `temporal`.
 - `multi-hop` and `single-hop` improved after the segmentation and consolidation cleanup.
 
@@ -69,6 +72,14 @@ After this fix, the best v2 run reached:
 - overall F1: `51.06%`
 - NemoriF1: `47.34%`
 - LLM: `65.33%`
+
+After later rolling back failed retrieval-surface and title experiments, the current best v2 run improved again to:
+
+- overall F1: `52.03%`
+- NemoriF1: `49.21%`
+- LLM: `66.00%`
+- single-hop: `74.49%`
+- temporal: `24.90%`
 
 ### 3. Keeping non-LLM provisional content
 
@@ -157,6 +168,35 @@ Conclusion:
 - do not compress provisional `content` to a small selected-message sketch
 - do not add re-rank heuristics on top of a weakened retrieval surface
 
+### 4. Smarter deterministic title selection
+
+We also tried a narrower follow-up:
+
+- keep full deterministic non-LLM `content`
+- remove re-rank changes
+- but replace the simple provisional title with a scored clause-selection heuristic
+
+This also regressed.
+
+Representative numbers on `conv-47`:
+
+- best stable v2 run: overall F1 `51.06%`
+- after title tweak: overall F1 `47.13%`
+- multi-hop: `26.38% -> 18.99%`
+- temporal: `24.34% -> 18.32%`
+- open-domain: `20.82% -> 5.38%`
+
+Failure mode:
+
+- even though `content` stayed full, the title still affected the retrieval surface enough to hurt ranking
+- the “smarter” title was less stable than the plain first-message seed
+- open-domain and temporal retrieval became much worse
+
+Conclusion:
+
+- do not try to make provisional title selection smarter in the hot path without very strong evidence
+- the simple seed-title approach is safer for now
+
 ## Case Studies
 
 ### `conv-42`
@@ -233,9 +273,11 @@ Keep the system close to the best v2 run:
 - no retrieval-text replacement
 - no evidence-sketch re-rank in the default path
 
-The only deterministic projection tweak that still looks worth keeping is:
+At the moment, the best validated default is simply the rolled-back stable version:
 
-- stronger title selection that avoids blindly using the first greeting-like sentence
+- plain seed-based provisional title
+- full deterministic non-LLM provisional content
+- no extra retrieval-surface experimentation in the hot path
 
 ## Recommended Next Steps
 
@@ -256,7 +298,13 @@ After the last rollback, the code returned to the safer direction:
 - full deterministic non-LLM provisional `content`
 - no evidence-sketch re-rank
 - no compressed retrieval-only surface
-- deterministic title improvement only
+- simple seed-based provisional title
+
+That rollback path is also what produced the current best v2 score:
+
+- overall F1: `52.03%`
+- NemoriF1: `49.21%`
+- LLM: `66.00%`
 
 This state has been validated with:
 
