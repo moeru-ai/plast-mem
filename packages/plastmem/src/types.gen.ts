@@ -20,6 +20,19 @@ export type AddMessageResult = {
     reason?: string | null;
 };
 
+export type ImportMessages = {
+    conversation_id: string;
+    eof?: boolean;
+    import_id?: string | null;
+    messages: Array<AddMessageMessage>;
+};
+
+export type ImportMessagesResult = {
+    accepted: boolean;
+    eof: boolean;
+    inserted_count: number;
+};
+
 export type BenchmarkFlush = {
     conversation_id: string;
 };
@@ -35,6 +48,18 @@ export type BenchmarkJobStatus = {
     fence_active: boolean;
     flushable: boolean;
     messages_pending: number;
+    predict_calibrate_jobs_active: number;
+    segmentation_jobs_active: number;
+};
+
+export type SegmentationStateStatus = {
+    admissible_for_add: boolean;
+    done: boolean;
+    eof_seen: boolean;
+    fence_active: boolean;
+    last_seen_seq?: number | null;
+    messages_pending: number;
+    next_unsegmented_seq: number;
     predict_calibrate_jobs_active: number;
     segmentation_jobs_active: number;
 };
@@ -189,6 +214,44 @@ export type AddMessageResponses = {
 
 export type AddMessageResponse = AddMessageResponses[keyof AddMessageResponses];
 
+export type MessagesAppendData = {
+    body: AddMessage;
+    path?: never;
+    query?: never;
+    url: '/api/v1/messages:append';
+};
+
+export type MessagesAppendErrors = AddMessageErrors;
+
+export type MessagesAppendError = MessagesAppendErrors[keyof MessagesAppendErrors];
+
+export type MessagesAppendResponses = AddMessageResponses;
+
+export type MessagesAppendResponse = MessagesAppendResponses[keyof MessagesAppendResponses];
+
+export type MessagesImportData = {
+    body: ImportMessages;
+    path?: never;
+    query?: never;
+    url: '/api/v1/messages:import';
+};
+
+export type MessagesImportErrors = {
+    /**
+     * Invalid request
+     */
+    400: unknown;
+};
+
+export type MessagesImportResponse = MessagesImportResponses[keyof MessagesImportResponses];
+
+export type MessagesImportResponses = {
+    /**
+     * Messages imported
+     */
+    200: ImportMessagesResult;
+};
+
 export type BenchmarkFlushData = {
     body: BenchmarkFlush;
     path?: never;
@@ -239,6 +302,34 @@ export type BenchmarkJobStatusResponses = {
 };
 
 export type BenchmarkJobStatusResponse = BenchmarkJobStatusResponses[keyof BenchmarkJobStatusResponses];
+
+export type SegmentationStateData = {
+    body?: never;
+    path?: never;
+    query: {
+        /**
+         * Conversation ID to inspect
+         */
+        conversation_id: string;
+    };
+    url: '/api/v1/segmentation_state';
+};
+
+export type SegmentationStateErrors = {
+    /**
+     * Invalid request
+     */
+    400: unknown;
+};
+
+export type SegmentationStateResponses = {
+    /**
+     * Segmentation state
+     */
+    200: SegmentationStateStatus;
+};
+
+export type SegmentationStateResponse = SegmentationStateResponses[keyof SegmentationStateResponses];
 
 export type ContextPreRetrieveData = {
     body: ContextPreRetrieve;

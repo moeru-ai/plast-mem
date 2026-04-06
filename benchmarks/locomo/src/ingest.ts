@@ -1,13 +1,13 @@
-import type { AddMessage } from 'plastmem'
+import type { ImportMessages } from 'plastmem'
 
 import type { DialogTurn, LoCoMoSample } from './types'
 
-import { progress as createProgress, spinner as createSpinner, log } from '@clack/prompts'
+import { progress as createProgress, log } from '@clack/prompts'
 import { uuid } from '@insel-null/uuid'
-import { addMessage } from 'plastmem'
+import { messagesImport } from 'plastmem'
 
 import { runWithConcurrency } from './concurrency'
-import { flushConversationTailWhenReady, waitUntilConversationAdmissible } from './wait'
+import { waitForAll } from './wait'
 
 // Minutes between consecutive turns within a session
 const TURN_INTERVAL_MINS = 1
@@ -70,40 +70,20 @@ const parseSessionDate = (dateStr: string): Date | null => {
   return new Date(Date.UTC(Number.parseInt(yearStr, 10), monthIndex, Number.parseInt(dStr, 10), hours, mins))
 }
 
-interface AddMessageResult {
-  accepted: boolean
-  reason?: string
-}
-
-const isBackpressured = (value: unknown): value is AddMessageResult =>
-  typeof value === 'object'
-  && value !== null
-  && 'accepted' in value
-  && (value as { accepted: unknown }).accepted === false
-  && (!('reason' in value) || (value as { reason?: unknown }).reason === 'backpressure')
-
-const sendMessage = async (
+const importConversation = async (
   baseUrl: string,
   conversationId: string,
-  message: BatchMessage,
-): Promise<boolean> => {
-  const res = await addMessage({
+  messages: BatchMessage[],
+): Promise<void> => {
+  await messagesImport({
     baseUrl,
     body: {
       conversation_id: conversationId,
-      message: message as unknown as AddMessage['message'],
+      eof: true,
+      messages: messages as unknown as ImportMessages['messages'],
     },
-    throwOnError: false,
+    throwOnError: true,
   })
-
-  if (res.response?.ok)
-    return true
-
-  if (res.response?.status === 429 && isBackpressured(res.error))
-    return false
-
-  const status = res.response?.status ?? 'network'
-  throw new Error(`addMessage failed with status ${status}`)
 }
 
 export const getOrderedSessions = (sample: LoCoMoSample): OrderedSession[] => {
@@ -164,20 +144,9 @@ const ingestSample = async (
 ): Promise<void> => {
   const messages = buildMessages(sample)
   const totalMessages = messages.length
-  let done = 0
-
-  for (const message of messages) {
-    while (true) {
-      const accepted = await sendMessage(baseUrl, conversationId, message)
-      if (accepted) {
-        done++
-        onProgress?.(done, totalMessages)
-        break
-      }
-
-      await waitUntilConversationAdmissible(baseUrl, conversationId)
-    }
-  }
+  onProgress?.(0, totalMessages)
+  await importConversation(baseUrl, conversationId, messages)
+  onProgress?.(totalMessages, totalMessages)
 }
 
 export const ingestAll = async (
@@ -202,17 +171,16 @@ export const ingestAll = async (
     const totalMessages = buildMessages(sample).length
     const progress = createProgress({ max: Math.max(totalMessages, 1) })
     progress.start(`${getSampleDebugLabel(sample.sample_id, conversationId)} ingesting 0/${totalMessages}`)
+    let advanced = 0
     await ingestSample(sample, conversationId, baseUrl, (done, total) => {
-      progress.advance(1, `${getSampleLabel(sample.sample_id)} ingesting ${done}/${total}`)
+      const delta = done - advanced
+      advanced = done
+      if (delta > 0)
+        progress.advance(delta, `${getSampleLabel(sample.sample_id)} ingesting ${done}/${total}`)
     })
     if (settleAndFlushAfterSampleIngest) {
       progress.stop(`${getSampleLabel(sample.sample_id)} ingested ${totalMessages} messages`)
-      const spinner = createSpinner()
-      spinner.start(`${getSampleLabel(sample.sample_id)} waiting for background jobs`)
-      const flushed = await flushConversationTailWhenReady(baseUrl, conversationId)
-      if (flushed)
-        spinner.message(`${getSampleLabel(sample.sample_id)} flushed pending tail`)
-      spinner.stop(`${getSampleLabel(sample.sample_id)} ready`)
+      await waitForAll([conversationId], baseUrl)
     }
     else {
       progress.stop(`${getSampleLabel(sample.sample_id)} ingested`)

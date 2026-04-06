@@ -1,0 +1,6 @@
+# Auto detect text files and perform LF normalization
+* text=auto
+
+benchmarks/** linguist-documentation=false
+benchmarks/** linguist-vendored=true
+benchmarks/** linguist-detectable=false

@@ -52,3 +52,6 @@ dist-ssr
 *.local
 
 .eslintcache
+
+# Internal docs
+docs/internal

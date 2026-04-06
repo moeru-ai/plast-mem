@@ -10,4 +10,7 @@ services:
     ports:
       - '5432:5432'
     volumes:
-      - ./postgresql/data:/var/lib/postgresql/data/
+      - plast-mem-db-data:/var/lib/postgresql/data
+
+volumes:
+  plast-mem-db-data:

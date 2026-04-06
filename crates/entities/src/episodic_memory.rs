@@ -8,6 +8,7 @@ pub struct Model {
   #[sea_orm(primary_key, auto_increment = false)]
   pub id: Uuid,
   pub conversation_id: Uuid,
+  pub source_span_id: Option<Uuid>,
   #[sea_orm(column_type = "JsonBinary")]
   pub messages: Json,
   #[sea_orm(column_type = "Text")]
@@ -26,6 +27,7 @@ pub struct Model {
   pub created_at: DateTimeWithTimeZone,
   pub last_reviewed_at: DateTimeWithTimeZone,
   pub consolidated_at: Option<DateTimeWithTimeZone>,
+  pub derivation_status: String,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
