@@ -29,6 +29,23 @@ const FLASHBULB_SURPRISE_THRESHOLD: f32 = 0.85;
 const DESIRED_RETENTION: f32 = 0.9;
 const SURPRISE_BOOST_FACTOR: f32 = 0.5;
 const MAX_BOUNDARY_CONTEXT_LINES: usize = 3;
+const MIN_TOPIC_SHIFT_SEGMENT_MESSAGES: usize = 6;
+const MIN_TOPIC_SHIFT_SEGMENT_UNITS: usize = 3;
+const MIN_INTENT_SHIFT_SEGMENT_MESSAGES: usize = 8;
+const MIN_INTENT_SHIFT_SEGMENT_UNITS: usize = 4;
+const MIN_SURPRISE_SHIFT_SEGMENT_MESSAGES: usize = 5;
+const MIN_SURPRISE_SHIFT_SEGMENT_UNITS: usize = 2;
+const MIN_OBSERVED_TAIL_MESSAGES_FOR_NON_TEMPORAL_CLOSE: usize = 3;
+const MIN_TOPIC_SHIFT_BOUNDARY_STRENGTH: f32 = 1.95;
+const MIN_INTENT_SHIFT_BOUNDARY_STRENGTH: f32 = 2.05;
+const MIN_SURPRISE_SHIFT_BOUNDARY_STRENGTH: f32 = 1.9;
+const MIN_MESSAGES_FOR_IMMEDIATE_CONSOLIDATION: usize = 10;
+const MIN_CHARS_FOR_IMMEDIATE_CONSOLIDATION: usize = 700;
+const MIN_MESSAGES_FOR_HIGH_SURPRISE_CONSOLIDATION: usize = 6;
+const MIN_CHARS_FOR_HIGH_SURPRISE_CONSOLIDATION: usize = 420;
+const MIN_MESSAGES_FOR_STRONG_BREAK_CONSOLIDATION: usize = 3;
+const MIN_CHARS_FOR_STRONG_BREAK_CONSOLIDATION: usize = 180;
+const MIN_DURATION_MINUTES_FOR_IMMEDIATE_CONSOLIDATION: i64 = 120;
 
 const LOCAL_BOUNDARY_REFINER_SYSTEM_PROMPT: &str = r#"
 You are validating one candidate event boundary in a conversation.
@@ -41,6 +58,8 @@ Use these principles:
 - Do NOT split ordinary back-and-forth turns, acknowledgements, answers, or follow-up questions when they are still about the same local exchange.
 - Keep short question-answer exchanges together unless there is a clear new topic, a clear new activity, or a strong temporal/session break.
 - Approve clear same-session topic changes when the new turns open a materially different subject, activity, or event, even without a temporal gap.
+- Reject boundaries that only carve out a short aside, a one-off turn, or a local digression that does not form its own coherent event block.
+- For non-temporal boundaries, be conservative: both sides should look like meaningful event chunks, not just a small subject drift inside one ongoing conversation.
 - A boundary must land on the first message of the new segment.
 - `boundary_reason` must be exactly one of:
   `topic_shift`, `intent_shift`, `surprise_shift`, `temporal_gap`, `session_break`
@@ -81,7 +100,7 @@ impl SurpriseLevel {
   }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum BoundaryReason {
   TopicShift,
@@ -137,6 +156,11 @@ struct RefinedBoundary {
   next_unit_index: usize,
   boundary_reason: BoundaryReason,
   surprise_level: SurpriseLevel,
+  candidate_score: f32,
+  time_gap: f32,
+  semantic_drop: f32,
+  online_surprise_prior: f32,
+  micro_exchange_penalty: f32,
 }
 
 #[derive(Debug, Clone)]
@@ -152,6 +176,11 @@ struct ClosedSpan {
 struct CreatedEpisode {
   id: Uuid,
   surprise: f32,
+  message_count: usize,
+  total_chars: usize,
+  duration_minutes: i64,
+  boundary_reason: BoundaryReason,
+  surprise_level: SurpriseLevel,
 }
 
 pub async fn process_event_segmentation(
@@ -557,6 +586,11 @@ async fn refine_candidate_boundaries(
         next_unit_index: candidate.next_unit_index,
         boundary_reason: output.boundary_reason,
         surprise_level: output.surprise_level,
+        candidate_score: candidate.score,
+        time_gap: candidate.time_gap,
+        semantic_drop: candidate.semantic_drop,
+        online_surprise_prior: candidate.online_surprise_prior,
+        micro_exchange_penalty: candidate.micro_exchange_penalty,
       });
     }
   }
@@ -657,7 +691,7 @@ fn close_segments(
     return Vec::new();
   }
 
-  let mut boundaries = refined_boundaries.to_vec();
+  let mut boundaries = stabilize_refined_boundaries(units, refined_boundaries, eof_seen);
   boundaries.sort_by_key(|boundary| boundary.next_unit_index);
 
   let mut closed = Vec::new();
@@ -690,6 +724,106 @@ fn close_segments(
   }
 
   normalize_closed_spans(closed)
+}
+
+fn stabilize_refined_boundaries(
+  units: &[AnalysisUnit],
+  refined_boundaries: &[RefinedBoundary],
+  eof_seen: bool,
+) -> Vec<RefinedBoundary> {
+  let mut stabilized = Vec::new();
+  let mut segment_start_index = 0usize;
+
+  for boundary in refined_boundaries.iter().cloned() {
+    let previous_slice = &units[segment_start_index..boundary.next_unit_index];
+    let observed_tail = &units[boundary.next_unit_index..];
+    if should_close_boundary(previous_slice, observed_tail, &boundary, eof_seen) {
+      segment_start_index = boundary.next_unit_index;
+      stabilized.push(boundary);
+    }
+  }
+
+  stabilized
+}
+
+fn should_close_boundary(
+  previous_slice: &[AnalysisUnit],
+  observed_tail: &[AnalysisUnit],
+  boundary: &RefinedBoundary,
+  eof_seen: bool,
+) -> bool {
+  if previous_slice.is_empty() || observed_tail.is_empty() {
+    return false;
+  }
+
+  if is_force_close_boundary(boundary) {
+    return true;
+  }
+
+  let previous_messages = count_messages(previous_slice);
+  let previous_units = previous_slice.len();
+  let observed_tail_messages = count_messages(observed_tail);
+  let boundary_strength = boundary_strength(boundary);
+
+  let (min_messages, min_units, min_strength) = match boundary.boundary_reason {
+    BoundaryReason::TopicShift => (
+      MIN_TOPIC_SHIFT_SEGMENT_MESSAGES,
+      MIN_TOPIC_SHIFT_SEGMENT_UNITS,
+      MIN_TOPIC_SHIFT_BOUNDARY_STRENGTH,
+    ),
+    BoundaryReason::IntentShift => (
+      MIN_INTENT_SHIFT_SEGMENT_MESSAGES,
+      MIN_INTENT_SHIFT_SEGMENT_UNITS,
+      MIN_INTENT_SHIFT_BOUNDARY_STRENGTH,
+    ),
+    BoundaryReason::SurpriseShift => (
+      MIN_SURPRISE_SHIFT_SEGMENT_MESSAGES,
+      MIN_SURPRISE_SHIFT_SEGMENT_UNITS,
+      MIN_SURPRISE_SHIFT_BOUNDARY_STRENGTH,
+    ),
+    BoundaryReason::TemporalGap | BoundaryReason::SessionBreak => (1, 1, 0.0),
+  };
+
+  if previous_messages < min_messages || previous_units < min_units {
+    return false;
+  }
+
+  if !eof_seen && observed_tail_messages < MIN_OBSERVED_TAIL_MESSAGES_FOR_NON_TEMPORAL_CLOSE {
+    return false;
+  }
+
+  boundary_strength >= min_strength
+}
+
+fn is_force_close_boundary(boundary: &RefinedBoundary) -> bool {
+  matches!(
+    boundary.boundary_reason,
+    BoundaryReason::TemporalGap | BoundaryReason::SessionBreak
+  ) || boundary.time_gap >= 0.8
+    || boundary.surprise_level == SurpriseLevel::ExtremelyHigh
+}
+
+fn boundary_strength(boundary: &RefinedBoundary) -> f32 {
+  let reason_bonus = match boundary.boundary_reason {
+    BoundaryReason::TemporalGap => 0.45,
+    BoundaryReason::SessionBreak => 0.4,
+    BoundaryReason::SurpriseShift => 0.28,
+    BoundaryReason::TopicShift => 0.08,
+    BoundaryReason::IntentShift => 0.02,
+  };
+  let surprise_bonus = match boundary.surprise_level {
+    SurpriseLevel::Low => 0.0,
+    SurpriseLevel::High => 0.18,
+    SurpriseLevel::ExtremelyHigh => 0.4,
+  };
+
+  (boundary.candidate_score
+    + reason_bonus
+    + surprise_bonus
+    + 0.18 * boundary.semantic_drop
+    + 0.12 * boundary.online_surprise_prior
+    - 0.15 * boundary.micro_exchange_penalty)
+    .max(0.0)
 }
 
 fn build_closed_span(
@@ -867,6 +1001,11 @@ async fn persist_closed_spans(
     created.push(CreatedEpisode {
       id: source_model.id,
       surprise: source_model.surprise,
+      message_count: span.messages.len(),
+      total_chars: span.messages.iter().map(|message| message.content.len()).sum(),
+      duration_minutes: (end_at_for_span(span) - start_at_for_span(span)).num_minutes().max(0),
+      boundary_reason: span.boundary_reason,
+      surprise_level: span.surprise_level,
     });
   }
 
@@ -1048,7 +1187,24 @@ async fn enqueue_predict_calibrate_jobs(
   episodes: &[CreatedEpisode],
   semantic_storage: &PostgresStorage<PredictCalibrateJob>,
 ) -> Result<(), AppError> {
+  let mut enqueued = 0usize;
+  let mut deferred = 0usize;
   for episode in episodes {
+    if !should_enqueue_predict_calibrate(episode) {
+      deferred += 1;
+      tracing::debug!(
+        conversation_id = %conversation_id,
+        episode_id = %episode.id,
+        message_count = episode.message_count,
+        total_chars = episode.total_chars,
+        duration_minutes = episode.duration_minutes,
+        boundary_reason = episode.boundary_reason.as_str(),
+        surprise_level = episode.surprise_level.as_str(),
+        "Deferring predict-calibrate for small or weak episode"
+      );
+      continue;
+    }
+
     let mut storage = semantic_storage.clone();
     storage
       .push(PredictCalibrateJob {
@@ -1057,8 +1213,53 @@ async fn enqueue_predict_calibrate_jobs(
         force: episode.surprise >= FLASHBULB_SURPRISE_THRESHOLD,
       })
       .await?;
+    enqueued += 1;
+  }
+
+  if !episodes.is_empty() {
+    tracing::info!(
+      conversation_id = %conversation_id,
+      total_episodes = episodes.len(),
+      enqueued_predict_calibrate = enqueued,
+      deferred_predict_calibrate = deferred,
+      "Finished predict-calibrate enqueue pass"
+    );
   }
   Ok(())
+}
+
+fn should_enqueue_predict_calibrate(episode: &CreatedEpisode) -> bool {
+  if episode.surprise >= FLASHBULB_SURPRISE_THRESHOLD {
+    return true;
+  }
+
+  if matches!(
+    episode.boundary_reason,
+    BoundaryReason::TemporalGap | BoundaryReason::SessionBreak | BoundaryReason::SurpriseShift
+  ) {
+    return episode.message_count >= MIN_MESSAGES_FOR_STRONG_BREAK_CONSOLIDATION
+      || episode.total_chars >= MIN_CHARS_FOR_STRONG_BREAK_CONSOLIDATION;
+  }
+
+  if episode.message_count >= MIN_MESSAGES_FOR_IMMEDIATE_CONSOLIDATION {
+    return true;
+  }
+
+  if episode.total_chars >= MIN_CHARS_FOR_IMMEDIATE_CONSOLIDATION
+    && episode.message_count >= MIN_MESSAGES_FOR_HIGH_SURPRISE_CONSOLIDATION
+  {
+    return true;
+  }
+
+  if episode.duration_minutes >= MIN_DURATION_MINUTES_FOR_IMMEDIATE_CONSOLIDATION
+    && episode.message_count >= MIN_MESSAGES_FOR_HIGH_SURPRISE_CONSOLIDATION
+  {
+    return true;
+  }
+
+  episode.surprise_level == SurpriseLevel::High
+    && episode.message_count >= MIN_MESSAGES_FOR_HIGH_SURPRISE_CONSOLIDATION
+    && episode.total_chars >= MIN_CHARS_FOR_HIGH_SURPRISE_CONSOLIDATION
 }
 
 async fn enqueue_follow_up_if_needed(
@@ -1161,6 +1362,18 @@ fn aggregate_token_set(units: &[AnalysisUnit]) -> BTreeSet<String> {
     tokens.extend(unit.token_set.iter().cloned());
   }
   tokens
+}
+
+fn count_messages(units: &[AnalysisUnit]) -> usize {
+  units.iter().map(|unit| unit.messages.len()).sum()
+}
+
+fn start_at_for_span(span: &ClosedSpan) -> DateTime<Utc> {
+  span.messages.first().map_or_else(Utc::now, |message| message.timestamp)
+}
+
+fn end_at_for_span(span: &ClosedSpan) -> DateTime<Utc> {
+  span.messages.last().map_or_else(Utc::now, |message| message.timestamp)
 }
 
 fn span_surface_text(span: &ClosedSpan) -> String {
@@ -1294,6 +1507,46 @@ mod tests {
     }
   }
 
+  fn refined_boundary(
+    next_unit_index: usize,
+    boundary_reason: BoundaryReason,
+    surprise_level: SurpriseLevel,
+    candidate_score: f32,
+    time_gap: f32,
+    semantic_drop: f32,
+    online_surprise_prior: f32,
+  ) -> RefinedBoundary {
+    RefinedBoundary {
+      next_unit_index,
+      boundary_reason,
+      surprise_level,
+      candidate_score,
+      time_gap,
+      semantic_drop,
+      online_surprise_prior,
+      micro_exchange_penalty: 0.0,
+    }
+  }
+
+  fn created_episode(
+    boundary_reason: BoundaryReason,
+    surprise_level: SurpriseLevel,
+    message_count: usize,
+    total_chars: usize,
+    duration_minutes: i64,
+    surprise: f32,
+  ) -> CreatedEpisode {
+    CreatedEpisode {
+      id: Uuid::now_v7(),
+      surprise,
+      message_count,
+      total_chars,
+      duration_minutes,
+      boundary_reason,
+      surprise_level,
+    }
+  }
+
   #[test]
   fn candidate_scorer_skips_plain_question_answer_exchange() {
     let units = build_analysis_units(&[
@@ -1350,6 +1603,50 @@ mod tests {
       .filter(|candidate| candidate.time_gap == 0.0 && candidate.cue_phrase == 0.0)
       .count();
     assert!(dense_candidates <= 1, "dense candidates: {candidates:?}");
+  }
+
+  #[test]
+  fn stabilize_refined_boundaries_rejects_short_non_temporal_splits() {
+    let units = build_analysis_units(&[
+      record(0, "John", "I've been planning a pet care app for dog owners."),
+      record(1, "James", "That app sounds useful for people who need reliable dog walkers."),
+      record(2, "John", "I also want the app to track feeding and vet reminders."),
+      record(3, "James", "That would make it even more useful for busy pet parents."),
+      record(4, "John", "Yesterday I went bowling after work and got two strikes."),
+      record(5, "James", "Bowling always feels great when the shots line up."),
+      record(6, "John", "After bowling I came home and kept iterating on the pet app."),
+    ]);
+    let boundaries = vec![
+      refined_boundary(2, BoundaryReason::TopicShift, SurpriseLevel::High, 1.7, 0.0, 0.84, 0.25),
+      refined_boundary(4, BoundaryReason::TopicShift, SurpriseLevel::High, 1.8, 0.0, 0.82, 0.22),
+      refined_boundary(6, BoundaryReason::TopicShift, SurpriseLevel::High, 2.15, 0.0, 0.9, 0.3),
+    ];
+
+    let stabilized = stabilize_refined_boundaries(&units, &boundaries, true);
+    assert_eq!(stabilized.len(), 1);
+    assert_eq!(stabilized[0].next_unit_index, 6);
+  }
+
+  #[test]
+  fn stabilize_refined_boundaries_keeps_temporal_gap_even_when_short() {
+    let units = build_analysis_units(&[
+      record_at(0, 0, "John", "I played games last night."),
+      record_at(1, 60, "James", "Nice, what did you play?"),
+      record_at(2, 60 * 60 * 4, "John", "By the way, I adopted a new dog this afternoon."),
+    ]);
+    let boundaries = vec![refined_boundary(
+      2,
+      BoundaryReason::TemporalGap,
+      SurpriseLevel::High,
+      1.65,
+      0.8,
+      0.5,
+      0.3,
+    )];
+
+    let stabilized = stabilize_refined_boundaries(&units, &boundaries, false);
+    assert_eq!(stabilized.len(), 1);
+    assert_eq!(stabilized[0].next_unit_index, 2);
   }
 
   #[test]
@@ -1431,5 +1728,47 @@ mod tests {
     assert_eq!(normalized[0].start_seq, 0);
     assert_eq!(normalized[0].end_seq, 3);
     assert_eq!(normalized[1].start_seq, 4);
+  }
+
+  #[test]
+  fn predict_calibrate_gate_skips_small_low_topic_shift_episode() {
+    let episode = created_episode(
+      BoundaryReason::TopicShift,
+      SurpriseLevel::Low,
+      3,
+      180,
+      10,
+      0.2,
+    );
+
+    assert!(!should_enqueue_predict_calibrate(&episode));
+  }
+
+  #[test]
+  fn predict_calibrate_gate_keeps_large_topic_shift_episode() {
+    let episode = created_episode(
+      BoundaryReason::TopicShift,
+      SurpriseLevel::High,
+      10,
+      720,
+      90,
+      0.6,
+    );
+
+    assert!(should_enqueue_predict_calibrate(&episode));
+  }
+
+  #[test]
+  fn predict_calibrate_gate_keeps_temporal_gap_episode() {
+    let episode = created_episode(
+      BoundaryReason::TemporalGap,
+      SurpriseLevel::Low,
+      3,
+      190,
+      180,
+      0.2,
+    );
+
+    assert!(should_enqueue_predict_calibrate(&episode));
   }
 }
