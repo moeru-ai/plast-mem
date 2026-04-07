@@ -1,8 +1,8 @@
 import type { ImportMessages } from 'plastmem'
 
 import type { DialogTurn, LoCoMoSample } from './types'
+import type { ConversationStatus } from './wait'
 
-import { progress as createProgress, log } from '@clack/prompts'
 import { uuid } from '@insel-null/uuid'
 import { messagesImport } from 'plastmem'
 
@@ -11,6 +11,23 @@ import { waitForAll } from './wait'
 
 // Minutes between consecutive turns within a session
 const TURN_INTERVAL_MINS = 1
+
+export interface IngestObserver {
+  onConversationAssigned?: (sampleId: string, conversationId: string) => Promise<void> | void
+  onEvent?: (sampleId: string, message: string) => void
+  onIngestProgress?: (
+    sampleId: string,
+    conversationId: string,
+    done: number,
+    total: number,
+  ) => void
+  onWaitStatus?: (
+    sampleId: string,
+    conversationId: string,
+    status: ConversationStatus,
+  ) => void
+}
+
 export interface OrderedSession { date: Date | null, turns: DialogTurn[] }
 
 interface BatchMessage {
@@ -131,22 +148,17 @@ const buildMessages = (sample: LoCoMoSample): BatchMessage[] => {
   return messages
 }
 
-const getSampleLabel = (sampleId: string): string => `Sample ${sampleId}`
-
-const getSampleDebugLabel = (sampleId: string, conversationId: string): string =>
-  `Sample ${sampleId} (${conversationId})`
-
 const ingestSample = async (
   sample: LoCoMoSample,
   conversationId: string,
   baseUrl: string,
-  onProgress?: (done: number, total: number) => void,
+  observer?: IngestObserver,
 ): Promise<void> => {
   const messages = buildMessages(sample)
   const totalMessages = messages.length
-  onProgress?.(0, totalMessages)
+  observer?.onIngestProgress?.(sample.sample_id, conversationId, 0, totalMessages)
   await importConversation(baseUrl, conversationId, messages)
-  onProgress?.(totalMessages, totalMessages)
+  observer?.onIngestProgress?.(sample.sample_id, conversationId, totalMessages, totalMessages)
 }
 
 export const ingestAll = async (
@@ -155,40 +167,36 @@ export const ingestAll = async (
   baseUrl: string,
   concurrency: number,
   settleAndFlushAfterSampleIngest: boolean,
-  onSampleComplete?: (ids: Record<string, string>) => Promise<void>,
+  observer?: IngestObserver,
 ): Promise<Record<string, string>> => {
   const ids: Record<string, string> = { ...existingIds }
-  let persistChain = Promise.resolve()
 
   const tasks = samples.map(sample => async () => {
     const existingConversationId = ids[sample.sample_id]
     if (existingConversationId != null && existingConversationId.length > 0) {
-      log.info(`Reusing ${getSampleLabel(sample.sample_id)}`)
+      observer?.onEvent?.(sample.sample_id, `${sample.sample_id} reuse conversation ${existingConversationId}`)
+      if (settleAndFlushAfterSampleIngest) {
+        await waitForAll([existingConversationId], baseUrl, {
+          onStatus: (_conversationId, status) => {
+            observer?.onWaitStatus?.(sample.sample_id, existingConversationId, status)
+          },
+        })
+      }
       return
     }
 
     const conversationId = uuid.v7()
-    const totalMessages = buildMessages(sample).length
-    const progress = createProgress({ max: Math.max(totalMessages, 1) })
-    progress.start(`${getSampleDebugLabel(sample.sample_id, conversationId)} ingesting 0/${totalMessages}`)
-    let advanced = 0
-    await ingestSample(sample, conversationId, baseUrl, (done, total) => {
-      const delta = done - advanced
-      advanced = done
-      if (delta > 0)
-        progress.advance(delta, `${getSampleLabel(sample.sample_id)} ingesting ${done}/${total}`)
-    })
-    if (settleAndFlushAfterSampleIngest) {
-      progress.stop(`${getSampleLabel(sample.sample_id)} ingested ${totalMessages} messages`)
-      await waitForAll([conversationId], baseUrl)
-    }
-    else {
-      progress.stop(`${getSampleLabel(sample.sample_id)} ingested`)
-    }
+    await ingestSample(sample, conversationId, baseUrl, observer)
     ids[sample.sample_id] = conversationId
-    if (onSampleComplete != null) {
-      persistChain = persistChain.then(async () => onSampleComplete({ ...ids }))
-      await persistChain
+    await observer?.onConversationAssigned?.(sample.sample_id, conversationId)
+    observer?.onEvent?.(sample.sample_id, `${sample.sample_id} import complete (${conversationId})`)
+
+    if (settleAndFlushAfterSampleIngest) {
+      await waitForAll([conversationId], baseUrl, {
+        onStatus: (_conversationId, status) => {
+          observer?.onWaitStatus?.(sample.sample_id, conversationId, status)
+        },
+      })
     }
   })
 

@@ -133,6 +133,7 @@ export const generateAnswer = async (
   category: QACategory,
   model = 'gpt-4o-mini',
   seed?: number,
+  onRetry?: (message: string) => void,
 ): Promise<string> => {
   const prompt = buildPrompt(context, question, category)
   let lastError: unknown
@@ -166,10 +167,12 @@ export const generateAnswer = async (
 
       const delayMs = Math.min(RETRY_BASE_DELAY_MS * 2 ** (attempt - 1), RETRY_MAX_DELAY_MS)
       const code = getErrorCode(error) ?? 'UNKNOWN'
-      console.warn(
-        `generateAnswer failed for "${summarizeQuestion(question)}" `
-        + `(attempt ${attempt}/${DEFAULT_MAX_ATTEMPTS}, code=${code}); retrying in ${delayMs}ms`,
-      )
+      const message = `generateAnswer failed for "${summarizeQuestion(question)}" `
+        + `(attempt ${attempt}/${DEFAULT_MAX_ATTEMPTS}, code=${code}); retrying in ${delayMs}ms`
+      if (onRetry != null)
+        onRetry(message)
+      else
+        console.warn(message)
       await sleep(delayMs)
     }
   }
