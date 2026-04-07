@@ -3,7 +3,8 @@ import type { QACategory } from './types'
 import { env } from 'node:process'
 import { setTimeout as sleep } from 'node:timers/promises'
 
-import { generateText } from '@xsai/generate-text'
+import { generateObject } from '@xsai/generate-object'
+import { z } from 'zod'
 
 const DEFAULT_MAX_ATTEMPTS = 4
 const RETRY_BASE_DELAY_MS = 1_500
@@ -19,108 +20,76 @@ const RETRYABLE_ERROR_CODES = new Set([
 ])
 
 const SYSTEM_PROMPT = [
-  'You answer questions by reading retrieved conversation memories and extracting the most accurate supported answer.',
+  'You answer questions using only the provided conversation context.',
 ].join('\n')
 
-const isCompositeQuestion = (question: string): boolean => {
-  const normalized = question.trim().toLowerCase().replace(/\s+/g, ' ')
-
-  if (normalized.includes(' and '))
-    return true
-
-  const prefixes = [
-    'what kinds of ',
-    'what kind of healthy ',
-    'what food ',
-    'what foods ',
-    'what recipes ',
-    'what motivates ',
-    'what health scares ',
-    'what accidents ',
-    'what challenges ',
-    'how did ',
-    'which two ',
-    'who did ',
-  ]
-
-  return prefixes.some(prefix => normalized.startsWith(prefix))
+const getCategoryGuidance = (category: QACategory): string => {
+  switch (category) {
+    case 1:
+      return [
+        'Question type: multi-hop.',
+        '- Scan all relevant memories before answering.',
+        '- The answer may require multiple facts or multiple items; include every required piece.',
+        '- If several candidate items are topically similar, include only items that satisfy the exact person, event, relation, and time scope in the question.',
+        '- Keep the final answer concise, but do not drop required parts just to make it shorter.',
+      ].join('\n')
+    case 2:
+      return [
+        'Question type: temporal.',
+        '- Match the specific person, event, and time scope asked in the question.',
+        '- Use the memory or conversation date as the anchor for relative dates.',
+        '- Convert relative time references to the best absolute date, month, or year.',
+        '- Do not prefer the most recent memory unless the question asks for the current or latest state.',
+        '- If the evidence only supports an approximate date, answer with the best supported approximate date.',
+      ].join('\n')
+    case 3:
+      return [
+        'Question type: open-domain.',
+        '- Answer the underlying question using only supported information from the context.',
+        '- A slightly longer answer is acceptable when needed to capture the full idea.',
+        '- Do not invent conclusions that are not supported by the context.',
+        '- If evidence is insufficient, say so briefly.',
+      ].join('\n')
+    case 4:
+      return [
+        'Question type: single-hop.',
+        '- Find the single directly supported fact or entity.',
+        '- Prefer the shortest exact span from the context when it answers the question.',
+        '- Do not answer with a full sentence if a short entity, object, place, title, or value is sufficient.',
+        '- If multiple candidate memories match the topic, choose the one matching the exact person, object, event, and time scope in the question.',
+      ].join('\n')
+    case 5:
+      return [
+        'Question type: adversarial.',
+        '- Answer only if the provided context contains direct support.',
+        '- If not supported, answer: No information available.',
+      ].join('\n')
+  }
 }
 
 const buildPrompt = (context: string, question: string, category: QACategory): string => {
   const contextSection = context.length > 0
-    ? `Conversation memories:\n${context}\n\n`
-    : ''
-  const composite = isCompositeQuestion(question)
-  const answerLengthRule = composite
-    ? 'Keep the answer as short as possible while still covering every required part.'
-    : 'Keep the answer under 5 words whenever possible.'
+    ? context
+    : '(empty)'
 
-  if (category === 5) {
-    return `${contextSection}Answer the question using only the retrieved memories above.
-- If the topic does not appear anywhere in those memories, reply exactly: "No information available"
-- If the memories contain the exact answer span, copy that span directly.
-- Prefer the shortest exact answer span over a full sentence.
-- If the question asks for multiple items, people, events, or a cause-and-effect chain, include every required part in the shortest supported form.
-- For multi-part questions, include only items that satisfy the exact subject, relation, and time scope asked in the question.
-- ${answerLengthRule}
+  return `Use only the provided conversation context.
+Answer the question with a concise phrase.
+Prefer exact words from the context when they directly answer the question.
+If multiple candidate memories match the topic, choose the one matching the person, event, and time scope in the question.
+If two plausible answers remain, answer both briefly.
+Do not explain your reasoning.
 
-Question: ${question}
-Short answer:`
-  }
+${getCategoryGuidance(category)}
 
-  return `${contextSection}# Context
-The memories come from a conversation between two speakers.
-Some of them include timestamps that may matter for answering the question.
+Context:
+${contextSection}
 
-# Instructions
-1. Read all retrieved memories from both speakers carefully.
-2. Pay close attention to timestamps when the answer depends on time.
-3. If the question asks about a specific event or fact, look for direct support in the memories.
-4. If the memories conflict, prefer the one with the more recent timestamp.
-5. When a memory uses a relative time phrase such as "last year" or "two months ago", resolve it against that memory's timestamp.
-   Example: if a memory dated 4 May 2022 says "went to India last year," then the trip happened in 2021.
-6. Convert relative time references into a specific date, month, or year in the final answer. Do not answer with the relative phrase itself.
-7. Base the answer only on the memory content from both speakers. If a name appears inside a memory, do not assume that person is the speaker who created it.
-8. If the memories contain the exact answer wording, copy that wording directly.
-9. Prefer the shortest exact answer span over a full sentence.
-10. If the question asks for multiple items, people, events, reasons, or steps, include every required part instead of collapsing the answer into one fragment.
-11. For multi-part questions, do not add loosely related items just because they are topically similar. Every item in the answer must directly satisfy the question.
-12. Do not add explanation, hedging, or extra descriptive words if a shorter exact answer is supported.
-13. ${answerLengthRule}
-
-# Approach
-1. Identify the memories that are relevant to the question.
-2. Determine whether the question asks for one fact or multiple required pieces.
-3. Examine timestamps and content carefully.
-4. Look for explicit mentions of dates, times, locations, people, objects, or events that answer the question.
-5. If a calculation is required, work it out before answering.
-6. If the question is single-fact, output only the shortest exact supported span.
-7. If the question is multi-part, check that every required piece is present before finalizing the answer.
-8. Remove any candidate item that does not match the exact person, object, event type, or time scope asked by the question.
-9. Write a precise, concise answer supported only by the memories.
-10. Make sure the final answer is specific and avoids vague time references.
-
-# Examples
-- Good: "Yoga"
-- Bad: "Yoga helped Evan with stress and flexibility."
-- Good: "fitness tracker"
-- Bad: "a health tracking tool"
-- Good: "Christmas season"
-- Bad: "during the winter holiday season"
-- Good: "the woman he fell in love with; her"
-- Bad: "a Canadian woman"
-- Good: "changed his diet and started walking"
-- Bad: "dietary changes"
-- Good: "old Prius; new Prius"
-- Bad: "Prius"
-- Good: "family; fitness tracker; adventure hikes"
-- Bad: "his family"
-- Good: "old Prius; new Prius"
-- Bad: "self-checkout machines; old Prius"
-
-Question: ${question}
-Short answer:`
+Question: ${question}`
 }
+
+const ANSWER_SCHEMA = z.object({
+  answer: z.string().describe('The concise answer phrase. Do not include reasoning.'),
+})
 
 const getErrorCode = (error: unknown): string | undefined => {
   if (error == null || typeof error !== 'object')
@@ -166,26 +135,29 @@ export const generateAnswer = async (
   seed?: number,
 ): Promise<string> => {
   const prompt = buildPrompt(context, question, category)
-  const maxTokens = isCompositeQuestion(question) ? 96 : 64
   let lastError: unknown
 
   for (let attempt = 1; attempt <= DEFAULT_MAX_ATTEMPTS; attempt++) {
     try {
-      const { text } = await generateText({
+      const { object } = await generateObject({
         apiKey: env.OPENAI_API_KEY ?? '',
         baseURL: env.OPENAI_BASE_URL ?? 'https://api.openai.com/v1',
-        maxTokens,
         messages: [
           { content: SYSTEM_PROMPT, role: 'system' },
           { content: prompt, role: 'user' },
         ],
         model,
+        output: 'object' as const,
         reasoningEffort: 'none',
+        schema: ANSWER_SCHEMA,
+        schemaDescription: 'A concise answer for a LoCoMo question.',
+        schemaName: 'locomo_answer',
         seed,
+        strict: true,
         temperature: 0,
       })
 
-      return text ?? ''
+      return object.answer.trim()
     }
     catch (error) {
       lastError = error
