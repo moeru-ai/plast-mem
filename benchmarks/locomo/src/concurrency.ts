@@ -19,6 +19,6 @@ export const runWithConcurrency = async (
   }
 
   await Promise.all(
-    Array.from({ length: Math.min(limit, tasks.length) }).fill(worker()),
+    Array.from({ length: Math.min(limit, tasks.length) }, () => worker()),
   )
 }
