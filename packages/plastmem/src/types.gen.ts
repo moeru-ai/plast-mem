@@ -20,50 +20,6 @@ export type AddMessageResult = {
     reason?: string | null;
 };
 
-export type ImportMessages = {
-    conversation_id: string;
-    eof?: boolean;
-    import_id?: string | null;
-    messages: Array<AddMessageMessage>;
-};
-
-export type ImportMessagesResult = {
-    accepted: boolean;
-    eof: boolean;
-    inserted_count: number;
-};
-
-export type BenchmarkFlush = {
-    conversation_id: string;
-};
-
-export type BenchmarkFlushResult = {
-    enqueued: boolean;
-    reason: string;
-};
-
-export type BenchmarkJobStatus = {
-    admissible_for_add: boolean;
-    done: boolean;
-    fence_active: boolean;
-    flushable: boolean;
-    messages_pending: number;
-    predict_calibrate_jobs_active: number;
-    segmentation_jobs_active: number;
-};
-
-export type SegmentationStateStatus = {
-    admissible_for_add: boolean;
-    done: boolean;
-    eof_seen: boolean;
-    fence_active: boolean;
-    last_seen_seq?: number | null;
-    messages_pending: number;
-    next_unsegmented_seq: number;
-    predict_calibrate_jobs_active: number;
-    segmentation_jobs_active: number;
-};
-
 export type ContextPreRetrieve = {
     /**
      * Optional category filter, e.g. "guideline", "preference"
@@ -83,11 +39,13 @@ export type EpisodicMemory = {
     content: string;
     conversation_id: string;
     created_at: string;
+    derivation_status: string;
     difficulty: number;
     end_at: string;
     id: string;
     last_reviewed_at: string;
     messages: Array<Message>;
+    source_span_id?: string | null;
     stability: number;
     start_at: string;
     surprise: number;
@@ -99,6 +57,19 @@ export type EpisodicMemoryResult = EpisodicMemory & {
      * Final score (RRF score × FSRS retrievability)
      */
     score: number;
+};
+
+export type ImportMessages = {
+    conversation_id: string;
+    eof?: boolean;
+    import_id?: string | null;
+    messages: Array<AddMessageMessage>;
+};
+
+export type ImportMessagesResult = {
+    accepted: boolean;
+    eof: boolean;
+    inserted_count: number;
 };
 
 export type Message = {
@@ -167,13 +138,28 @@ export type RetrieveMemoryRawResult = {
     semantic: Array<SemanticMemoryResult>;
 };
 
+export type SegmentationStateQuery = {
+    conversation_id: string;
+};
+
+export type SegmentationStateStatus = {
+    admissible_for_add: boolean;
+    done: boolean;
+    eof_seen: boolean;
+    fence_active: boolean;
+    last_seen_seq?: number | null;
+    messages_pending: number;
+    next_unsegmented_seq: number;
+    predict_calibrate_jobs_active: number;
+    segmentation_jobs_active: number;
+};
+
 export type SemanticMemory = {
     category: string;
     conversation_id: string;
     fact: string;
     id: string;
     invalid_at?: string | null;
-    keywords: Array<string>;
     source_episodic_ids: Array<string>;
     valid_at: string;
 };
@@ -213,123 +199,6 @@ export type AddMessageResponses = {
 };
 
 export type AddMessageResponse = AddMessageResponses[keyof AddMessageResponses];
-
-export type MessagesAppendData = {
-    body: AddMessage;
-    path?: never;
-    query?: never;
-    url: '/api/v1/messages:append';
-};
-
-export type MessagesAppendErrors = AddMessageErrors;
-
-export type MessagesAppendError = MessagesAppendErrors[keyof MessagesAppendErrors];
-
-export type MessagesAppendResponses = AddMessageResponses;
-
-export type MessagesAppendResponse = MessagesAppendResponses[keyof MessagesAppendResponses];
-
-export type MessagesImportData = {
-    body: ImportMessages;
-    path?: never;
-    query?: never;
-    url: '/api/v1/messages:import';
-};
-
-export type MessagesImportErrors = {
-    /**
-     * Invalid request
-     */
-    400: unknown;
-};
-
-export type MessagesImportResponse = MessagesImportResponses[keyof MessagesImportResponses];
-
-export type MessagesImportResponses = {
-    /**
-     * Messages imported
-     */
-    200: ImportMessagesResult;
-};
-
-export type BenchmarkFlushData = {
-    body: BenchmarkFlush;
-    path?: never;
-    query?: never;
-    url: '/api/v0/benchmark/flush';
-};
-
-export type BenchmarkFlushErrors = {
-    /**
-     * Invalid request
-     */
-    400: unknown;
-};
-
-export type BenchmarkFlushResponses = {
-    /**
-     * Flush result
-     */
-    200: BenchmarkFlushResult;
-};
-
-export type BenchmarkFlushResponse = BenchmarkFlushResponses[keyof BenchmarkFlushResponses];
-
-export type BenchmarkJobStatusData = {
-    body?: never;
-    path?: never;
-    query: {
-        /**
-         * Conversation ID to check
-         */
-        conversation_id: string;
-    };
-    url: '/api/v0/benchmark/job_status';
-};
-
-export type BenchmarkJobStatusErrors = {
-    /**
-     * Invalid request
-     */
-    400: unknown;
-};
-
-export type BenchmarkJobStatusResponses = {
-    /**
-     * Job status
-     */
-    200: BenchmarkJobStatus;
-};
-
-export type BenchmarkJobStatusResponse = BenchmarkJobStatusResponses[keyof BenchmarkJobStatusResponses];
-
-export type SegmentationStateData = {
-    body?: never;
-    path?: never;
-    query: {
-        /**
-         * Conversation ID to inspect
-         */
-        conversation_id: string;
-    };
-    url: '/api/v1/segmentation_state';
-};
-
-export type SegmentationStateErrors = {
-    /**
-     * Invalid request
-     */
-    400: unknown;
-};
-
-export type SegmentationStateResponses = {
-    /**
-     * Segmentation state
-     */
-    200: SegmentationStateStatus;
-};
-
-export type SegmentationStateResponse = SegmentationStateResponses[keyof SegmentationStateResponses];
 
 export type ContextPreRetrieveData = {
     body: ContextPreRetrieve;
@@ -431,3 +300,83 @@ export type RetrieveMemoryRawResponses = {
 };
 
 export type RetrieveMemoryRawResponse = RetrieveMemoryRawResponses[keyof RetrieveMemoryRawResponses];
+
+export type MessagesAppendData = {
+    body: AddMessage;
+    path?: never;
+    query?: never;
+    url: '/api/v1/messages:append';
+};
+
+export type MessagesAppendErrors = {
+    /**
+     * Invalid request - message content cannot be empty
+     */
+    400: unknown;
+    /**
+     * Backpressured - message not accepted
+     */
+    429: AddMessageResult;
+};
+
+export type MessagesAppendError = MessagesAppendErrors[keyof MessagesAppendErrors];
+
+export type MessagesAppendResponses = {
+    /**
+     * Message accepted
+     */
+    200: AddMessageResult;
+};
+
+export type MessagesAppendResponse = MessagesAppendResponses[keyof MessagesAppendResponses];
+
+export type MessagesImportData = {
+    body: ImportMessages;
+    path?: never;
+    query?: never;
+    url: '/api/v1/messages:import';
+};
+
+export type MessagesImportErrors = {
+    /**
+     * Invalid request
+     */
+    400: unknown;
+};
+
+export type MessagesImportResponses = {
+    /**
+     * Messages imported
+     */
+    200: ImportMessagesResult;
+};
+
+export type MessagesImportResponse = MessagesImportResponses[keyof MessagesImportResponses];
+
+export type SegmentationStateData = {
+    body?: never;
+    path?: never;
+    query: {
+        /**
+         * Conversation ID to inspect
+         */
+        conversation_id: string;
+    };
+    url: '/api/v1/segmentation_state';
+};
+
+export type SegmentationStateErrors = {
+    /**
+     * Invalid request
+     */
+    400: unknown;
+};
+
+export type SegmentationStateResponses = {
+    /**
+     * Segmentation state
+     */
+    200: SegmentationStateStatus;
+};
+
+export type SegmentationStateResponse = SegmentationStateResponses[keyof SegmentationStateResponses];

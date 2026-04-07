@@ -1,4 +1,9 @@
-import type { RunCheckpoint } from './checkpoint'
+import type {
+  BenchmarkRunConfig,
+  RunManifest,
+  SampleResultFile,
+  SampleState,
+} from './checkpoint'
 import type { LoCoMoSample } from './types'
 
 import z from 'zod'
@@ -55,24 +60,45 @@ const qAResultSchema = z.object({
   score: z.number(),
 })
 
+const benchmarkScoreSummarySchema = z.object({
+  by_category: z.record(z.string(), z.number()),
+  by_category_count: z.record(z.string(), z.number()),
+  by_category_llm: z.record(z.string(), z.number()),
+  by_category_nemori_f1: z.record(z.string(), z.number()),
+  overall: z.number(),
+  overall_llm: z.number(),
+  overall_nemori_f1: z.number(),
+  total: z.number(),
+})
+
+const benchmarkStatsSchema = z.object({
+  by_sample: z.record(z.string(), benchmarkScoreSummarySchema),
+  overall: benchmarkScoreSummarySchema,
+})
+
+const benchmarkVariantOutputSchema = z.object({
+  results: z.array(qAResultSchema),
+  stats: benchmarkStatsSchema,
+})
+
 const benchmarkRunConfigSchema = z.object({
   baseUrl: z.string(),
   compareFullContext: z.boolean(),
   dataFile: z.string(),
   model: z.string(),
-  outFile: z.string(),
+  outDir: z.string(),
+  sampleConcurrency: z.number().int().positive(),
   sampleIds: z.array(z.string()),
   seed: z.number().int().optional(),
   useLlmJudge: z.boolean(),
   waitForBackground: z.boolean(),
 })
 
-const variantCheckpointSchema = z.object({
+const sampleVariantStateSchema = z.object({
   eval_done: z.boolean(),
-  results: z.array(qAResultSchema),
 })
 
-const sampleCheckpointSchema = z.object({
+const sampleStateSchema = z.object({
   conversation_id: z.string().nullable(),
   error: z.string().nullable(),
   ingest_done: z.boolean(),
@@ -83,20 +109,29 @@ const sampleCheckpointSchema = z.object({
     z.literal('pending'),
     z.literal('running'),
   ]),
+  updated_at: z.string(),
   variants: z.object({
-    full_context: variantCheckpointSchema.optional(),
-    plastmem: variantCheckpointSchema.optional(),
+    full_context: sampleVariantStateSchema.optional(),
+    plastmem: sampleVariantStateSchema.optional(),
   }),
 })
 
-const runCheckpointSchema = z.object({
+const sampleResultFileSchema = z.object({
+  sample_id: z.string(),
+  variants: z.object({
+    full_context: benchmarkVariantOutputSchema.optional(),
+    plastmem: benchmarkVariantOutputSchema.optional(),
+  }),
+})
+
+const runManifestSchema = z.object({
   completed_at: z.string().nullable(),
   config: benchmarkRunConfigSchema,
   fingerprint: z.string(),
-  samples: z.record(z.string(), sampleCheckpointSchema),
+  sample_ids: z.array(z.string()),
   started_at: z.string(),
   updated_at: z.string(),
-  version: z.literal(1),
+  version: z.literal(2),
 })
 
 const loCoMoSampleSchema = z.object({
@@ -108,5 +143,14 @@ const loCoMoSampleSchema = z.object({
 export const parseLoCoMoSamples = (value: unknown): LoCoMoSample[] =>
   z.array(loCoMoSampleSchema).parse(value) as LoCoMoSample[]
 
-export const parseRunCheckpoint = (value: unknown): RunCheckpoint =>
-  runCheckpointSchema.parse(value) as RunCheckpoint
+export const parseBenchmarkRunConfig = (value: unknown): BenchmarkRunConfig =>
+  benchmarkRunConfigSchema.parse(value) as BenchmarkRunConfig
+
+export const parseRunManifest = (value: unknown): RunManifest =>
+  runManifestSchema.parse(value) as RunManifest
+
+export const parseSampleState = (value: unknown): SampleState =>
+  sampleStateSchema.parse(value) as SampleState
+
+export const parseSampleResult = (value: unknown): SampleResultFile =>
+  sampleResultFileSchema.parse(value) as SampleResultFile

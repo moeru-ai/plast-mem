@@ -139,6 +139,7 @@ export const getContext = async (
   conversationId: string,
   question: string,
   baseUrl: string,
+  onRetry?: (message: string) => void,
 ): Promise<string> => {
   let lastError: unknown
 
@@ -172,10 +173,12 @@ export const getContext = async (
 
       const delayMs = Math.min(RETRY_BASE_DELAY_MS * 2 ** (attempt - 1), RETRY_MAX_DELAY_MS)
       const code = getErrorCode(error) ?? 'UNKNOWN'
-      console.warn(
-        `retrieveMemory timeout for ${conversationId} "${summarizeQuestion(question)}" `
-        + `(attempt ${attempt}/${DEFAULT_MAX_ATTEMPTS}, code=${code}); retrying in ${delayMs}ms`,
-      )
+      const message = `retrieveMemory timeout for ${conversationId} "${summarizeQuestion(question)}" `
+        + `(attempt ${attempt}/${DEFAULT_MAX_ATTEMPTS}, code=${code}); retrying in ${delayMs}ms`
+      if (onRetry != null)
+        onRetry(message)
+      else
+        console.warn(message)
       await sleep(delayMs)
     }
   }

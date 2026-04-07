@@ -1,4 +1,4 @@
-import type { BenchmarkRunConfig, RunCheckpoint } from './checkpoint'
+import type { BenchmarkRunConfig, RunManifest, SampleState } from './checkpoint'
 import type { LoCoMoSample } from './types'
 
 import { readdir, readFile } from 'node:fs/promises'
@@ -19,23 +19,26 @@ import {
 } from '@clack/prompts'
 
 import {
-  buildCheckpointPath,
-  createCheckpoint,
-  loadCheckpoint,
+  buildRunManifestPath,
+  createRunManifest,
+  ensureSampleStates,
+  loadRunManifest,
+  loadSampleState,
+  saveRunManifest,
 } from './checkpoint'
 import { printFinalSummary, runBenchmark } from './runner'
 import { parseLoCoMoSamples } from './schemas'
 
-const __dirname = dirname(fileURLToPath(import.meta.url))
-
 const DEFAULT_DATA_FILE = resolve(cwd(), 'data/locomo10.json')
 const RESULTS_DIR = resolve(cwd(), 'results')
-const CHECKPOINT_FILE_SUFFIX = '.checkpoint.json'
 const COLON_DOT_RE = /[:.]/g
 const LONG_CONTEXT_SAMPLE_IDS = ['conv-43', 'conv-47', 'conv-48'] as const
 const MINIMAL_SAMPLE_IDS = ['conv-42', 'conv-48'] as const
 const DEFAULT_SAMPLE_IDS = ['conv-42', 'conv-44', 'conv-48', 'conv-50'] as const
 const TRAILING_SLASH_RE = /\/$/
+const DEFAULT_SAMPLE_CONCURRENCY = 4
+const __dirname = dirname(fileURLToPath(import.meta.url))
+const WORKSPACE_ROOT = resolve(__dirname, '../../../')
 
 const prompt = async <T>(value: Promise<symbol | T>): Promise<T> => {
   const resolved = await value
@@ -46,8 +49,8 @@ const prompt = async <T>(value: Promise<symbol | T>): Promise<T> => {
   return resolved as T
 }
 
-const timestampedOutputPath = (): string =>
-  resolve(cwd(), `results/${new Date().toISOString().replace(COLON_DOT_RE, '-')}.json`)
+const timestampedOutputDir = (): string =>
+  resolve(cwd(), `results/${new Date().toISOString().replace(COLON_DOT_RE, '-')}`)
 
 const loadSamples = async (dataFile: string): Promise<LoCoMoSample[]> => {
   const raw = await readFile(dataFile, 'utf-8')
@@ -98,34 +101,42 @@ const resolvePresetSampleIds = (
 ): string[] =>
   allSampleIds.filter(sampleId => preset.includes(sampleId))
 
-const getLatestCheckpointPath = async (): Promise<null | string> => {
+const getLatestRunManifestPath = async (): Promise<null | string> => {
   try {
     const entries = await readdir(RESULTS_DIR, { withFileTypes: true })
-    const checkpointNames = entries
-      .filter(entry => entry.isFile() && entry.name.endsWith(CHECKPOINT_FILE_SUFFIX))
+    const runDirs = entries
+      .filter(entry => entry.isDirectory())
       .map(entry => entry.name)
       .toSorted((left, right) => right.localeCompare(left))
 
-    const latest = checkpointNames[0]
-    if (latest == null)
-      return null
+    for (const runDir of runDirs) {
+      const manifestPath = buildRunManifestPath(resolve(RESULTS_DIR, runDir))
+      const manifest = await loadRunManifest(manifestPath)
+      if (manifest != null && manifest.completed_at == null)
+        return manifestPath
+    }
 
-    return resolve(RESULTS_DIR, latest)
+    return null
   }
   catch {
     return null
   }
 }
 
-const describeCheckpoint = (checkpoint: RunCheckpoint): string => {
-  const samples = Object.values(checkpoint.samples)
-  const complete = samples.filter(sample => sample.status === 'complete').length
-  const failed = samples.filter(sample => sample.status === 'failed').length
-  const running = samples.filter(sample => sample.status === 'running').length
-  const pending = samples.length - complete - failed - running
+const describeRun = async (manifest: RunManifest): Promise<string> => {
+  const states = await Promise.all(
+    manifest.sample_ids.map(async sampleId => loadSampleState(manifest.config.outDir, sampleId)),
+  )
+
+  const complete = states.filter(sample => sample?.status === 'complete').length
+  const failed = states.filter(sample => sample?.status === 'failed').length
+  const running = states.filter(sample => sample?.status === 'running').length
+  const pending = manifest.sample_ids.length - complete - failed - running
+
   return [
-    `Started: ${checkpoint.started_at}`,
-    `Updated: ${checkpoint.updated_at}`,
+    `Started: ${manifest.started_at}`,
+    `Updated: ${manifest.updated_at}`,
+    `Run: ${manifest.config.outDir}`,
     `Complete: ${complete}`,
     `Failed: ${failed}`,
     `Running: ${running}`,
@@ -133,28 +144,37 @@ const describeCheckpoint = (checkpoint: RunCheckpoint): string => {
   ].join('\n')
 }
 
-const loadLatestCheckpoint = async (): Promise<null | { checkpoint: RunCheckpoint, checkpointPath: string }> => {
-  const checkpointPath = await getLatestCheckpointPath()
-  if (checkpointPath == null)
+const loadLatestRun = async (): Promise<null | {
+  manifest: RunManifest
+  manifestPath: string
+  sampleStates: Record<string, SampleState>
+}> => {
+  const manifestPath = await getLatestRunManifestPath()
+  if (manifestPath == null)
     return null
 
-  const checkpoint = await loadCheckpoint(checkpointPath)
-  if (checkpoint == null)
+  const manifest = await loadRunManifest(manifestPath)
+  if (manifest == null || manifest.completed_at != null)
     return null
 
-  if (checkpoint.completed_at != null)
-    return null
-
-  note(describeCheckpoint(checkpoint), 'Latest checkpoint found')
+  note(await describeRun(manifest), 'Latest run found')
   const shouldResume = await prompt<boolean>(confirm({
     initialValue: true,
-    message: 'Resume from the latest checkpoint?',
+    message: 'Resume from the latest run?',
   }))
 
   if (!shouldResume)
     return null
 
-  return { checkpoint, checkpointPath }
+  const allSamples = await loadDefaultSamples()
+  const samples = allSamples.filter(sample => manifest.config.sampleIds.includes(sample.sample_id))
+  const sampleStates = await ensureSampleStates(
+    manifest.config.outDir,
+    samples,
+    manifest.config.compareFullContext,
+  )
+
+  return { manifest, manifestPath, sampleStates }
 }
 
 const promptForConfig = async (): Promise<BenchmarkRunConfig> => {
@@ -212,7 +232,8 @@ const promptForConfig = async (): Promise<BenchmarkRunConfig> => {
     compareFullContext: compareMode === 'compare',
     dataFile: DEFAULT_DATA_FILE,
     model: defaultModel,
-    outFile: timestampedOutputPath(),
+    outDir: timestampedOutputDir(),
+    sampleConcurrency: DEFAULT_SAMPLE_CONCURRENCY,
     sampleIds: selectedSampleIds.toSorted((left, right) => left.localeCompare(right)),
     seed: defaultSeed,
     useLlmJudge,
@@ -220,27 +241,36 @@ const promptForConfig = async (): Promise<BenchmarkRunConfig> => {
   }
 }
 
-const prepareCheckpoint = async (
+const prepareRun = async (
   config: BenchmarkRunConfig,
   samples: LoCoMoSample[],
-): Promise<{ checkpoint: RunCheckpoint, checkpointPath: string }> => {
-  const checkpointPath = buildCheckpointPath(config.outFile)
+): Promise<{
+  manifest: RunManifest
+  manifestPath: string
+  sampleStates: Record<string, SampleState>
+}> => {
+  const manifest = createRunManifest(config, samples)
+  const manifestPath = buildRunManifestPath(config.outDir)
+  await saveRunManifest(manifestPath, manifest)
+  const sampleStates = await ensureSampleStates(config.outDir, samples, config.compareFullContext)
+
   return {
-    checkpoint: createCheckpoint(config, samples),
-    checkpointPath,
+    manifest,
+    manifestPath,
+    sampleStates,
   }
 }
 
 const main = async (): Promise<void> => {
   try {
-    loadEnvFile(resolve(__dirname, '../../../.env'))
+    loadEnvFile(resolve(WORKSPACE_ROOT, '.env'))
   }
   catch { }
 
   intro('LoCoMo Benchmark')
 
-  const resumed = await loadLatestCheckpoint()
-  const config = resumed?.checkpoint.config ?? await promptForConfig()
+  const resumed = await loadLatestRun()
+  const config = resumed?.manifest.config ?? await promptForConfig()
 
   if (config.useLlmJudge && (env.OPENAI_API_KEY == null || env.OPENAI_API_KEY.length === 0)) {
     cancel('OPENAI_API_KEY not set for LLM judge mode.')
@@ -254,13 +284,18 @@ const main = async (): Promise<void> => {
     exit(1)
   }
 
-  const { checkpoint, checkpointPath } = resumed ?? await prepareCheckpoint(config, samples)
+  const {
+    manifest,
+    manifestPath,
+    sampleStates,
+  } = resumed ?? await prepareRun(config, samples)
 
   note([
     `data: ${config.dataFile}`,
-    `out: ${config.outFile}`,
-    `checkpoint: ${checkpointPath}`,
+    `run: ${config.outDir}`,
+    `manifest: ${manifestPath}`,
     `samples: ${samples.length}`,
+    `sampleConcurrency: ${config.sampleConcurrency}`,
     `model: ${config.model}`,
     `seed: ${config.seed ?? 'unset'}`,
     `baseUrl: ${config.baseUrl}`,
@@ -269,11 +304,11 @@ const main = async (): Promise<void> => {
   ].join('\n'), 'Run configuration')
 
   log.step('Running selected samples')
-  const completedCheckpoint = await runBenchmark(checkpoint, checkpointPath, samples)
+  const completedRun = await runBenchmark(manifest, sampleStates, samples)
   log.success('Benchmark run finished')
 
-  printFinalSummary(completedCheckpoint)
-  outro(`Results written to ${completedCheckpoint.config.outFile}`)
+  printFinalSummary(completedRun.output)
+  outro(`Results written to ${completedRun.manifest.config.outDir}`)
 }
 
 // eslint-disable-next-line @masknet/no-top-level
