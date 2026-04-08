@@ -1,0 +1,36 @@
+[package]
+name = "plastmem_event_segmentation"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+readme.workspace = true
+license.workspace = true
+authors.workspace = true
+description.workspace = true
+documentation.workspace = true
+homepage.workspace = true
+repository.workspace = true
+
+[lib]
+name = "plastmem_event_segmentation"
+path = "src/lib.rs"
+
+[[bin]]
+name = "segmentation_debug"
+path = "src/segmentation_debug.rs"
+required-features = [ "segmentation-debug" ]
+
+[features]
+segmentation-debug = []
+
+[dependencies]
+plastmem_ai.workspace = true
+plastmem_core.workspace = true
+plastmem_shared.workspace = true
+chrono.workspace = true
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+uuid.workspace = true

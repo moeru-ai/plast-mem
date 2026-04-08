@@ -1,0 +1,32 @@
+[
+  {
+    "role": "John",
+    "content": "I played chess today.",
+    "timestamp": "2022-03-16T12:00:00Z"
+  },
+  {
+    "role": "James",
+    "content": "Nice, how was it?",
+    "timestamp": "2022-03-16T12:01:00Z"
+  },
+  {
+    "role": "John",
+    "content": "It was fun. I am trying to improve my strategy.",
+    "timestamp": "2022-03-16T12:02:00Z"
+  },
+  {
+    "role": "James",
+    "content": "I adopted a dog yesterday and took him to the vet.",
+    "timestamp": "2022-03-16T18:00:00Z"
+  },
+  {
+    "role": "John",
+    "content": "That is exciting. What is his name?",
+    "timestamp": "2022-03-16T18:01:00Z"
+  },
+  {
+    "role": "James",
+    "content": "His name is Ned.",
+    "timestamp": "2022-03-16T18:02:00Z"
+  }
+]

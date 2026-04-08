@@ -6,7 +6,7 @@ Background job worker for Plast Mem.
 
 Runs three background job processors:
 
-1. **Event Segmentation** - Batch-segments message queues and creates episodic memories
+1. **Event Segmentation** - Runs the segmentation engine and creates episodic memories
 2. **Memory Review** - Evaluates retrieved memories and updates FSRS parameters
 3. **Predict-Calibrate** - Real-time knowledge learning from episodic memories
 
@@ -16,17 +16,17 @@ Uses [Apalis](https://github.com/apalis-rs/apalis) for job queue management with
 
 ### [EventSegmentationJob](src/jobs/event_segmentation.rs)
 
-Triggered when `MessageQueue::push()` returns a `SegmentationCheck`.
+Triggered when the conversation `segmentation_state` has enough pending messages or sees EOF.
 
 Processing flow:
 
-1. Fetch queue; validate fence (skip if stale)
-2. Run `batch_segment(messages[0..fence_count])` — single LLM call
-3. **Drain + finalize first** (crash-safe: loss preferred over duplicate)
-4. Create episodes for drained segments in parallel (`try_join_all`)
-5. Enqueue `PredictCalibrateJob` for each new episode
+1. Load the claimed `conversation_message` range from `segmentation_state`
+2. Call `plastmem_event_segmentation` to produce closed spans
+3. Persist `episode_span` rows and provisional `episodic_memory` projections
+4. Advance `segmentation_state`
+5. Enqueue pending review and Predict-Calibrate jobs
 
-Window doubling: if LLM returns 1 segment and window not yet doubled → double window, clear fence, wait for more messages.
+The segmentation algorithm lives in the `plastmem_event_segmentation` crate. It uses temporal-gap fallback plus embedding-selected candidate hints and a window-level LLM planner; this worker module only owns job orchestration, DB persistence, and downstream enqueueing.
 
 ### [MemoryReviewJob](src/jobs/memory_review.rs)
 
@@ -82,7 +82,8 @@ Internal errors are `AppError`, converted at the job boundary.
 ## Module Structure
 
 - `jobs/mod.rs` - Job definitions and error types
-- `jobs/event_segmentation.rs` - Segmentation job implementation
+- `jobs/event_segmentation.rs` - Event segmentation job orchestration and persistence
+- `../event-segmentation` - Segmentation engine and debug harness support
 - `jobs/memory_review.rs` - Review job implementation
 - `jobs/predict_calibrate.rs` - Predict-Calibrate Learning job implementation
 - `lib.rs` - Worker registration and monitor setup

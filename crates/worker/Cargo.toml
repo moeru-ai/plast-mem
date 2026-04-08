@@ -15,6 +15,9 @@ repository.workspace = true
 name = "plastmem_worker"
 path = "src/lib.rs"
 
+[features]
+segmentation-debug = [ "plastmem_event_segmentation/segmentation-debug" ]
+
 [dependencies]
 anyhow.workspace = true
 apalis.workspace = true
@@ -25,6 +28,7 @@ fsrs.workspace = true
 schemars.workspace = true
 plastmem_core.workspace = true
 plastmem_entities.workspace = true
+plastmem_event_segmentation.workspace = true
 plastmem_ai.workspace = true
 plastmem_shared.workspace = true
 sea-orm.workspace = true
