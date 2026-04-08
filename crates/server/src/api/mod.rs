@@ -6,31 +6,33 @@ use utoipa_scalar::{Scalar, Servable};
 use crate::utils::AppState;
 
 mod add_message;
+#[cfg(debug_assertions)]
+mod benchmark;
 mod recent_memory;
 mod retrieve_memory;
-mod segmentation_state;
 
-pub use add_message::{
-  AddMessage, AddMessageMessage, AddMessageResult, ImportMessages, ImportMessagesResult,
-};
+pub use add_message::{AddMessage, AddMessageMessage, AddMessageResult};
+#[cfg(debug_assertions)]
+pub use benchmark::{BenchmarkFlush, BenchmarkFlushResult, BenchmarkJobStatus};
 pub use recent_memory::RecentMemory;
 pub use retrieve_memory::{
   ContextPreRetrieve, EpisodicMemoryResult, RetrieveMemory, RetrieveMemoryRawResult,
   SemanticMemoryResult,
 };
-pub use segmentation_state::{SegmentationStateQuery, SegmentationStateStatus};
 
 pub fn app() -> Router<AppState> {
   let router = OpenApiRouter::with_openapi(ApiDoc::openapi())
     .routes(routes!(add_message::add_message))
-    .routes(routes!(add_message::messages_append))
-    .routes(routes!(add_message::messages_import))
     .routes(routes!(recent_memory::recent_memory))
     .routes(routes!(recent_memory::recent_memory_raw))
     .routes(routes!(retrieve_memory::retrieve_memory))
     .routes(routes!(retrieve_memory::retrieve_memory_raw))
-    .routes(routes!(retrieve_memory::context_pre_retrieve))
-    .routes(routes!(segmentation_state::segmentation_state));
+    .routes(routes!(retrieve_memory::context_pre_retrieve));
+
+  #[cfg(debug_assertions)]
+  let router = router
+    .routes(routes!(benchmark::benchmark_flush))
+    .routes(routes!(benchmark::benchmark_job_status));
 
   let (router, openapi) = router.split_for_parts();
 
@@ -52,11 +54,10 @@ pub fn app() -> Router<AppState> {
     AddMessage,
     AddMessageMessage,
     AddMessageResult,
-    ImportMessages,
-    ImportMessagesResult,
+    BenchmarkFlush,
+    BenchmarkFlushResult,
+    BenchmarkJobStatus,
     RecentMemory,
-    SegmentationStateQuery,
-    SegmentationStateStatus,
     RetrieveMemory,
     ContextPreRetrieve,
     RetrieveMemoryRawResult,
@@ -79,11 +80,7 @@ pub struct ApiDoc;
     AddMessage,
     AddMessageMessage,
     AddMessageResult,
-    ImportMessages,
-    ImportMessagesResult,
     RecentMemory,
-    SegmentationStateQuery,
-    SegmentationStateStatus,
     RetrieveMemory,
     ContextPreRetrieve,
     RetrieveMemoryRawResult,

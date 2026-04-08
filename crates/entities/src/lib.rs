@@ -2,9 +2,6 @@
 
 pub mod prelude;
 
-pub mod conversation_message;
 pub mod episodic_memory;
-pub mod episode_span;
 pub mod message_queue;
-pub mod segmentation_state;
 pub mod semantic_memory;

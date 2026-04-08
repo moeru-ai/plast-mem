@@ -8,8 +8,72 @@ use utoipa::ToSchema;
 use super::EpisodicMemory;
 use super::SemanticMemory;
 
-fn format_message_timestamp(message_time: chrono::DateTime<Utc>) -> String {
-  message_time.format("%Y-%m-%d %H:%M UTC").to_string()
+const TIME_CUE_WORDS: &[&str] = &[
+  "today",
+  "yesterday",
+  "tomorrow",
+  "tonight",
+  "morning",
+  "afternoon",
+  "evening",
+  "night",
+  "monday",
+  "tuesday",
+  "wednesday",
+  "thursday",
+  "friday",
+  "saturday",
+  "sunday",
+  "week",
+  "month",
+  "year",
+  "days",
+  "weeks",
+  "months",
+  "years",
+  "january",
+  "february",
+  "march",
+  "april",
+  "may",
+  "june",
+  "july",
+  "august",
+  "september",
+  "october",
+  "november",
+  "december",
+  "ago",
+  "last",
+  "next",
+];
+
+fn has_four_digit_year(text: &str) -> bool {
+  let mut run = 0usize;
+  for c in text.chars() {
+    if c.is_ascii_digit() {
+      run += 1;
+      if run >= 4 {
+        return true;
+      }
+    } else {
+      run = 0;
+    }
+  }
+  false
+}
+
+fn contains_time_cue(text: &str) -> bool {
+  if text
+    .to_lowercase()
+    .split(|c: char| !c.is_ascii_alphanumeric())
+    .filter(|w| !w.is_empty())
+    .any(|w| TIME_CUE_WORDS.contains(&w))
+  {
+    return true;
+  }
+
+  has_four_digit_year(text) || (text.contains(':') && text.chars().any(|c| c.is_ascii_digit()))
 }
 
 #[derive(Debug, Clone, Default, Deserialize, ToSchema)]
@@ -71,17 +135,28 @@ pub fn format_tool_result(
     // Content
     let _ = writeln!(out, "**Content:** {}", mem.content);
 
+    // Always surface explicit temporal evidence for top-ranked memories.
+    if rank <= 2 {
+      let time_evidence: Vec<_> = mem
+        .messages
+        .iter()
+        .filter(|msg| contains_time_cue(&msg.content))
+        .take(3)
+        .collect();
+
+      if !time_evidence.is_empty() {
+        let _ = writeln!(out, "\n**Time Evidence:**");
+        for msg in time_evidence {
+          let _ = writeln!(out, "- {}: \"{}\"", msg.role, msg.content);
+        }
+      }
+    }
+
     // Details
     if detail.include_details(rank, mem.surprise) {
       let _ = writeln!(out, "\n**Details:**");
       for msg in &mem.messages {
-        let _ = writeln!(
-          out,
-          "- [{}] {}: \"{}\"",
-          format_message_timestamp(msg.timestamp),
-          msg.role,
-          msg.content,
-        );
+        let _ = writeln!(out, "- {}: \"{}\"", msg.role, msg.content);
       }
     }
 

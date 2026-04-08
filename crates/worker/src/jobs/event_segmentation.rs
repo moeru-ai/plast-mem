@@ -1,88 +1,52 @@
-use std::collections::{BTreeSet, HashSet};
-
-use anyhow::anyhow;
 use apalis::prelude::{Data, TaskSink};
 use apalis_postgres::PostgresStorage;
-use chrono::{DateTime, TimeDelta, Utc};
+use chrono::Utc;
 use fsrs::{DEFAULT_PARAMETERS, FSRS};
+use futures::future::try_join_all;
 use plastmem_ai::{
   ChatCompletionRequestMessage, ChatCompletionRequestSystemMessage,
   ChatCompletionRequestUserMessage, embed, generate_object,
 };
-use plastmem_core::{
-  ConversationMessageRecord, MessageQueue, SEGMENTATION_WINDOW_BASE, SegmentationBoundaryContext,
-  get_segmentation_state, list_messages,
-};
-use plastmem_entities::{episode_span, episodic_memory, segmentation_state};
+use plastmem_core::MessageQueue;
+
+const FLASHBULB_SURPRISE_THRESHOLD: f32 = 0.85;
+// Keep this in sync with `crates/core/src/message_queue.rs` WINDOW_MAX.
+const FORCE_SINGLE_SEGMENT_QUEUE_LEN: usize = 30;
+use plastmem_entities::episodic_memory;
 use plastmem_shared::{APP_ENV, AppError, Message};
 use schemars::JsonSchema;
-use sea_orm::{
-  ActiveModelTrait, DatabaseConnection, EntityTrait, IntoActiveModel, QuerySelect, Set,
-  TransactionTrait,
-};
+use sea_orm::{DatabaseConnection, EntityTrait, TransactionTrait};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::{MemoryReviewJob, PredictCalibrateJob};
 
-const FLASHBULB_SURPRISE_THRESHOLD: f32 = 0.85;
-const DESIRED_RETENTION: f32 = 0.9;
-const SURPRISE_BOOST_FACTOR: f32 = 0.5;
-const MAX_BOUNDARY_CONTEXT_LINES: usize = 3;
-const MIN_TOPIC_SHIFT_SEGMENT_MESSAGES: usize = 6;
-const MIN_TOPIC_SHIFT_SEGMENT_UNITS: usize = 3;
-const MIN_INTENT_SHIFT_SEGMENT_MESSAGES: usize = 8;
-const MIN_INTENT_SHIFT_SEGMENT_UNITS: usize = 4;
-const MIN_SURPRISE_SHIFT_SEGMENT_MESSAGES: usize = 5;
-const MIN_SURPRISE_SHIFT_SEGMENT_UNITS: usize = 2;
-const MIN_OBSERVED_TAIL_MESSAGES_FOR_NON_TEMPORAL_CLOSE: usize = 3;
-const MIN_TOPIC_SHIFT_BOUNDARY_STRENGTH: f32 = 1.95;
-const MIN_INTENT_SHIFT_BOUNDARY_STRENGTH: f32 = 2.05;
-const MIN_SURPRISE_SHIFT_BOUNDARY_STRENGTH: f32 = 1.9;
-const LARGE_SAME_SESSION_SEGMENT_MESSAGES: usize = 18;
-const LARGE_SAME_SESSION_SEGMENT_UNITS: usize = 8;
-const LARGE_SAME_SESSION_TOPIC_SHIFT_RELAXATION: f32 = 0.18;
-const LARGE_SAME_SESSION_INTENT_SHIFT_RELAXATION: f32 = 0.14;
-const PRE_GAP_TRAILING_REPLY_MAX_CHARS: usize = 120;
-const PRE_GAP_TRAILING_REPLY_AFFINITY_THRESHOLD: f32 = 0.08;
-const PRE_GAP_TRAILING_REPLY_AFFINITY_MARGIN: f32 = 0.04;
-const PRE_GAP_TRAILING_REPLY_PREVIOUS_MAX_MINUTES: i64 = 10;
-const PRE_GAP_TRAILING_REPLY_NEXT_MIN_MINUTES: i64 = 60;
-const MIN_MESSAGES_FOR_IMMEDIATE_CONSOLIDATION: usize = 10;
-const MIN_CHARS_FOR_IMMEDIATE_CONSOLIDATION: usize = 700;
-const MIN_MESSAGES_FOR_HIGH_SURPRISE_CONSOLIDATION: usize = 6;
-const MIN_CHARS_FOR_HIGH_SURPRISE_CONSOLIDATION: usize = 420;
-const MIN_MESSAGES_FOR_STRONG_BREAK_CONSOLIDATION: usize = 3;
-const MIN_CHARS_FOR_STRONG_BREAK_CONSOLIDATION: usize = 180;
-const MIN_DURATION_MINUTES_FOR_IMMEDIATE_CONSOLIDATION: i64 = 120;
-const LOCAL_BOUNDARY_REFINER_SYSTEM_PROMPT: &str = r#"
-You are validating one candidate event boundary in a conversation.
-Return only JSON that matches the schema.
-
-Decide whether the candidate boundary is a real episodic split.
-
-Use these principles:
-- Favor topic shift, intent shift, temporal gap, and surprise discontinuity.
-- Do NOT split ordinary back-and-forth turns, acknowledgements, answers, or follow-up questions when they are still about the same local exchange.
-- Keep short question-answer exchanges together unless there is a clear new topic, a clear new activity, or a strong temporal/session break.
-- Approve clear same-session topic changes when the new turns open a materially different subject, activity, or event, even without a temporal gap.
-- Reject boundaries that only carve out a short aside, a one-off turn, or a local digression that does not form its own coherent event block.
-- For non-temporal boundaries, be conservative: both sides should look like meaningful event chunks, not just a small subject drift inside one ongoing conversation.
-- A boundary must land on the first message of the new segment.
-- `boundary_reason` must be exactly one of:
-  `topic_shift`, `intent_shift`, `surprise_shift`, `temporal_gap`, `session_break`
-- `surprise_level` must be exactly one of:
-  `low`, `high`, `extremely_high`
-- `surprise_level` measures how abruptly the new segment begins relative to the prior segment.
-- If the candidate is weak, reject it.
-"#;
+// ──────────────────────────────────────────────────
+// Job definition
+// ──────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EventSegmentationJob {
   pub conversation_id: Uuid,
+  /// Number of messages in the queue when this job was triggered.
+  pub fence_count: i32,
+  /// Whether processing is forced (reached max window).
+  pub force_process: bool,
+  /// Whether to keep the last segment in queue for cross-window stitching.
+  /// `true` for streaming ingestion, `false` for batch benchmark ingestion.
+  #[serde(default = "default_keep_tail_segment")]
+  pub keep_tail_segment: bool,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+const fn default_keep_tail_segment() -> bool {
+  true
+}
+
+// ──────────────────────────────────────────────────
+// Segmentation types
+// ──────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 enum SurpriseLevel {
   Low,
@@ -91,1122 +55,507 @@ enum SurpriseLevel {
 }
 
 impl SurpriseLevel {
-  const fn to_signal(self) -> f32 {
+  const fn to_signal(&self) -> f32 {
     match self {
       Self::Low => 0.2,
       Self::High => 0.6,
       Self::ExtremelyHigh => 0.9,
     }
   }
-
-  const fn as_str(self) -> &'static str {
-    match self {
-      Self::Low => "low",
-      Self::High => "high",
-      Self::ExtremelyHigh => "extremely_high",
-    }
-  }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-enum BoundaryReason {
-  TopicShift,
-  IntentShift,
-  SurpriseShift,
-  TemporalGap,
-  SessionBreak,
-}
-
-impl BoundaryReason {
-  const fn as_str(self) -> &'static str {
-    match self {
-      Self::TopicShift => "topic_shift",
-      Self::IntentShift => "intent_shift",
-      Self::SurpriseShift => "surprise_shift",
-      Self::TemporalGap => "temporal_gap",
-      Self::SessionBreak => "session_break",
-    }
-  }
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-struct LocalBoundaryRefinerOutput {
-  is_boundary: bool,
-  boundary_reason: BoundaryReason,
-  surprise_level: SurpriseLevel,
-}
-
-#[derive(Debug, Clone)]
-struct AnalysisUnit {
-  start_seq: i64,
-  end_seq: i64,
-  messages: Vec<ConversationMessageRecord>,
-  joined_content: String,
-  token_set: BTreeSet<String>,
-  start_at: DateTime<Utc>,
-  end_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone)]
-struct CandidateBoundary {
-  next_unit_index: usize,
-  score: f32,
-  time_gap: f32,
-  cue_phrase: f32,
-  semantic_drop: f32,
-  online_surprise_prior: f32,
-  micro_exchange_penalty: f32,
-}
-
-#[derive(Debug, Clone)]
-struct RefinedBoundary {
-  next_unit_index: usize,
-  boundary_reason: BoundaryReason,
-  surprise_level: SurpriseLevel,
-  candidate_score: f32,
-  time_gap: f32,
-  semantic_drop: f32,
-  online_surprise_prior: f32,
-  micro_exchange_penalty: f32,
-}
-
-#[derive(Debug, Clone)]
-struct ClosedSpan {
-  start_seq: i64,
-  end_seq: i64,
+#[derive(Debug)]
+struct BatchSegment {
   messages: Vec<Message>,
-  boundary_reason: BoundaryReason,
+  title: String,
+  content: String,
   surprise_level: SurpriseLevel,
 }
 
-#[derive(Debug, Clone)]
 struct CreatedEpisode {
   id: Uuid,
   surprise: f32,
-  message_count: usize,
-  total_chars: usize,
-  duration_minutes: i64,
-  boundary_reason: BoundaryReason,
+}
+
+struct PreparedEpisode {
+  memory: plastmem_core::EpisodicMemory,
+  surprise: f32,
+}
+
+// ──────────────────────────────────────────────────
+// LLM segmentation
+// ──────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct SegmentationPlanOutput {
+  segments: Vec<SegmentationPlanItem>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct SegmentationPlanItem {
+  start_message_index: u32,
   surprise_level: SurpriseLevel,
 }
 
-struct PreparedClosedSpan {
-  span_id: Uuid,
-  start_seq: i64,
-  end_seq: i64,
-  boundary_reason: BoundaryReason,
-  surprise_level: SurpriseLevel,
-  message_count: usize,
-  total_chars: usize,
-  episodic_memory: plastmem_core::EpisodicMemory,
-  boundary_context: SegmentationBoundaryContext,
+#[derive(Debug, Deserialize, JsonSchema)]
+struct EpisodeContentOutput {
+  title: String,
+  content: String,
 }
 
-pub async fn process_event_segmentation(
-  job: EventSegmentationJob,
-  db: Data<DatabaseConnection>,
-  segmentation_storage: Data<PostgresStorage<EventSegmentationJob>>,
-  review_storage: Data<PostgresStorage<MemoryReviewJob>>,
-  semantic_storage: Data<PostgresStorage<PredictCalibrateJob>>,
-) -> Result<(), AppError> {
-  let db = &*db;
-  let state = get_segmentation_state(job.conversation_id, db).await?;
-  let Some(in_progress_until_seq) = state.in_progress_until_seq else {
-    return Ok(());
-  };
+const SEGMENTATION_SYSTEM_PROMPT: &str = r#"
+You are segmenting a batch of conversation messages into episodic units.
+Return only JSON that matches the schema.
 
-  let read_start_seq = state.open_tail_start_seq.unwrap_or(state.next_unsegmented_seq);
-  if read_start_seq > in_progress_until_seq {
-    finalize_empty_pass(job.conversation_id, db).await?;
-    return Ok(());
-  }
+Identify the first message of each new segment.
+Start a new segment whenever there is a meaningful topic shift or a clear surprise/discontinuity.
+Use HIGH SENSITIVITY to topic shifts.
+When boundary placement is uncertain, split.
 
-  let records = list_messages(job.conversation_id, read_start_seq, in_progress_until_seq, db).await?;
-  if records.is_empty() {
-    finalize_empty_pass(job.conversation_id, db).await?;
-    return Ok(());
-  }
+# Boundary Triggers
 
-  let analysis_units = build_analysis_units(&records);
-  let candidates = score_candidate_boundaries(&analysis_units, state.last_closed_boundary_context.as_ref());
-  let refined_boundaries = refine_candidate_boundaries(
-    &analysis_units,
-    &candidates,
-    state.last_closed_boundary_context.as_ref(),
-  )
-  .await?;
-  let closed_spans = close_segments(
-    &analysis_units,
-    &refined_boundaries,
-    state.open_tail_start_seq.is_some(),
-    state.eof_seen,
-  );
+1. **Topic change** (highest priority)
+ - The conversation moves from one concrete event, question, problem, or activity to another.
+ - A previous issue has been answered or wrapped up, and the next messages open a different thread.
+ - The new messages are only loosely related to the prior discussion, even if they share the same broad life area.
 
-  enqueue_pending_reviews(job.conversation_id, &to_messages(&records), db, &review_storage).await?;
-  let created = persist_closed_spans(
-    job.conversation_id,
-    in_progress_until_seq,
-    state.eof_seen,
-    &analysis_units,
-    &closed_spans,
-    db,
-  )
-  .await?;
-  enqueue_predict_calibrate_jobs(job.conversation_id, &created, &semantic_storage).await?;
-  enqueue_follow_up_if_needed(job.conversation_id, db, &segmentation_storage).await?;
+2. **Intent transition**
+ - The purpose of the exchange changes, such as moving from catching up to seeking advice, from one person's update to the other's unrelated update, or from one question to a different question.
+ - A new exchange starts after the current one has already reached a natural stopping point.
 
-  Ok(())
-}
+3. **Temporal markers**
+ - Temporal transition phrases such as "earlier", "before", "by the way", "oh right", "also", "anyway", or "speaking of".
+ - Any gap over 30 minutes is a strong boundary signal unless the messages are clearly continuing the same unresolved exchange.
 
-fn build_analysis_units(records: &[ConversationMessageRecord]) -> Vec<AnalysisUnit> {
-  let mut units = Vec::new();
+4. **Structural signals**
+ - Explicit topic-change phrases such as "changing topics", "quick question", or "speaking of which".
+ - Closing or wrap-up statements that indicate the current thread is finished.
 
-  for record in records {
-    let should_merge = units.last().is_some_and(|unit| should_merge_into_unit(unit, record));
-    if should_merge {
-      let unit = units.last_mut().expect("unit exists");
-      unit.end_seq = record.seq;
-      unit.end_at = record.message.timestamp;
-      unit.messages.push(record.clone());
-      if !unit.joined_content.is_empty() {
-        unit.joined_content.push('\n');
-      }
-      unit.joined_content.push_str(&format_message_line(record));
-      unit.token_set.extend(tokenize(&record.message.content));
-      continue;
-    }
+5. **Surprise & discontinuity**
+ - Abrupt emotional reversals or unexpected vulnerability.
+ - Sudden shifts between personal/emotional and logistical/factual content.
+ - Introduction of a completely new domain.
+ - Sharp changes in tone or register.
 
-    units.push(AnalysisUnit {
-      start_seq: record.seq,
-      end_seq: record.seq,
-      messages: vec![record.clone()],
-      joined_content: format_message_line(record),
-      token_set: tokenize(&record.message.content),
-      start_at: record.message.timestamp,
-      end_at: record.message.timestamp,
-    });
-  }
+- **surprise_level:** Measure how abruptly the segment begins relative to the *preceding* segment. The first segment is `low` unless a previous episode is provided as context.
+  - `low`: Gradual or routine transition.
+  - `high`: Noticeable discontinuity (unexpected emotion, intent reversal, domain change).
+  - `extremely_high`: Stark break (shocking event, intense emotion, major domain jump).
 
-  units
-}
+# Quality Constraints
 
-fn should_merge_into_unit(unit: &AnalysisUnit, next: &ConversationMessageRecord) -> bool {
-  let Some(last_message) = unit.messages.last() else {
-    return false;
-  };
+- Each item marks the first message of a segment using a 0-based `start_message_index`.
+- Return only segment starts. Do not return segment ends.
+- Include the first segment start at index 0.
+- Indices should be unique and in ascending order.
+- If there is no meaningful boundary, return exactly one segment start at 0.
+- Prioritize topic independence. Each episode should revolve around one core topic, event, or unresolved exchange.
+- A segment should usually stay within 10-15 messages. Longer segments are acceptable only when the messages are still clearly part of the same ongoing topic and splitting would create artificial fragments.
+- Do not merge multiple date-separated or topic-separated exchanges into one large "catch-all" segment.
+- Focus on choosing the right split points. The system will derive segment ends automatically.
+- Return only JSON that matches the schema."#;
 
-  if last_message.message.role != next.message.role {
-    return false;
-  }
+const EPISODE_CONTENT_SYSTEM_PROMPT: &str = r"
+You are turning a conversation segment into an episodic memory record.
+Return only JSON with `title` and `content`.
 
-  if next.message.timestamp - last_message.message.timestamp > TimeDelta::minutes(5) {
-    return false;
-  }
+Requirements:
+1. The title must be concise, descriptive, and easy to search. Keep it within 10-20 words and name the main topic, activity, or event.
+2. The content must be a factual observation log, like a concise case note or incident record. It is not a prose paragraph and it is not a message-by-message transcript.
+3. Group observations under shared time-block headers using `At: Mon DD, YYYY h AM/PM` when the observations belong to the same approximate hour. If an hour-level header would be misleading or cannot be inferred cleanly, use `At: Mon DD, YYYY`.
+4. A single `At:` header may cover multiple bullets. Do not repeat the same header for every bullet.
+5. Round headers to the hour. Do not include minutes unless minute-level precision is clearly important for understanding the event.
+6. Keep bullets in chronological order within each header block.
+7. Each bullet should capture one dense factual observation: a concrete event, statement, action, result, preference, question, intention, or outcome. Merge adjacent turns when they belong to one coherent micro-exchange.
+8. Distinguish statements, questions, requests, intentions, plans, and completed events accurately.
+9. Make state changes explicit in natural language only when the change itself matters for later retrieval, such as a change in belief, feeling, plan, role, diagnosis, or outcome. Do not add a special label for state changes.
+10. If an observation refers to another concrete time, keep the original time phrase in the sentence and resolve it inline in parentheses immediately after the phrase, for example `last month (July 2023)` or `the previous weekend (June 17-18, 2023)`.
+11. If the time can be resolved more precisely from the message timestamps, include that grounded date, range, or hour in the parentheses. If it cannot be resolved cleanly, keep the original phrase without inventing specifics.
+12. The observation text must be retrieval-friendly, specific, and source-grounded. It should read like a factual record, not a vague summary.
+13. Use actor-explicit wording. Use the speaker labels that appear in the segment consistently when the actor matters for retrieval. Only fall back to generic role labels when no better speaker label is available.
+14. Use precise source verbs such as `said`, `asked`, `planned`, `confirmed`, `reported`, `mentioned`, `suggested`, `showed`, or `shared`.
+15. Preserve names, places, quantities, identifiers, specific roles, and distinguishing details that make the memory searchable later.
+16. Preserve nicknames, short forms, product or game titles, place names, titles of works, device names, diagnosis-like wording, and other distinctive wording verbatim when they may matter for later retrieval or QA.
+17. Do not replace a specific original term with a fuller, broader, or more generic paraphrase if the original wording is supported by the conversation.
+18. When possible, bind the time, place, actor, and event in the same bullet instead of scattering them across separate lines.
+19. Prefer compression over repetition, but do not compress away named entities, rare lexical clues, exact labels, grounded time references, or concrete formulations that may be directly asked about later.
+20. Use terse, dense wording. Avoid filler, narrative glue, broad moralizing summaries, and unsupported causal claims.
+21. Do not use any bracketed metadata tags such as `[spoken_at: ...]`, `[type: ...]`, `[time_expression: ...]`, `[referenced_time: ...]`, or `[time_confidence: ...]`.
 
-  let combined_chars = unit
-    .messages
+Format:
+- Write one or more shared `At:` headers as needed.
+- Under each header, write one bullet per observation using this style:
+  `* Observation text`
+- Example:
+  At: Jun 15, 2026 3 PM
+  * Sam said he planned to visit his parents that weekend (June 20-21, 2026).
+  * Evan asked for help comparing adoption agencies.
+  * Sam said he moved from Sweden four years earlier (2022).
+";
+
+fn format_messages(messages: &[Message]) -> String {
+  messages
     .iter()
-    .map(|message| message.message.content.len())
-    .sum::<usize>()
-    + next.message.content.len();
-  combined_chars <= 240 && next.message.content.len() <= 160
-}
-
-fn score_candidate_boundaries(
-  units: &[AnalysisUnit],
-  boundary_context: Option<&SegmentationBoundaryContext>,
-) -> Vec<CandidateBoundary> {
-  let mut candidates = Vec::new();
-
-  for next_unit_index in 1..units.len() {
-    let previous = &units[next_unit_index - 1];
-    let current = &units[next_unit_index];
-    let gap_minutes = (current.start_at - previous.end_at).num_minutes();
-    let time_gap = match gap_minutes {
-      n if n >= 180 => 1.0,
-      n if n >= 60 => 0.8,
-      n if n >= 30 => 0.55,
-      n if n >= 10 => 0.25,
-      _ => 0.0,
-    };
-
-    let cue_phrase = structural_boundary_cue(previous, current);
-
-    let micro_exchange_penalty =
-      micro_exchange_penalty(units, next_unit_index, time_gap, cue_phrase);
-    let adjacent_drop = semantic_drop_score(previous, current);
-    let window_drop = window_semantic_drop(units, next_unit_index);
-    let semantic_drop =
-      (adjacent_drop.max(window_drop) - micro_exchange_penalty * 0.35).clamp(0.0, 1.0);
-    let online_surprise_prior =
-      online_surprise_prior(previous, current, boundary_context, time_gap, cue_phrase, semantic_drop);
-    let score =
-      (time_gap + cue_phrase + semantic_drop + online_surprise_prior - micro_exchange_penalty).max(0.0);
-
-    let strong_context_free_candidate =
-      semantic_drop >= 0.76 && online_surprise_prior >= 0.18 && micro_exchange_penalty < 0.25;
-    if score >= 1.45 || time_gap >= 0.8 || cue_phrase >= 0.7 || strong_context_free_candidate {
-      candidates.push(CandidateBoundary {
-        next_unit_index,
-        score,
-        time_gap,
-        cue_phrase,
-        semantic_drop,
-        online_surprise_prior,
-        micro_exchange_penalty,
-      });
-    }
-  }
-
-  suppress_dense_same_session_candidates(candidates)
-}
-
-fn suppress_dense_same_session_candidates(
-  candidates: Vec<CandidateBoundary>,
-) -> Vec<CandidateBoundary> {
-  let mut filtered = Vec::new();
-  let mut index = 0usize;
-
-  while index < candidates.len() {
-    let candidate = &candidates[index];
-    if candidate.time_gap > 0.0 || candidate.cue_phrase > 0.0 {
-      filtered.push(candidate.clone());
-      index += 1;
-      continue;
-    }
-
-    let mut best = candidate.clone();
-    let mut end = index + 1;
-    while end < candidates.len() {
-      let next = &candidates[end];
-      let same_session_cluster = next.time_gap == 0.0
-        && next.cue_phrase == 0.0
-        && next.next_unit_index.saturating_sub(candidates[end - 1].next_unit_index) <= 2;
-      if !same_session_cluster {
-        break;
-      }
-      if next.score >= best.score {
-        best = next.clone();
-      }
-      end += 1;
-    }
-
-    filtered.push(best);
-    index = end;
-  }
-
-  filtered
-}
-
-fn semantic_drop_score(previous: &AnalysisUnit, current: &AnalysisUnit) -> f32 {
-  let token_drop = lexical_set_distance(&previous.token_set, &current.token_set);
-  let char_drop = 1.0 - char_ngram_overlap(&unit_surface_text(previous), &unit_surface_text(current));
-  (0.6 * token_drop + 0.4 * char_drop).clamp(0.0, 1.0)
-}
-
-fn lexical_set_distance(previous: &BTreeSet<String>, current: &BTreeSet<String>) -> f32 {
-  if previous.is_empty() || current.is_empty() {
-    return 0.1;
-  }
-
-  let overlap = previous.iter().filter(|token| current.contains(*token)).count() as f32;
-  let union = previous.union(current).count() as f32;
-  (1.0 - overlap / union).clamp(0.0, 1.0)
-}
-
-fn window_semantic_drop(units: &[AnalysisUnit], next_unit_index: usize) -> f32 {
-  let previous_start = next_unit_index.saturating_sub(3);
-  let current_end = (next_unit_index + 2).min(units.len());
-  let previous_window = &units[previous_start..next_unit_index];
-  let current_window = &units[next_unit_index..current_end];
-  if previous_window.is_empty() || current_window.is_empty() {
-    return 0.0;
-  }
-
-  let previous_tokens = aggregate_token_set(previous_window);
-  let current_tokens = aggregate_token_set(current_window);
-  let token_drop = lexical_set_distance(&previous_tokens, &current_tokens);
-  let char_drop = 1.0
-    - char_ngram_overlap(
-      &aggregate_window_text(previous_window),
-      &aggregate_window_text(current_window),
-    );
-  (0.55 * token_drop + 0.45 * char_drop).clamp(0.0, 1.0)
-}
-
-fn online_surprise_prior(
-  previous: &AnalysisUnit,
-  current: &AnalysisUnit,
-  boundary_context: Option<&SegmentationBoundaryContext>,
-  time_gap: f32,
-  cue_phrase: f32,
-  semantic_drop: f32,
-) -> f32 {
-  let context_tokens = boundary_context
-    .map(|context| {
-      tokenize(&context.anchor_topic)
-        .into_iter()
-        .chain(
-          context
-            .anchor_entities
-            .iter()
-            .flat_map(|entity| tokenize(entity).into_iter()),
-        )
-        .collect::<HashSet<_>>()
+    .enumerate()
+    .map(|(i, m)| {
+      format!(
+        "[{}] {} [{}] {}",
+        i,
+        m.timestamp.format("%Y-%m-%dT%H:%M:%SZ"),
+        m.role,
+        m.content
+      )
     })
-    .unwrap_or_default();
-
-  let context_novelty = if context_tokens.is_empty() {
-    0.0
-  } else {
-    let overlap = current
-      .token_set
-      .iter()
-      .filter(|token| context_tokens.contains(*token))
-      .count() as f32;
-    let current_len = current.token_set.len().max(1) as f32;
-    (1.0 - overlap / current_len).clamp(0.0, 1.0)
-  };
-
-  let speaker_shift = if previous
-    .messages
-    .last()
-    .zip(current.messages.first())
-    .is_some_and(|(prev, next)| prev.message.role != next.message.role)
-  {
-    0.05
-  } else {
-    0.0
-  };
-
-  (0.4 * time_gap + 0.25 * cue_phrase + 0.15 * semantic_drop + 0.15 * context_novelty + speaker_shift)
-    .clamp(0.0, 1.0)
+    .collect::<Vec<_>>()
+    .join("\n")
 }
 
-fn micro_exchange_penalty(
-  units: &[AnalysisUnit],
-  next_unit_index: usize,
-  time_gap: f32,
-  cue_phrase: f32,
-) -> f32 {
-  let previous = &units[next_unit_index - 1];
-  let current = &units[next_unit_index];
-
-  if time_gap > 0.0 || cue_phrase > 0.0 {
-    return 0.0;
-  }
-
-  let Some(previous_last) = previous.messages.last() else {
-    return 0.0;
-  };
-  let Some(current_first) = current.messages.first() else {
-    return 0.0;
-  };
-
-  if previous_last.message.role == current_first.message.role {
-    return 0.0;
-  }
-
-  let previous_text = previous_last.message.content.trim();
-  let current_text = current_first.message.content.trim();
-  let previous_short = previous_text.len() <= 220;
-  let current_short = current_text.len() <= 220;
-  if !previous_short || !current_short {
-    return 0.0;
-  }
-
-  let previous_tokens = &previous.token_set;
-  let current_tokens = &current.token_set;
-  let shared_tokens = previous_tokens
-    .iter()
-    .filter(|token| current_tokens.contains(*token))
-    .count();
-  let question_answer_shape =
-    ends_with_question_marker(previous_text) || ends_with_question_marker(current_text);
-  let char_overlap = char_ngram_overlap(previous_text, current_text);
-  let compact_turn_pair = previous_text.len() <= 140 && current_text.len() <= 140;
-
-  if question_answer_shape {
-    return 0.6;
-  }
-
-  if shared_tokens >= 1 || (compact_turn_pair && char_overlap >= 0.18) {
-    return 0.45;
-  }
-
-  if forms_recent_question_answer_exchange(units, next_unit_index, compact_turn_pair) {
-    return 0.35;
-  }
-
-  if compact_turn_pair && previous.messages.len() == 1 && current.messages.len() == 1 {
-    return 0.1;
-  }
-
-  0.0
-}
-
-fn forms_recent_question_answer_exchange(
-  units: &[AnalysisUnit],
-  next_unit_index: usize,
-  compact_turn_pair: bool,
-) -> bool {
-  if next_unit_index < 2 || !compact_turn_pair {
-    return false;
-  }
-
-  let anchor = &units[next_unit_index - 2];
-  let previous = &units[next_unit_index - 1];
-  let current = &units[next_unit_index];
-  let Some(anchor_last) = anchor.messages.last() else {
-    return false;
-  };
-  let Some(previous_last) = previous.messages.last() else {
-    return false;
-  };
-  let Some(current_first) = current.messages.first() else {
-    return false;
-  };
-
-  if !ends_with_question_marker(&anchor_last.message.content) {
-    return false;
-  }
-
-  let alternating_roles = anchor_last.message.role == current_first.message.role
-    && anchor_last.message.role != previous_last.message.role;
-  let compact_triads = anchor_last.message.content.len() <= 220
-    && previous_last.message.content.len() <= 220
-    && current_first.message.content.len() <= 220;
-
-  alternating_roles && compact_triads
-}
-
-async fn refine_candidate_boundaries(
-  units: &[AnalysisUnit],
-  candidates: &[CandidateBoundary],
-  boundary_context: Option<&SegmentationBoundaryContext>,
-) -> Result<Vec<RefinedBoundary>, AppError> {
-  let mut refined = Vec::new();
-
-  for candidate in candidates {
-    let output = match request_boundary_refinement(units, candidate, boundary_context).await {
-      Ok(output) => output,
-      Err(error) => {
-        tracing::warn!(
-          candidate_index = candidate.next_unit_index,
-          score = candidate.score,
-          "Boundary refinement failed, falling back to deterministic decision: {error}"
-        );
-        fallback_boundary_refinement(candidate)
-      }
-    };
-
-    if output.is_boundary {
-      refined.push(RefinedBoundary {
-        next_unit_index: candidate.next_unit_index,
-        boundary_reason: output.boundary_reason,
-        surprise_level: output.surprise_level,
-        candidate_score: candidate.score,
-        time_gap: candidate.time_gap,
-        semantic_drop: candidate.semantic_drop,
-        online_surprise_prior: candidate.online_surprise_prior,
-        micro_exchange_penalty: candidate.micro_exchange_penalty,
-      });
-    }
-  }
-
-  Ok(refined)
-}
-
-async fn request_boundary_refinement(
-  units: &[AnalysisUnit],
-  candidate: &CandidateBoundary,
-  boundary_context: Option<&SegmentationBoundaryContext>,
-) -> Result<LocalBoundaryRefinerOutput, AppError> {
-  let start = candidate.next_unit_index.saturating_sub(2);
-  let end = (candidate.next_unit_index + 2).min(units.len().saturating_sub(1));
-  let mut lines = Vec::new();
-  for (index, unit) in units.iter().enumerate().take(end + 1).skip(start) {
-    let marker = if index == candidate.next_unit_index {
-      ">>> candidate new segment starts here"
-    } else {
-      "context"
-    };
-    lines.push(format!(
-      "[unit {index}] {marker}\n{}",
-      unit.joined_content
-    ));
-  }
-
-  let boundary_context = boundary_context.map_or_else(
-    || "none".to_owned(),
-    |context| serde_json::to_string(context).unwrap_or_else(|_| "none".to_owned()),
+fn build_segmentation_user_content(
+  messages: &[Message],
+  prev_episode_content: Option<&str>,
+  retry_reason: Option<&str>,
+) -> String {
+  let formatted = format_messages(messages);
+  let request = prev_episode_content.map_or_else(
+    || format!("Messages to segment:\n{formatted}"),
+    |content| {
+      format!(
+        "Previous episode content: {content}\n\
+         Use this only as reference for the first segment's surprise level.\n\n\
+         Messages to segment:\n{formatted}"
+      )
+    },
   );
 
-  let user = format!(
-    "Boundary context: {boundary_context}\n\
-     Candidate score breakdown:\n\
-     - time_gap: {:.2}\n\
-     - cue_phrase: {:.2}\n\
-     - semantic_drop: {:.2}\n\
-     - online_surprise_prior: {:.2}\n\
-     - micro_exchange_penalty: {:.2}\n\n\
-     Local units:\n{}",
-    candidate.time_gap,
-    candidate.cue_phrase,
-    candidate.semantic_drop,
-    candidate.online_surprise_prior,
-    candidate.micro_exchange_penalty,
-    lines.join("\n\n")
-  );
+  retry_reason.map_or_else(
+    || request.clone(),
+    |reason| {
+      format!(
+        "The previous segmentation plan was invalid.\n\
+       Failure reason: {reason}\n\n\
+       Re-segment the same messages.\n\
+       Return only valid 0-based segment start indices.\n\
+       Do not include segment ends.\n\
+       Do not create catch-all tail segments.\n\n\
+       {request}"
+      )
+    },
+  )
+}
 
-  generate_object::<LocalBoundaryRefinerOutput>(
+async fn request_segmentation_plan(
+  messages: &[Message],
+  prev_episode_content: Option<&str>,
+  retry_reason: Option<&str>,
+) -> Result<SegmentationPlanOutput, AppError> {
+  let system = ChatCompletionRequestSystemMessage::from(SEGMENTATION_SYSTEM_PROMPT.trim());
+  let user = ChatCompletionRequestUserMessage::from(build_segmentation_user_content(
+    messages,
+    prev_episode_content,
+    retry_reason,
+  ));
+
+  generate_object::<SegmentationPlanOutput>(
     vec![
-      ChatCompletionRequestMessage::System(ChatCompletionRequestSystemMessage::from(
-        LOCAL_BOUNDARY_REFINER_SYSTEM_PROMPT.trim(),
-      )),
-      ChatCompletionRequestMessage::User(ChatCompletionRequestUserMessage::from(user)),
+      ChatCompletionRequestMessage::System(system),
+      ChatCompletionRequestMessage::User(user),
     ],
-    "local_boundary_refiner_output".to_owned(),
-    Some("Event boundary validation result".to_owned()),
+    "batch_segmentation".to_owned(),
+    Some("Batch episodic memory segmentation".to_owned()),
   )
   .await
 }
 
-fn fallback_boundary_refinement(candidate: &CandidateBoundary) -> LocalBoundaryRefinerOutput {
-  let is_boundary = candidate.score >= 1.85
-    || candidate.time_gap >= 0.8
-    || (candidate.cue_phrase >= 0.7 && candidate.micro_exchange_penalty < 0.25);
-  let boundary_reason = if candidate.time_gap >= 0.8 {
-    BoundaryReason::TemporalGap
-  } else if candidate.cue_phrase >= 0.7 {
-    BoundaryReason::TopicShift
-  } else if candidate.online_surprise_prior >= 0.6 {
-    BoundaryReason::SurpriseShift
-  } else {
-    BoundaryReason::IntentShift
-  };
-  let surprise_level = if candidate.score >= 2.1 || candidate.time_gap >= 1.0 {
-    SurpriseLevel::ExtremelyHigh
-  } else if candidate.score >= 1.5 {
-    SurpriseLevel::High
-  } else {
-    SurpriseLevel::Low
-  };
-
-  LocalBoundaryRefinerOutput {
-    is_boundary,
-    boundary_reason,
-    surprise_level,
-  }
-}
-
-fn close_segments(
-  units: &[AnalysisUnit],
-  refined_boundaries: &[RefinedBoundary],
-  has_open_tail: bool,
-  eof_seen: bool,
-) -> Vec<ClosedSpan> {
-  if units.is_empty() {
-    return Vec::new();
+fn resolve_segmentation_plan(
+  messages: &[Message],
+  items: Vec<SegmentationPlanItem>,
+) -> Result<Vec<BatchSegment>, String> {
+  let batch_len = messages.len();
+  if batch_len == 0 {
+    return Ok(Vec::new());
   }
 
-  let mut boundaries = stabilize_refined_boundaries(units, refined_boundaries, eof_seen);
-  boundaries.sort_by_key(|boundary| boundary.next_unit_index);
+  let mut starts = Vec::with_capacity(items.len() + 1);
+  for (segment_idx, item) in items.into_iter().enumerate() {
+    let start = usize::try_from(item.start_message_index)
+      .map_err(|_| format!("segment {segment_idx} start_message_index overflowed usize"))?;
 
-  let mut closed = Vec::new();
-  let mut segment_start_index = 0usize;
-  let mut segment_start_boundary: Option<&RefinedBoundary> = None;
-
-  for boundary in &boundaries {
-    let end_index = boundary.next_unit_index.saturating_sub(1);
-    if end_index >= segment_start_index {
-      closed.push(build_closed_span(
-        units,
-        segment_start_index,
-        end_index,
-        segment_start_boundary,
-        has_open_tail && segment_start_index == 0,
-      ));
-    }
-    segment_start_index = boundary.next_unit_index;
-    segment_start_boundary = Some(boundary);
-  }
-
-  if eof_seen && segment_start_index < units.len() {
-    closed.push(build_closed_span(
-      units,
-      segment_start_index,
-      units.len() - 1,
-      segment_start_boundary,
-      has_open_tail && segment_start_index == 0,
-    ));
-  }
-
-  normalize_closed_spans(closed)
-}
-
-fn stabilize_refined_boundaries(
-  units: &[AnalysisUnit],
-  refined_boundaries: &[RefinedBoundary],
-  eof_seen: bool,
-) -> Vec<RefinedBoundary> {
-  let mut stabilized = Vec::new();
-  let mut segment_start_index = 0usize;
-
-  for boundary in refined_boundaries.iter().cloned() {
-    let previous_slice = &units[segment_start_index..boundary.next_unit_index];
-    let observed_tail = &units[boundary.next_unit_index..];
-    if should_close_boundary(previous_slice, observed_tail, &boundary, eof_seen) {
-      segment_start_index = boundary.next_unit_index;
-      stabilized.push(boundary);
-    }
-  }
-
-  stabilized
-}
-
-fn should_close_boundary(
-  previous_slice: &[AnalysisUnit],
-  observed_tail: &[AnalysisUnit],
-  boundary: &RefinedBoundary,
-  eof_seen: bool,
-) -> bool {
-  if previous_slice.is_empty() || observed_tail.is_empty() {
-    return false;
-  }
-
-  if is_force_close_boundary(boundary) {
-    return true;
-  }
-
-  let previous_messages = count_messages(previous_slice);
-  let previous_units = previous_slice.len();
-  let observed_tail_messages = count_messages(observed_tail);
-  let boundary_strength = boundary_strength(boundary);
-
-  let (min_messages, min_units, min_strength) = match boundary.boundary_reason {
-    BoundaryReason::TopicShift => (
-      MIN_TOPIC_SHIFT_SEGMENT_MESSAGES,
-      MIN_TOPIC_SHIFT_SEGMENT_UNITS,
-      MIN_TOPIC_SHIFT_BOUNDARY_STRENGTH,
-    ),
-    BoundaryReason::IntentShift => (
-      MIN_INTENT_SHIFT_SEGMENT_MESSAGES,
-      MIN_INTENT_SHIFT_SEGMENT_UNITS,
-      MIN_INTENT_SHIFT_BOUNDARY_STRENGTH,
-    ),
-    BoundaryReason::SurpriseShift => (
-      MIN_SURPRISE_SHIFT_SEGMENT_MESSAGES,
-      MIN_SURPRISE_SHIFT_SEGMENT_UNITS,
-      MIN_SURPRISE_SHIFT_BOUNDARY_STRENGTH,
-    ),
-    BoundaryReason::TemporalGap | BoundaryReason::SessionBreak => (1, 1, 0.0),
-  };
-
-  if previous_messages < min_messages || previous_units < min_units {
-    return false;
-  }
-
-  if !eof_seen && observed_tail_messages < MIN_OBSERVED_TAIL_MESSAGES_FOR_NON_TEMPORAL_CLOSE {
-    return false;
-  }
-
-  let relaxed_strength = relaxed_non_temporal_min_strength(
-    previous_messages,
-    previous_units,
-    observed_tail_messages,
-    boundary,
-    min_strength,
-  );
-
-  boundary_strength >= relaxed_strength
-}
-
-fn relaxed_non_temporal_min_strength(
-  previous_messages: usize,
-  previous_units: usize,
-  observed_tail_messages: usize,
-  boundary: &RefinedBoundary,
-  min_strength: f32,
-) -> f32 {
-  if previous_messages < LARGE_SAME_SESSION_SEGMENT_MESSAGES
-    || previous_units < LARGE_SAME_SESSION_SEGMENT_UNITS
-    || observed_tail_messages < MIN_OBSERVED_TAIL_MESSAGES_FOR_NON_TEMPORAL_CLOSE + 1
-  {
-    return min_strength;
-  }
-
-  match boundary.boundary_reason {
-    BoundaryReason::TopicShift
-      if boundary.semantic_drop >= 0.78 && boundary.online_surprise_prior >= 0.16 =>
-    {
-      (min_strength - LARGE_SAME_SESSION_TOPIC_SHIFT_RELAXATION).max(0.0)
-    }
-    BoundaryReason::IntentShift
-      if boundary.semantic_drop >= 0.82 && boundary.online_surprise_prior >= 0.18 =>
-    {
-      (min_strength - LARGE_SAME_SESSION_INTENT_SHIFT_RELAXATION).max(0.0)
-    }
-    _ => min_strength,
-  }
-}
-
-fn is_force_close_boundary(boundary: &RefinedBoundary) -> bool {
-  matches!(
-    boundary.boundary_reason,
-    BoundaryReason::TemporalGap | BoundaryReason::SessionBreak
-  ) || boundary.time_gap >= 0.8
-    || boundary.surprise_level == SurpriseLevel::ExtremelyHigh
-}
-
-fn boundary_strength(boundary: &RefinedBoundary) -> f32 {
-  let reason_bonus = match boundary.boundary_reason {
-    BoundaryReason::TemporalGap => 0.45,
-    BoundaryReason::SessionBreak => 0.4,
-    BoundaryReason::SurpriseShift => 0.28,
-    BoundaryReason::TopicShift => 0.08,
-    BoundaryReason::IntentShift => 0.02,
-  };
-  let surprise_bonus = match boundary.surprise_level {
-    SurpriseLevel::Low => 0.0,
-    SurpriseLevel::High => 0.18,
-    SurpriseLevel::ExtremelyHigh => 0.4,
-  };
-
-  (boundary.candidate_score
-    + reason_bonus
-    + surprise_bonus
-    + 0.18 * boundary.semantic_drop
-    + 0.12 * boundary.online_surprise_prior
-    - 0.15 * boundary.micro_exchange_penalty)
-    .max(0.0)
-}
-
-fn build_closed_span(
-  units: &[AnalysisUnit],
-  start_index: usize,
-  end_index: usize,
-  start_boundary: Option<&RefinedBoundary>,
-  continuing_open_tail: bool,
-) -> ClosedSpan {
-  let messages = units[start_index..=end_index]
-    .iter()
-    .flat_map(|unit| unit.messages.iter().map(|record| record.message.clone()))
-    .collect::<Vec<_>>();
-
-  let (boundary_reason, surprise_level) = match start_boundary {
-    Some(boundary) => (boundary.boundary_reason, boundary.surprise_level),
-    None if continuing_open_tail => (BoundaryReason::TopicShift, SurpriseLevel::Low),
-    None => (BoundaryReason::SessionBreak, SurpriseLevel::Low),
-  };
-
-  ClosedSpan {
-    start_seq: units[start_index].start_seq,
-    end_seq: units[end_index].end_seq,
-    messages,
-    boundary_reason,
-    surprise_level,
-  }
-}
-
-fn normalize_closed_spans(mut spans: Vec<ClosedSpan>) -> Vec<ClosedSpan> {
-  absorb_pre_gap_trailing_singletons(&mut spans);
-
-  let mut index = 0usize;
-  while index < spans.len() {
-    if !should_merge_short_span(&spans, index) {
-      index += 1;
+    if start >= batch_len {
+      tracing::warn!(
+        segment_idx,
+        start,
+        batch_len,
+        "Ignoring out-of-bounds segment start"
+      );
       continue;
     }
 
-    let can_merge_into_previous = index > 0;
-    let can_merge_into_next = index + 1 < spans.len() && !is_strong_start_boundary(&spans[index + 1]);
-
-    let previous_affinity = if can_merge_into_previous {
-      span_affinity(&spans[index - 1], &spans[index])
-    } else {
-      -1.0
-    };
-    let next_affinity = if can_merge_into_next {
-      span_affinity(&spans[index], &spans[index + 1])
-    } else {
-      -1.0
-    };
-    let merge_threshold = merge_affinity_threshold(&spans[index]);
-
-    let merged = if previous_affinity >= next_affinity && previous_affinity >= merge_threshold {
-      let messages = spans[index].messages.clone();
-      let end_seq = spans[index].end_seq;
-      spans[index - 1].end_seq = end_seq;
-      spans[index - 1].messages.extend(messages);
-      spans.remove(index);
-      true
-    } else if next_affinity >= merge_threshold {
-      let current = spans.remove(index);
-      spans[index].start_seq = current.start_seq;
-      spans[index].boundary_reason = current.boundary_reason;
-      spans[index].surprise_level = current.surprise_level;
-      let mut messages = current.messages;
-      messages.extend(spans[index].messages.clone());
-      spans[index].messages = messages;
-      true
-    } else {
-      false
-    };
-
-    if !merged {
-      index += 1;
-    }
+    starts.push((start, item.surprise_level));
   }
 
-  spans
-}
+  starts.sort_by_key(|(start, _)| *start);
+  starts.dedup_by_key(|(start, _)| *start);
 
-fn absorb_pre_gap_trailing_singletons(spans: &mut Vec<ClosedSpan>) {
-  let mut index = 1usize;
-  while index + 1 < spans.len() {
-    if !should_absorb_pre_gap_trailing_singleton(spans, index) {
-      index += 1;
-      continue;
-    }
-
-    let previous_affinity = span_affinity(&spans[index - 1], &spans[index]);
-    let next_affinity = span_affinity(&spans[index], &spans[index + 1]);
-    let timing_supports_absorb = has_pre_gap_trailing_reply_timing(spans, index);
-    if !timing_supports_absorb
-      && (previous_affinity < PRE_GAP_TRAILING_REPLY_AFFINITY_THRESHOLD
-        || previous_affinity < next_affinity + PRE_GAP_TRAILING_REPLY_AFFINITY_MARGIN)
-    {
-      index += 1;
-      continue;
-    }
-
-    let trailing = spans.remove(index);
-    spans[index - 1].end_seq = trailing.end_seq;
-    spans[index - 1].messages.extend(trailing.messages);
-  }
-}
-
-fn should_absorb_pre_gap_trailing_singleton(spans: &[ClosedSpan], index: usize) -> bool {
-  let span = &spans[index];
-  let next = &spans[index + 1];
-
-  if span.messages.len() != 1 || !is_strong_start_boundary(next) {
-    return false;
+  if starts.first().is_none_or(|(start, _)| *start != 0) {
+    tracing::warn!("Segmentation plan omitted start index 0; inserting fallback first segment");
+    starts.insert(0, (0, SurpriseLevel::Low));
   }
 
-  if !matches!(
-    span.boundary_reason,
-    BoundaryReason::SessionBreak | BoundaryReason::TopicShift | BoundaryReason::IntentShift
-  ) || span.surprise_level != SurpriseLevel::Low
-  {
-    return false;
-  }
+  let mut resolved = Vec::with_capacity(starts.len());
+  for (idx, (start, surprise_level)) in starts.iter().enumerate() {
+    let end = starts
+      .get(idx + 1)
+      .map_or(batch_len - 1, |(next_start, _)| {
+        next_start.saturating_sub(1)
+      });
 
-  let message = &span.messages[0];
-  let content = message.content.trim();
-  !content.is_empty()
-    && content.len() <= PRE_GAP_TRAILING_REPLY_MAX_CHARS
-    && !ends_with_question_marker(content)
-}
-
-fn has_pre_gap_trailing_reply_timing(spans: &[ClosedSpan], index: usize) -> bool {
-  let Some(previous_at) = spans[index - 1].messages.last().map(|message| message.timestamp) else {
-    return false;
-  };
-  let Some(current_at) = spans[index].messages.last().map(|message| message.timestamp) else {
-    return false;
-  };
-  let Some(next_at) = spans[index + 1].messages.first().map(|message| message.timestamp) else {
-    return false;
-  };
-
-  let previous_gap_minutes = (current_at - previous_at).num_minutes();
-  let next_gap_minutes = (next_at - current_at).num_minutes();
-  previous_gap_minutes >= 0
-    && previous_gap_minutes <= PRE_GAP_TRAILING_REPLY_PREVIOUS_MAX_MINUTES
-    && next_gap_minutes >= PRE_GAP_TRAILING_REPLY_NEXT_MIN_MINUTES
-}
-
-fn should_merge_short_span(spans: &[ClosedSpan], index: usize) -> bool {
-  let span = &spans[index];
-  span.messages.len() <= 2
-    && matches!(span.boundary_reason, BoundaryReason::TopicShift | BoundaryReason::IntentShift)
-    && span.surprise_level != SurpriseLevel::ExtremelyHigh
-}
-
-fn merge_affinity_threshold(span: &ClosedSpan) -> f32 {
-  match (span.messages.len(), span.surprise_level) {
-    (0, _) => 1.0,
-    (1, SurpriseLevel::Low) => 0.08,
-    (1, SurpriseLevel::High) => 0.15,
-    (2, SurpriseLevel::Low) => 0.14,
-    (2, SurpriseLevel::High) => 0.20,
-    _ => 1.0,
-  }
-}
-
-fn is_strong_start_boundary(span: &ClosedSpan) -> bool {
-  matches!(
-    span.boundary_reason,
-    BoundaryReason::TemporalGap | BoundaryReason::SessionBreak | BoundaryReason::SurpriseShift
-  ) || span.surprise_level == SurpriseLevel::ExtremelyHigh
-}
-
-fn span_affinity(left: &ClosedSpan, right: &ClosedSpan) -> f32 {
-  let left_text = span_surface_text(left);
-  let right_text = span_surface_text(right);
-  let char_affinity = char_ngram_overlap(&left_text, &right_text);
-  let left_tokens = span_token_set(left);
-  let right_tokens = span_token_set(right);
-  let shared_tokens = left_tokens
-    .iter()
-    .filter(|token| right_tokens.contains(*token))
-    .count() as f32;
-  let token_affinity = if left_tokens.is_empty() || right_tokens.is_empty() {
-    0.0
-  } else {
-    1.0 - lexical_set_distance(&left_tokens, &right_tokens)
-  };
-  let shared_token_boost = (shared_tokens.min(3.0) / 3.0) * 0.12;
-
-  (0.5 * char_affinity + 0.38 * token_affinity + shared_token_boost).clamp(0.0, 1.0)
-}
-
-async fn persist_closed_spans(
-  conversation_id: Uuid,
-  claimed_until_seq: i64,
-  eof_seen: bool,
-  units: &[AnalysisUnit],
-  closed_spans: &[ClosedSpan],
-  db: &DatabaseConnection,
-) -> Result<Vec<CreatedEpisode>, AppError> {
-  let prepared_spans = prepare_closed_spans(conversation_id, closed_spans).await?;
-  let txn = db.begin().await?;
-  let Some(state_model) = segmentation_state::Entity::find_by_id(conversation_id)
-    .lock_exclusive()
-    .one(&txn)
-    .await?
-  else {
-    return Err(anyhow!("Segmentation state missing during persist").into());
-  };
-
-  let mut created = Vec::new();
-  let mut max_closed_end_seq = None;
-  let mut next_unsegmented_seq = state_model.next_unsegmented_seq;
-  let mut last_boundary_context = state_model.last_closed_boundary_context.clone();
-
-  for prepared in prepared_spans {
-    let now = Utc::now();
-    episode_span::ActiveModel {
-      id: Set(prepared.span_id),
-      conversation_id: Set(conversation_id),
-      start_seq: Set(prepared.start_seq),
-      end_seq: Set(prepared.end_seq),
-      boundary_reason: Set(prepared.boundary_reason.as_str().to_owned()),
-      surprise_level: Set(prepared.surprise_level.as_str().to_owned()),
-      status: Set("derived".to_owned()),
-      created_at: Set(now.into()),
-    }
-    .insert(&txn)
-    .await?;
-
-    let episodic_active_model: episodic_memory::ActiveModel =
-      prepared.episodic_memory.to_model()?.into();
-    episodic_memory::Entity::insert(episodic_active_model)
-      .exec(&txn)
-      .await?;
-
-    max_closed_end_seq = Some(prepared.end_seq);
-    next_unsegmented_seq = prepared.end_seq + 1;
-    last_boundary_context = Some(serde_json::to_value(prepared.boundary_context)?);
-    created.push(CreatedEpisode {
-      id: prepared.episodic_memory.id,
-      surprise: prepared.episodic_memory.surprise,
-      message_count: prepared.message_count,
-      total_chars: prepared.total_chars,
-      duration_minutes: (prepared.episodic_memory.end_at - prepared.episodic_memory.start_at)
-        .num_minutes()
-        .max(0),
-      boundary_reason: prepared.boundary_reason,
-      surprise_level: prepared.surprise_level,
+    resolved.push(BatchSegment {
+      messages: messages[*start..=end].to_vec(),
+      title: String::new(),
+      content: String::new(),
+      surprise_level: surprise_level.clone(),
     });
   }
 
-  let effective_eof_seen = state_model.eof_seen || eof_seen;
-  let processed_all_seen_messages = state_model
-    .last_seen_seq
-    .is_none_or(|last_seen_seq| last_seen_seq <= claimed_until_seq);
-  let can_finalize_tail_now = effective_eof_seen && processed_all_seen_messages;
-
-  let open_tail_start_seq = if can_finalize_tail_now {
-    None
-  } else if let Some(last_closed_end_seq) = max_closed_end_seq {
-    Some(last_closed_end_seq + 1)
-  } else {
-    Some(units.first().map_or(state_model.next_unsegmented_seq, |unit| unit.start_seq))
-  };
-
-  if can_finalize_tail_now && max_closed_end_seq.is_none() {
-    next_unsegmented_seq = claimed_until_seq + 1;
-  }
-
-  let should_clear_eof = effective_eof_seen && open_tail_start_seq.is_none() && processed_all_seen_messages;
-  let mut active_state: segmentation_state::ActiveModel = state_model.into_active_model();
-  active_state.next_unsegmented_seq = Set(next_unsegmented_seq);
-  active_state.open_tail_start_seq = Set(open_tail_start_seq);
-  active_state.in_progress_until_seq = Set(None);
-  active_state.in_progress_since = Set(None);
-  active_state.eof_seen = Set(if should_clear_eof { false } else { effective_eof_seen });
-  active_state.last_closed_boundary_context = Set(last_boundary_context);
-  active_state.updated_at = Set(Utc::now().into());
-  active_state.update(&txn).await?;
-
-  txn.commit().await?;
-  Ok(created)
+  Ok(resolved)
 }
 
-async fn prepare_closed_spans(
-  conversation_id: Uuid,
-  closed_spans: &[ClosedSpan],
-) -> Result<Vec<PreparedClosedSpan>, AppError> {
-  let mut prepared = Vec::with_capacity(closed_spans.len());
+async fn generate_episode_content(messages: &[Message]) -> Result<(String, String), AppError> {
+  let system = ChatCompletionRequestSystemMessage::from(EPISODE_CONTENT_SYSTEM_PROMPT.trim());
+  let user = ChatCompletionRequestUserMessage::from(format!(
+    "Conversation segment:\n{}",
+    format_messages(messages)
+  ));
 
-  for span in closed_spans {
-    prepared.push(build_prepared_closed_span(conversation_id, span).await?);
-  }
+  let output = generate_object::<EpisodeContentOutput>(
+    vec![
+      ChatCompletionRequestMessage::System(system),
+      ChatCompletionRequestMessage::User(user),
+    ],
+    "episodic_content_generation".to_owned(),
+    Some("Generate episodic title and content".to_owned()),
+  )
+  .await?;
 
-  Ok(prepared)
+  let title = output.title.trim();
+  let content = output.content.trim();
+  Ok((
+    if title.is_empty() {
+      "Conversation Segment".to_owned()
+    } else {
+      title.to_owned()
+    },
+    if content.is_empty() {
+      "Episode content unavailable.".to_owned()
+    } else {
+      content.to_owned()
+    },
+  ))
 }
 
-async fn build_prepared_closed_span(
+async fn batch_segment(
+  messages: &[Message],
+  prev_episode_content: Option<&str>,
+) -> Result<Vec<BatchSegment>, AppError> {
+  let mut retry_reason: Option<String> = None;
+  let mut resolved = None;
+
+  for attempt in 1..=2 {
+    let output = match request_segmentation_plan(
+      messages,
+      prev_episode_content,
+      retry_reason.as_deref(),
+    )
+    .await
+    {
+      Ok(output) => output,
+      Err(err) => {
+        if attempt == 2 {
+          return Err(err);
+        }
+
+        let reason = format!("first attempt failed before producing a plan: {err}");
+        tracing::warn!(attempt, reason = %reason, "Segmentation request failed; retrying");
+        retry_reason = Some(reason);
+        continue;
+      }
+    };
+
+    resolved = Some(
+      resolve_segmentation_plan(messages, output.segments)
+        .map_err(|reason| AppError::new(anyhow::anyhow!(reason)))?,
+    );
+    break;
+  }
+
+  let mut resolved = resolved.expect("segmentation loop must either resolve or return");
+
+  let generated_entries = try_join_all(
+    resolved
+      .iter()
+      .map(|segment| generate_episode_content(&segment.messages)),
+  )
+  .await?;
+
+  for (segment, (title, content)) in resolved.iter_mut().zip(generated_entries) {
+    segment.title = title;
+    segment.content = content;
+  }
+
+  Ok(resolved)
+}
+
+#[cfg(test)]
+mod tests {
+  use chrono::TimeZone;
+  use plastmem_shared::MessageRole;
+
+  use super::*;
+
+  fn make_messages(count: usize) -> Vec<Message> {
+    (0..count)
+      .map(|i| Message {
+        role: MessageRole::from("User"),
+        content: format!("message {i}"),
+        timestamp: Utc.timestamp_opt(i as i64, 0).unwrap(),
+      })
+      .collect()
+  }
+
+  #[test]
+  fn resolves_valid_contiguous_plan() {
+    let messages = make_messages(5);
+    let segments = resolve_segmentation_plan(
+      &messages,
+      vec![
+        SegmentationPlanItem {
+          start_message_index: 0,
+          surprise_level: SurpriseLevel::Low,
+        },
+        SegmentationPlanItem {
+          start_message_index: 2,
+          surprise_level: SurpriseLevel::High,
+        },
+      ],
+    )
+    .unwrap();
+
+    assert_eq!(segments.len(), 2);
+    assert_eq!(segments[0].messages.len(), 2);
+    assert_eq!(segments[1].messages.len(), 3);
+  }
+
+  #[test]
+  fn inserts_zero_start_when_missing() {
+    let messages = make_messages(5);
+    let segments = resolve_segmentation_plan(
+      &messages,
+      vec![SegmentationPlanItem {
+        start_message_index: 3,
+        surprise_level: SurpriseLevel::Low,
+      }],
+    )
+    .unwrap();
+
+    assert_eq!(segments.len(), 2);
+    assert_eq!(segments[0].messages.len(), 3);
+    assert_eq!(segments[1].messages.len(), 2);
+  }
+
+  #[test]
+  fn ignores_out_of_bounds_starts() {
+    let messages = make_messages(4);
+    let segments = resolve_segmentation_plan(
+      &messages,
+      vec![
+        SegmentationPlanItem {
+          start_message_index: 99,
+          surprise_level: SurpriseLevel::Low,
+        },
+        SegmentationPlanItem {
+          start_message_index: 2,
+          surprise_level: SurpriseLevel::Low,
+        },
+      ],
+    )
+    .unwrap();
+
+    assert_eq!(segments.len(), 2);
+    assert_eq!(segments[0].messages.len(), 2);
+    assert_eq!(segments[1].messages.len(), 2);
+  }
+
+  #[test]
+  fn deduplicates_and_sorts_starts() {
+    let messages = make_messages(4);
+    let segments = resolve_segmentation_plan(
+      &messages,
+      vec![
+        SegmentationPlanItem {
+          start_message_index: 2,
+          surprise_level: SurpriseLevel::Low,
+        },
+        SegmentationPlanItem {
+          start_message_index: 0,
+          surprise_level: SurpriseLevel::Low,
+        },
+        SegmentationPlanItem {
+          start_message_index: 2,
+          surprise_level: SurpriseLevel::High,
+        },
+      ],
+    )
+    .unwrap();
+
+    assert_eq!(segments.len(), 2);
+    assert_eq!(segments[0].messages.len(), 2);
+    assert_eq!(segments[1].messages.len(), 2);
+  }
+}
+
+// ──────────────────────────────────────────────────
+// Episode creation
+// ──────────────────────────────────────────────────
+
+const DESIRED_RETENTION: f32 = 0.9;
+const SURPRISE_BOOST_FACTOR: f32 = 0.5;
+
+async fn prepare_episode(
   conversation_id: Uuid,
-  span: &ClosedSpan,
-) -> Result<PreparedClosedSpan, AppError> {
-  let now = Utc::now();
-  let span_id = Uuid::now_v7();
-  let (title, content) = build_projection_text(span);
+  messages: &[Message],
+  title: &str,
+  content: &str,
+  surprise_signal: f32,
+) -> Result<Option<PreparedEpisode>, AppError> {
+  if content.is_empty() {
+    tracing::warn!(conversation_id = %conversation_id, "Skipping episode creation: empty content");
+    return Ok(None);
+  }
+
+  let surprise = surprise_signal.clamp(0.0, 1.0);
   let embedding_input = if title.is_empty() {
-    content.clone()
+    content.to_owned()
   } else {
     format!("{title}. {content}")
   };
   let embedding = embed(&embedding_input).await?;
+
+  let id = Uuid::now_v7();
+  let now = Utc::now();
+  let start_at = messages.first().map_or(now, |m| m.timestamp);
+  let end_at = messages.last().map_or(now, |m| m.timestamp);
+
   let fsrs = FSRS::new(Some(&DEFAULT_PARAMETERS))?;
   let initial_states = fsrs.next_states(None, DESIRED_RETENTION, 0)?;
   let initial_state = initial_states.good.memory;
-  let surprise = span.surprise_level.to_signal().clamp(0.0, 1.0);
   let boosted_stability = initial_state.stability * (1.0 + surprise * SURPRISE_BOOST_FACTOR);
-  let start_at = span.messages.first().map_or(now, |message| message.timestamp);
-  let end_at = span.messages.last().map_or(now, |message| message.timestamp);
-  let episodic_memory = plastmem_core::EpisodicMemory {
-    id: Uuid::now_v7(),
+
+  let mem = plastmem_core::EpisodicMemory {
+    id,
     conversation_id,
-    source_span_id: Some(span_id),
-    messages: span.messages.clone(),
-    title,
-    content,
+    messages: messages.to_vec(),
+    title: title.to_owned(),
+    content: content.to_owned(),
     embedding,
     stability: boosted_stability,
     difficulty: initial_state.difficulty,
@@ -1216,101 +565,193 @@ async fn build_prepared_closed_span(
     created_at: now,
     last_reviewed_at: now,
     consolidated_at: None,
-    derivation_status: "provisional".to_owned(),
   };
-  let boundary_context = build_boundary_context(span, &episodic_memory.title);
 
-  Ok(PreparedClosedSpan {
-    span_id,
-    start_seq: span.start_seq,
-    end_seq: span.end_seq,
-    boundary_reason: span.boundary_reason,
-    surprise_level: span.surprise_level,
-    message_count: span.messages.len(),
-    total_chars: span.messages.iter().map(|message| message.content.len()).sum(),
-    episodic_memory,
-    boundary_context,
-  })
+  Ok(Some(PreparedEpisode {
+    memory: mem,
+    surprise,
+  }))
 }
 
-fn build_projection_text(span: &ClosedSpan) -> (String, String) {
-  (build_provisional_title(span), build_provisional_content(span))
-}
-
-fn build_provisional_title(span: &ClosedSpan) -> String {
-  let seed = span
-    .messages
+async fn prepare_episodes_batch(
+  conversation_id: Uuid,
+  segments: &[BatchSegment],
+) -> Result<Vec<PreparedEpisode>, AppError> {
+  let futures: Vec<_> = segments
     .iter()
-    .find(|message| !message.content.trim().is_empty())
-    .map(|message| message.content.trim())
-    .unwrap_or("Conversation segment");
-
-  let words = seed
-    .split_whitespace()
-    .take(12)
-    .collect::<Vec<_>>()
-    .join(" ");
-  if words.is_empty() {
-    "Conversation segment".to_owned()
-  } else {
-    words
-  }
-}
-
-fn build_provisional_content(span: &ClosedSpan) -> String {
-  let mut lines = Vec::new();
-  let mut current_header = None::<String>;
-
-  for message in &span.messages {
-    let header = message.timestamp.format("At: %b %d, %Y %l %p").to_string();
-    if current_header.as_deref() != Some(header.as_str()) {
-      lines.push(header.clone());
-      current_header = Some(header);
-    }
-    lines.push(format!("* {} said {}", message.role, message.content.trim()));
-  }
-
-  lines.join("\n")
-}
-
-fn build_boundary_context(span: &ClosedSpan, title: &str) -> SegmentationBoundaryContext {
-  let anchor_entities = top_keywords(&span.messages, 5);
-  let last_turns_compact = span
-    .messages
-    .iter()
-    .rev()
-    .take(MAX_BOUNDARY_CONTEXT_LINES)
-    .map(|message| format!("{}: {}", message.role, truncate(&message.content, 120)))
-    .collect::<Vec<_>>()
-    .into_iter()
-    .rev()
+    .map(|seg| {
+      prepare_episode(
+        conversation_id,
+        &seg.messages,
+        &seg.title,
+        &seg.content,
+        seg.surprise_level.to_signal(),
+      )
+    })
     .collect();
 
-  SegmentationBoundaryContext {
-    anchor_topic: title.to_owned(),
-    anchor_entities,
-    last_turns_compact,
-    boundary_style_hint: span.boundary_reason.as_str().to_owned(),
-  }
+  let episodes: Vec<PreparedEpisode> = try_join_all(futures).await?.into_iter().flatten().collect();
+
+  Ok(episodes)
 }
 
-async fn finalize_empty_pass(
+async fn persist_episodes_batch(
   conversation_id: Uuid,
+  drain_count: usize,
+  prev_episode_content: Option<String>,
+  episodes: &[PreparedEpisode],
   db: &DatabaseConnection,
+) -> Result<Vec<CreatedEpisode>, AppError> {
+  let txn = db.begin().await?;
+
+  let active_models: Vec<episodic_memory::ActiveModel> = episodes
+    .iter()
+    .map(|episode| {
+      let model = episode.memory.to_model()?;
+      Ok::<_, AppError>(model.into())
+    })
+    .collect::<Result<_, _>>()?;
+
+  if !active_models.is_empty() {
+    episodic_memory::Entity::insert_many(active_models)
+      .exec(&txn)
+      .await?;
+  }
+
+  MessageQueue::drain(conversation_id, drain_count, &txn).await?;
+  MessageQueue::finalize_job(conversation_id, prev_episode_content, &txn).await?;
+  txn.commit().await?;
+
+  let created = episodes
+    .iter()
+    .map(|episode| {
+      tracing::info!(
+        episode_id = %episode.memory.id,
+        conversation_id = %conversation_id,
+        title = %episode.memory.title,
+        messages = episode.memory.messages.len(),
+        surprise = episode.surprise,
+        "Episode created"
+      );
+
+      CreatedEpisode {
+        id: episode.memory.id,
+        surprise: episode.surprise,
+      }
+    })
+    .collect();
+
+  Ok(created)
+}
+
+// ──────────────────────────────────────────────────
+// Job processing
+// ──────────────────────────────────────────────────
+
+/// Process event segmentation job.
+///
+/// # Panics
+///
+/// Panics if `to_drain` is empty when accessing the last element. This should never happen
+/// because `to_drain` is created by slicing `segments` and is guaranteed to be non-empty.
+pub async fn process_event_segmentation(
+  job: EventSegmentationJob,
+  db: Data<DatabaseConnection>,
+  review_storage: Data<PostgresStorage<MemoryReviewJob>>,
+  semantic_storage: Data<PostgresStorage<PredictCalibrateJob>>,
 ) -> Result<(), AppError> {
-  let Some(model) = segmentation_state::Entity::find_by_id(conversation_id)
-    .one(db)
-    .await?
-  else {
+  let db = &*db;
+  let conversation_id = job.conversation_id;
+  let fence_count = usize::try_from(job.fence_count).unwrap_or(0);
+  let force_process = job.force_process;
+  let keep_tail_segment = job.keep_tail_segment;
+
+  let current_messages = MessageQueue::get(conversation_id, db).await?.messages;
+  let force_due_to_backlog = current_messages.len() >= FORCE_SINGLE_SEGMENT_QUEUE_LEN;
+  let should_force_single_segment = force_process || force_due_to_backlog;
+
+  // Stale job check
+  if current_messages.len() < fence_count {
+    tracing::debug!(
+      conversation_id = %conversation_id,
+      fence_count,
+      actual = current_messages.len(),
+      "Stale event segmentation job — clearing fence"
+    );
+    MessageQueue::finalize_job(conversation_id, None, db).await?;
     return Ok(());
+  }
+
+  let batch_messages = &current_messages[..fence_count];
+  let prev_content = MessageQueue::get_prev_episode_content(conversation_id, db).await?;
+  let segments = batch_segment(batch_messages, prev_content.as_deref()).await?;
+
+  // Single segment and not forced: defer processing and wait for more messages
+  if segments.len() == 1 && !should_force_single_segment {
+    tracing::info!(conversation_id = %conversation_id, "No split detected — deferring for more messages");
+    MessageQueue::clear_fence(conversation_id, db).await?;
+    return Ok(());
+  }
+
+  // Determine which segments to drain and the content for the next iteration
+  let (drain_segments, new_prev_content): (&[BatchSegment], Option<String>) = if segments.len() == 1
+  {
+    tracing::info!(
+      conversation_id = %conversation_id,
+      messages = fence_count,
+      force_process = force_process,
+      force_due_to_backlog = force_due_to_backlog,
+      queue_len = current_messages.len(),
+      "Force processing as single episode"
+    );
+    (&segments[..], None)
+  } else if keep_tail_segment {
+    let to_drain = &segments[..segments.len() - 1];
+    let last_content = Some(to_drain.last().expect("non-empty").content.clone());
+    tracing::info!(
+      conversation_id = %conversation_id,
+      total_segments = segments.len(),
+      draining = to_drain.len(),
+      keep_tail_segment,
+      "Batch segmentation complete"
+    );
+    (to_drain, last_content)
+  } else {
+    tracing::info!(
+      conversation_id = %conversation_id,
+      total_segments = segments.len(),
+      draining = segments.len(),
+      keep_tail_segment,
+      "Batch segmentation complete (drain all for batch mode)"
+    );
+    (&segments[..], None)
   };
-  let mut active_model: segmentation_state::ActiveModel = model.into();
-  active_model.in_progress_until_seq = Set(None);
-  active_model.in_progress_since = Set(None);
-  active_model.updated_at = Set(Utc::now().into());
-  active_model.update(db).await?;
+
+  // Calculate total messages to drain
+  let drain_count: usize = drain_segments.iter().map(|s| s.messages.len()).sum();
+
+  // Enqueue pending reviews before persistence so a failure leaves the queue untouched.
+  enqueue_pending_reviews(conversation_id, batch_messages, db, &review_storage).await?;
+
+  let prepared_episodes = prepare_episodes_batch(conversation_id, drain_segments).await?;
+  let episodes = persist_episodes_batch(
+    conversation_id,
+    drain_count,
+    new_prev_content,
+    &prepared_episodes,
+    db,
+  )
+  .await?;
+
+  // Enqueue predict-calibrate jobs for real-time learning from each episode.
+  enqueue_predict_calibrate_jobs(conversation_id, &episodes, &semantic_storage).await?;
+
   Ok(())
 }
+
+// ──────────────────────────────────────────────────
+// Helpers
+// ──────────────────────────────────────────────────
 
 async fn enqueue_pending_reviews(
   conversation_id: Uuid,
@@ -1331,7 +772,6 @@ async fn enqueue_pending_reviews(
     let mut storage = review_storage.clone();
     storage.push(review_job).await?;
   }
-
   Ok(())
 }
 
@@ -1340,652 +780,36 @@ async fn enqueue_predict_calibrate_jobs(
   episodes: &[CreatedEpisode],
   semantic_storage: &PostgresStorage<PredictCalibrateJob>,
 ) -> Result<(), AppError> {
-  let mut enqueued = 0usize;
-  let mut deferred = 0usize;
-  for episode in episodes {
-    if !should_enqueue_predict_calibrate(episode) {
-      deferred += 1;
-      tracing::debug!(
-        conversation_id = %conversation_id,
-        episode_id = %episode.id,
-        message_count = episode.message_count,
-        total_chars = episode.total_chars,
-        duration_minutes = episode.duration_minutes,
-        boundary_reason = episode.boundary_reason.as_str(),
-        surprise_level = episode.surprise_level.as_str(),
-        "Deferring predict-calibrate for small or weak episode"
-      );
-      continue;
-    }
+  if episodes.is_empty() {
+    return Ok(());
+  }
 
-    let mut storage = semantic_storage.clone();
-    storage
-      .push(PredictCalibrateJob {
+  // Enqueue jobs in parallel for better performance
+  let futures: Vec<_> = episodes
+    .iter()
+    .map(|episode| {
+      let is_flashbulb = episode.surprise >= FLASHBULB_SURPRISE_THRESHOLD;
+      let job = PredictCalibrateJob {
         conversation_id,
         episode_id: episode.id,
-        force: episode.surprise >= FLASHBULB_SURPRISE_THRESHOLD,
-      })
-      .await?;
-    enqueued += 1;
-  }
+        force: is_flashbulb,
+      };
+      let mut storage = semantic_storage.clone();
+      async move { storage.push(job).await }
+    })
+    .collect();
 
-  if !episodes.is_empty() {
-    tracing::info!(
-      conversation_id = %conversation_id,
-      total_episodes = episodes.len(),
-      enqueued_predict_calibrate = enqueued,
-      deferred_predict_calibrate = deferred,
-      "Finished predict-calibrate enqueue pass"
-    );
-  }
+  let results: Result<Vec<_>, _> = futures::future::join_all(futures)
+    .await
+    .into_iter()
+    .collect();
+  results?;
+
+  tracing::info!(
+    conversation_id = %conversation_id,
+    created_jobs = episodes.len(),
+    "Enqueued predict-calibrate jobs for new episodes"
+  );
+
   Ok(())
-}
-
-fn should_enqueue_predict_calibrate(episode: &CreatedEpisode) -> bool {
-  if episode.surprise >= FLASHBULB_SURPRISE_THRESHOLD {
-    return true;
-  }
-
-  if matches!(
-    episode.boundary_reason,
-    BoundaryReason::TemporalGap | BoundaryReason::SessionBreak | BoundaryReason::SurpriseShift
-  ) {
-    return episode.message_count >= MIN_MESSAGES_FOR_STRONG_BREAK_CONSOLIDATION
-      || episode.total_chars >= MIN_CHARS_FOR_STRONG_BREAK_CONSOLIDATION;
-  }
-
-  if episode.message_count >= MIN_MESSAGES_FOR_IMMEDIATE_CONSOLIDATION {
-    return true;
-  }
-
-  if episode.total_chars >= MIN_CHARS_FOR_IMMEDIATE_CONSOLIDATION
-    && episode.message_count >= MIN_MESSAGES_FOR_HIGH_SURPRISE_CONSOLIDATION
-  {
-    return true;
-  }
-
-  if episode.duration_minutes >= MIN_DURATION_MINUTES_FOR_IMMEDIATE_CONSOLIDATION
-    && episode.message_count >= MIN_MESSAGES_FOR_HIGH_SURPRISE_CONSOLIDATION
-  {
-    return true;
-  }
-
-  episode.surprise_level == SurpriseLevel::High
-    && episode.message_count >= MIN_MESSAGES_FOR_HIGH_SURPRISE_CONSOLIDATION
-    && episode.total_chars >= MIN_CHARS_FOR_HIGH_SURPRISE_CONSOLIDATION
-}
-
-async fn enqueue_follow_up_if_needed(
-  conversation_id: Uuid,
-  db: &DatabaseConnection,
-  segmentation_storage: &PostgresStorage<EventSegmentationJob>,
-) -> Result<(), AppError> {
-  let txn = db.begin().await?;
-  let Some(model) = segmentation_state::Entity::find_by_id(conversation_id)
-    .lock_exclusive()
-    .one(&txn)
-    .await?
-  else {
-    return Ok(());
-  };
-
-  let messages_pending = match model.last_seen_seq {
-    Some(last_seen_seq) if last_seen_seq >= model.next_unsegmented_seq => {
-      last_seen_seq - model.next_unsegmented_seq + 1
-    }
-    _ => 0,
-  };
-
-  if model.in_progress_until_seq.is_some() {
-    txn.commit().await?;
-    return Ok(());
-  }
-
-  let should_schedule = model.last_seen_seq.is_some()
-    && (model.eof_seen || messages_pending >= SEGMENTATION_WINDOW_BASE);
-  if !should_schedule {
-    txn.commit().await?;
-    return Ok(());
-  }
-
-  let last_seen_seq = model.last_seen_seq;
-  let mut active_model: segmentation_state::ActiveModel = model.into();
-  active_model.in_progress_until_seq = Set(last_seen_seq);
-  active_model.in_progress_since = Set(Some(Utc::now().into()));
-  active_model.updated_at = Set(Utc::now().into());
-  active_model.update(&txn).await?;
-  txn.commit().await?;
-
-  let mut storage = segmentation_storage.clone();
-  storage.push(EventSegmentationJob { conversation_id }).await?;
-  Ok(())
-}
-
-fn format_message_line(record: &ConversationMessageRecord) -> String {
-  format!(
-    "[seq={}] {} [{}] {}",
-    record.seq,
-    record.message.timestamp.format("%Y-%m-%dT%H:%M:%SZ"),
-    record.message.role,
-    record.message.content
-  )
-}
-
-fn tokenize(text: &str) -> BTreeSet<String> {
-  text
-    .split(|char: char| !char.is_alphanumeric())
-    .filter(|token| token.len() >= 3)
-    .map(|token| token.to_ascii_lowercase())
-    .collect()
-}
-
-fn top_keywords(messages: &[Message], limit: usize) -> Vec<String> {
-  let mut seen = BTreeSet::new();
-  for token in messages.iter().flat_map(|message| tokenize(&message.content).into_iter()) {
-    if seen.len() >= limit {
-      break;
-    }
-    seen.insert(token);
-  }
-  seen.into_iter().collect()
-}
-
-fn unit_surface_text(unit: &AnalysisUnit) -> String {
-  unit
-    .messages
-    .iter()
-    .map(|record| record.message.content.trim())
-    .filter(|content| !content.is_empty())
-    .collect::<Vec<_>>()
-    .join(" ")
-}
-
-fn aggregate_window_text(units: &[AnalysisUnit]) -> String {
-  units
-    .iter()
-    .map(unit_surface_text)
-    .filter(|text| !text.is_empty())
-    .collect::<Vec<_>>()
-    .join(" ")
-}
-
-fn aggregate_token_set(units: &[AnalysisUnit]) -> BTreeSet<String> {
-  let mut tokens = BTreeSet::new();
-  for unit in units {
-    tokens.extend(unit.token_set.iter().cloned());
-  }
-  tokens
-}
-
-fn count_messages(units: &[AnalysisUnit]) -> usize {
-  units.iter().map(|unit| unit.messages.len()).sum()
-}
-
-fn span_surface_text(span: &ClosedSpan) -> String {
-  span
-    .messages
-    .iter()
-    .map(|message| message.content.trim())
-    .filter(|content| !content.is_empty())
-    .collect::<Vec<_>>()
-    .join(" ")
-}
-
-fn span_token_set(span: &ClosedSpan) -> BTreeSet<String> {
-  span
-    .messages
-    .iter()
-    .flat_map(|message| tokenize(&message.content))
-    .collect()
-}
-
-fn truncate(text: &str, max_len: usize) -> String {
-  if text.len() <= max_len {
-    return text.to_owned();
-  }
-
-  let mut truncated = text.chars().take(max_len).collect::<String>();
-  truncated.push_str("...");
-  truncated
-}
-
-fn structural_boundary_cue(_previous: &AnalysisUnit, _current: &AnalysisUnit) -> f32 {
-  // Keep the cue_phrase slot in the scoring model, but avoid language-specific
-  // lexical cue lists. We currently rely on language-agnostic structural
-  // signals from other channels instead of hard-coded phrases.
-  0.0
-}
-
-fn ends_with_question_marker(text: &str) -> bool {
-  let trimmed = text.trim_end();
-  trimmed.ends_with('?') || trimmed.ends_with('？')
-}
-
-fn char_ngram_overlap(left: &str, right: &str) -> f32 {
-  let left_ngrams = char_ngrams(left, 3);
-  let right_ngrams = char_ngrams(right, 3);
-  if left_ngrams.is_empty() || right_ngrams.is_empty() {
-    return 0.0;
-  }
-
-  let overlap = left_ngrams
-    .iter()
-    .filter(|ngram| right_ngrams.contains(*ngram))
-    .count() as f32;
-  let union = left_ngrams.union(&right_ngrams).count() as f32;
-  if union <= 0.0 {
-    0.0
-  } else {
-    overlap / union
-  }
-}
-
-fn char_ngrams(text: &str, n: usize) -> BTreeSet<String> {
-  let normalized = text
-    .chars()
-    .filter(|ch| ch.is_alphanumeric())
-    .flat_map(|ch| ch.to_lowercase())
-    .collect::<Vec<_>>();
-
-  if normalized.len() < n {
-    return BTreeSet::new();
-  }
-
-  normalized
-    .windows(n)
-    .map(|window| window.iter().collect::<String>())
-    .collect()
-}
-
-fn to_messages(records: &[ConversationMessageRecord]) -> Vec<Message> {
-  records.iter().map(|record| record.message.clone()).collect()
-}
-
-#[cfg(test)]
-mod tests {
-  use super::*;
-  use chrono::TimeZone;
-  use plastmem_shared::MessageRole;
-
-  fn record(seq: i64, role: &str, content: &str) -> ConversationMessageRecord {
-    ConversationMessageRecord {
-      id: Uuid::now_v7(),
-      conversation_id: Uuid::nil(),
-      seq,
-      message: Message {
-        role: MessageRole(role.to_owned()),
-        content: content.to_owned(),
-        timestamp: Utc.timestamp_opt(seq, 0).single().expect("valid timestamp"),
-      },
-      created_at: Utc.timestamp_opt(seq, 0).single().expect("valid timestamp"),
-    }
-  }
-
-  fn record_at(seq: i64, timestamp: i64, role: &str, content: &str) -> ConversationMessageRecord {
-    ConversationMessageRecord {
-      id: Uuid::now_v7(),
-      conversation_id: Uuid::nil(),
-      seq,
-      message: Message {
-        role: MessageRole(role.to_owned()),
-        content: content.to_owned(),
-        timestamp: Utc
-          .timestamp_opt(timestamp, 0)
-          .single()
-          .expect("valid timestamp"),
-      },
-      created_at: Utc
-        .timestamp_opt(timestamp, 0)
-        .single()
-        .expect("valid timestamp"),
-    }
-  }
-
-  fn message(role: &str, content: &str, timestamp: i64) -> Message {
-    Message {
-      role: MessageRole(role.to_owned()),
-      content: content.to_owned(),
-      timestamp: Utc
-        .timestamp_opt(timestamp, 0)
-        .single()
-        .expect("valid timestamp"),
-    }
-  }
-
-  fn refined_boundary(
-    next_unit_index: usize,
-    boundary_reason: BoundaryReason,
-    surprise_level: SurpriseLevel,
-    candidate_score: f32,
-    time_gap: f32,
-    semantic_drop: f32,
-    online_surprise_prior: f32,
-  ) -> RefinedBoundary {
-    RefinedBoundary {
-      next_unit_index,
-      boundary_reason,
-      surprise_level,
-      candidate_score,
-      time_gap,
-      semantic_drop,
-      online_surprise_prior,
-      micro_exchange_penalty: 0.0,
-    }
-  }
-
-  fn created_episode(
-    boundary_reason: BoundaryReason,
-    surprise_level: SurpriseLevel,
-    message_count: usize,
-    total_chars: usize,
-    duration_minutes: i64,
-    surprise: f32,
-  ) -> CreatedEpisode {
-    CreatedEpisode {
-      id: Uuid::now_v7(),
-      surprise,
-      message_count,
-      total_chars,
-      duration_minutes,
-      boundary_reason,
-      surprise_level,
-    }
-  }
-
-  #[test]
-  fn candidate_scorer_skips_plain_question_answer_exchange() {
-    let units = build_analysis_units(&[
-      record(0, "John", "What game are you playing right now?"),
-      record(1, "James", "I'm playing The Witcher 3 at the moment."),
-      record(2, "John", "Nice, I keep hearing good things about it."),
-    ]);
-
-    let candidates = score_candidate_boundaries(&units, None);
-    assert!(candidates.is_empty());
-  }
-
-  #[test]
-  fn candidate_scorer_keeps_temporal_gap_boundary() {
-    let units = build_analysis_units(&[
-      record_at(0, 0, "John", "What game are you playing right now?"),
-      record_at(1, 60, "James", "I'm playing The Witcher 3 at the moment."),
-      record_at(2, 60 * 60 * 4, "John", "How was your trip last weekend?"),
-    ]);
-
-    let candidates = score_candidate_boundaries(&units, None);
-    assert!(candidates.iter().any(|candidate| candidate.next_unit_index == 2));
-  }
-
-  #[test]
-  fn candidate_scorer_keeps_clear_same_session_topic_shift() {
-    let units = build_analysis_units(&[
-      record(0, "John", "I've been playing The Witcher 3 a lot this week."),
-      record(1, "James", "Nice, I love open world games and long story quests."),
-      record(2, "John", "My two dogs kept me busy at the park this morning."),
-      record(3, "James", "Dogs always make the day better, especially energetic ones."),
-    ]);
-
-    let candidates = score_candidate_boundaries(&units, None);
-    assert!(candidates.iter().any(|candidate| candidate.next_unit_index == 2));
-  }
-
-  #[test]
-  fn candidate_scorer_suppresses_dense_same_session_cluster() {
-    let units = build_analysis_units(&[
-      record(12, "John", "Aww, they're adorable! What are the names of your pets? And what are your plans for the app?"),
-      record(13, "James", "Max and Daisy. The goal is to connect pet owners with reliable dog walkers and provide helpful pet care guidance."),
-      record(14, "John", "Sounds good, James! What sets it apart from other existing apps?"),
-      record(15, "James", "The personal touch really sets it apart. Users can add their pup's preferences and needs."),
-      record(16, "John", "That's a great idea! What motivates you to work on your programming projects?"),
-      record(17, "James", "Creating something and seeing it come to life gives me a great sense of accomplishment."),
-      record(18, "John", "What are you working on that has you feeling so accomplished?"),
-      record(19, "James", "I'm working on a game project I've wanted to make since I was a kid."),
-    ]);
-
-    let candidates = score_candidate_boundaries(&units, None);
-    let dense_candidates = candidates
-      .iter()
-      .filter(|candidate| candidate.time_gap == 0.0 && candidate.cue_phrase == 0.0)
-      .count();
-    assert!(dense_candidates <= 1, "dense candidates: {candidates:?}");
-  }
-
-  #[test]
-  fn stabilize_refined_boundaries_rejects_short_non_temporal_splits() {
-    let units = build_analysis_units(&[
-      record(0, "John", "I've been planning a pet care app for dog owners."),
-      record(1, "James", "That app sounds useful for people who need reliable dog walkers."),
-      record(2, "John", "I also want the app to track feeding and vet reminders."),
-      record(3, "James", "That would make it even more useful for busy pet parents."),
-      record(4, "John", "Yesterday I went bowling after work and got two strikes."),
-      record(5, "James", "Bowling always feels great when the shots line up."),
-      record(6, "John", "After bowling I came home and kept iterating on the pet app."),
-    ]);
-    let boundaries = vec![
-      refined_boundary(2, BoundaryReason::TopicShift, SurpriseLevel::High, 1.7, 0.0, 0.84, 0.25),
-      refined_boundary(4, BoundaryReason::TopicShift, SurpriseLevel::High, 1.8, 0.0, 0.82, 0.22),
-      refined_boundary(6, BoundaryReason::TopicShift, SurpriseLevel::High, 2.15, 0.0, 0.9, 0.3),
-    ];
-
-    let stabilized = stabilize_refined_boundaries(&units, &boundaries, true);
-    assert_eq!(stabilized.len(), 1);
-    assert_eq!(stabilized[0].next_unit_index, 6);
-  }
-
-  #[test]
-  fn stabilize_refined_boundaries_keeps_temporal_gap_even_when_short() {
-    let units = build_analysis_units(&[
-      record_at(0, 0, "John", "I played games last night."),
-      record_at(1, 60, "James", "Nice, what did you play?"),
-      record_at(2, 60 * 60 * 4, "John", "By the way, I adopted a new dog this afternoon."),
-    ]);
-    let boundaries = vec![refined_boundary(
-      2,
-      BoundaryReason::TemporalGap,
-      SurpriseLevel::High,
-      1.65,
-      0.8,
-      0.5,
-      0.3,
-    )];
-
-    let stabilized = stabilize_refined_boundaries(&units, &boundaries, false);
-    assert_eq!(stabilized.len(), 1);
-    assert_eq!(stabilized[0].next_unit_index, 2);
-  }
-
-  #[test]
-  fn stabilize_refined_boundaries_allows_strong_topic_shift_after_large_same_session_segment() {
-    let mut records = Vec::new();
-    for seq in 0..18 {
-      let role = if seq % 2 == 0 { "John" } else { "James" };
-      records.push(record(
-        seq,
-        role,
-        "We kept talking about a shared game project, coding details, and gameplay ideas.",
-      ));
-    }
-    records.push(record(18, "John", "I spent last weekend hiking with my dogs near the lake."));
-    records.push(record(19, "James", "The hike sounds great, and the dogs must have loved the trails."));
-    records.push(record(20, "John", "They absolutely loved the water and the long nature walk."));
-    records.push(record(21, "James", "Nature days with dogs always feel refreshing and memorable."));
-
-    let units = build_analysis_units(&records);
-    let boundaries = vec![refined_boundary(
-      18,
-      BoundaryReason::TopicShift,
-      SurpriseLevel::High,
-      1.8,
-      0.0,
-      0.82,
-      0.2,
-    )];
-
-    let stabilized = stabilize_refined_boundaries(&units, &boundaries, true);
-    assert_eq!(stabilized.len(), 1);
-    assert_eq!(stabilized[0].next_unit_index, 18);
-  }
-
-  #[test]
-  fn normalize_closed_spans_merges_weak_singleton_into_more_affine_neighbor() {
-    let spans = vec![
-      ClosedSpan {
-        start_seq: 0,
-        end_seq: 1,
-        messages: vec![
-          message("John", "My dogs had a checkup at the vet today.", 0),
-          message("James", "I hope Max and Daisy are doing well.", 1),
-        ],
-        boundary_reason: BoundaryReason::SessionBreak,
-        surprise_level: SurpriseLevel::Low,
-      },
-      ClosedSpan {
-        start_seq: 2,
-        end_seq: 2,
-        messages: vec![message("John", "The vet said Daisy needs more exercise.", 2)],
-        boundary_reason: BoundaryReason::TopicShift,
-        surprise_level: SurpriseLevel::Low,
-      },
-      ClosedSpan {
-        start_seq: 3,
-        end_seq: 4,
-        messages: vec![
-          message("James", "I went bowling after work yesterday.", 3),
-          message("John", "Bowling sounds fun for a weekend outing.", 4),
-        ],
-        boundary_reason: BoundaryReason::TopicShift,
-        surprise_level: SurpriseLevel::Low,
-      },
-    ];
-
-    let normalized = normalize_closed_spans(spans);
-    assert_eq!(normalized.len(), 2);
-    assert_eq!(normalized[0].start_seq, 0);
-    assert_eq!(normalized[0].end_seq, 2);
-    assert_eq!(normalized[1].start_seq, 3);
-  }
-
-  #[test]
-  fn normalize_closed_spans_can_merge_short_high_span_when_affinity_is_clear() {
-    let spans = vec![
-      ClosedSpan {
-        start_seq: 0,
-        end_seq: 1,
-        messages: vec![
-          message("John", "My dogs had a checkup at the vet today.", 0),
-          message("James", "The vet said Daisy is healthy and just needs more exercise.", 1),
-        ],
-        boundary_reason: BoundaryReason::SessionBreak,
-        surprise_level: SurpriseLevel::Low,
-      },
-      ClosedSpan {
-        start_seq: 2,
-        end_seq: 3,
-        messages: vec![
-          message("John", "Daisy needs more exercise after the vet visit.", 2),
-          message("James", "I should probably walk Daisy more after dinner.", 3),
-        ],
-        boundary_reason: BoundaryReason::TopicShift,
-        surprise_level: SurpriseLevel::High,
-      },
-      ClosedSpan {
-        start_seq: 4,
-        end_seq: 5,
-        messages: vec![
-          message("John", "I went bowling after work yesterday.", 4),
-          message("James", "Bowling sounds fun for a weekend outing.", 5),
-        ],
-        boundary_reason: BoundaryReason::TopicShift,
-        surprise_level: SurpriseLevel::Low,
-      },
-    ];
-
-    let normalized = normalize_closed_spans(spans);
-    assert_eq!(normalized.len(), 2);
-    assert_eq!(normalized[0].start_seq, 0);
-    assert_eq!(normalized[0].end_seq, 3);
-    assert_eq!(normalized[1].start_seq, 4);
-  }
-
-  #[test]
-  fn normalize_closed_spans_absorbs_trailing_singleton_before_temporal_gap() {
-    let spans = vec![
-      ClosedSpan {
-        start_seq: 58,
-        end_seq: 79,
-        messages: vec![
-          message("John", "I finally advanced to the next level in the game.", 58),
-          message("James", "That sounds like a huge accomplishment after all the effort.", 59),
-          message("John", "Trying new genres has been exciting lately.", 60),
-        ],
-        boundary_reason: BoundaryReason::TemporalGap,
-        surprise_level: SurpriseLevel::High,
-      },
-      ClosedSpan {
-        start_seq: 80,
-        end_seq: 80,
-        messages: vec![message("John", "Thanks! Can't wait to hear about it. Bye!", 61)],
-        boundary_reason: BoundaryReason::SessionBreak,
-        surprise_level: SurpriseLevel::Low,
-      },
-      ClosedSpan {
-        start_seq: 81,
-        end_seq: 90,
-        messages: vec![
-          message("John", "Hey James! Long time no chat.", 1_000_000),
-          message("James", "I joined an online gaming tournament yesterday.", 1_000_060),
-        ],
-        boundary_reason: BoundaryReason::TemporalGap,
-        surprise_level: SurpriseLevel::High,
-      },
-    ];
-
-    let normalized = normalize_closed_spans(spans);
-    assert_eq!(normalized.len(), 2);
-    assert_eq!(normalized[0].start_seq, 58);
-    assert_eq!(normalized[0].end_seq, 80);
-    assert_eq!(normalized[1].start_seq, 81);
-  }
-
-  #[test]
-  fn predict_calibrate_gate_skips_small_low_topic_shift_episode() {
-    let episode = created_episode(
-      BoundaryReason::TopicShift,
-      SurpriseLevel::Low,
-      3,
-      180,
-      10,
-      0.2,
-    );
-
-    assert!(!should_enqueue_predict_calibrate(&episode));
-  }
-
-  #[test]
-  fn predict_calibrate_gate_keeps_large_topic_shift_episode() {
-    let episode = created_episode(
-      BoundaryReason::TopicShift,
-      SurpriseLevel::High,
-      10,
-      720,
-      90,
-      0.6,
-    );
-
-    assert!(should_enqueue_predict_calibrate(&episode));
-  }
-
-  #[test]
-  fn predict_calibrate_gate_keeps_temporal_gap_episode() {
-    let episode = created_episode(
-      BoundaryReason::TemporalGap,
-      SurpriseLevel::Low,
-      3,
-      190,
-      180,
-      0.2,
-    );
-
-    assert!(should_enqueue_predict_calibrate(&episode));
-  }
 }

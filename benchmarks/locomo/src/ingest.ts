@@ -1,13 +1,14 @@
-import type { ImportMessages } from 'plastmem'
+import type { AddMessage } from 'plastmem'
 
 import type { DialogTurn, LoCoMoSample } from './types'
 import type { ConversationStatus } from './wait'
 
+import { progress as createProgress, spinner as createSpinner, log } from '@clack/prompts'
 import { uuid } from '@insel-null/uuid'
-import { messagesImport } from 'plastmem'
+import { addMessage } from 'plastmem'
 
 import { runWithConcurrency } from './concurrency'
-import { waitForAll } from './wait'
+import { flushConversationTailWhenReady, waitUntilConversationAdmissible } from './wait'
 
 // Minutes between consecutive turns within a session
 const TURN_INTERVAL_MINS = 1
@@ -87,20 +88,40 @@ const parseSessionDate = (dateStr: string): Date | null => {
   return new Date(Date.UTC(Number.parseInt(yearStr, 10), monthIndex, Number.parseInt(dStr, 10), hours, mins))
 }
 
-const importConversation = async (
+interface AddMessageResult {
+  accepted: boolean
+  reason?: string
+}
+
+const isBackpressured = (value: unknown): value is AddMessageResult =>
+  typeof value === 'object'
+  && value !== null
+  && 'accepted' in value
+  && (value as { accepted: unknown }).accepted === false
+  && (!('reason' in value) || (value as { reason?: unknown }).reason === 'backpressure')
+
+const sendMessage = async (
   baseUrl: string,
   conversationId: string,
-  messages: BatchMessage[],
-): Promise<void> => {
-  await messagesImport({
+  message: BatchMessage,
+): Promise<boolean> => {
+  const res = await addMessage({
     baseUrl,
     body: {
       conversation_id: conversationId,
-      eof: true,
-      messages: messages as unknown as ImportMessages['messages'],
+      message: message as unknown as AddMessage['message'],
     },
-    throwOnError: true,
+    throwOnError: false,
   })
+
+  if (res.response?.ok)
+    return true
+
+  if (res.response?.status === 429 && isBackpressured(res.error))
+    return false
+
+  const status = res.response?.status ?? 'network'
+  throw new Error(`addMessage failed with status ${status}`)
 }
 
 export const getOrderedSessions = (sample: LoCoMoSample): OrderedSession[] => {
@@ -148,6 +169,11 @@ const buildMessages = (sample: LoCoMoSample): BatchMessage[] => {
   return messages
 }
 
+const getSampleLabel = (sampleId: string): string => `Sample ${sampleId}`
+
+const getSampleDebugLabel = (sampleId: string, conversationId: string): string =>
+  `Sample ${sampleId} (${conversationId})`
+
 const ingestSample = async (
   sample: LoCoMoSample,
   conversationId: string,
@@ -156,9 +182,21 @@ const ingestSample = async (
 ): Promise<void> => {
   const messages = buildMessages(sample)
   const totalMessages = messages.length
-  observer?.onIngestProgress?.(sample.sample_id, conversationId, 0, totalMessages)
-  await importConversation(baseUrl, conversationId, messages)
-  observer?.onIngestProgress?.(sample.sample_id, conversationId, totalMessages, totalMessages)
+  let done = 0
+  observer?.onIngestProgress?.(sample.sample_id, conversationId, done, totalMessages)
+
+  for (const message of messages) {
+    while (true) {
+      const accepted = await sendMessage(baseUrl, conversationId, message)
+      if (accepted) {
+        done++
+        observer?.onIngestProgress?.(sample.sample_id, conversationId, done, totalMessages)
+        break
+      }
+
+      await waitUntilConversationAdmissible(baseUrl, conversationId)
+    }
+  }
 }
 
 export const ingestAll = async (
@@ -182,11 +220,39 @@ export const ingestAll = async (
           },
         })
       }
+      else {
+        log.info(`Reusing ${getSampleLabel(sample.sample_id)}`)
+      }
       return
     }
 
     const conversationId = uuid.v7()
-    await ingestSample(sample, conversationId, baseUrl, observer)
+    const totalMessages = buildMessages(sample).length
+    const progress = createProgress({ max: Math.max(totalMessages, 1) })
+    progress.start(`${getSampleDebugLabel(sample.sample_id, conversationId)} ingesting 0/${totalMessages}`)
+    let advanced = 0
+    await ingestSample(sample, conversationId, baseUrl, {
+      ...observer,
+      onIngestProgress: (sampleId, currentConversationId, done, total) => {
+        observer?.onIngestProgress?.(sampleId, currentConversationId, done, total)
+        const delta = done - advanced
+        advanced = done
+        if (delta > 0)
+          progress.advance(delta, `${getSampleLabel(sample.sample_id)} ingesting ${done}/${total}`)
+      },
+    })
+    if (settleAndFlushAfterSampleIngest) {
+      progress.stop(`${getSampleLabel(sample.sample_id)} ingested ${totalMessages} messages`)
+      const spinner = createSpinner()
+      spinner.start(`${getSampleLabel(sample.sample_id)} waiting for background jobs`)
+      const flushed = await flushConversationTailWhenReady(baseUrl, conversationId)
+      if (flushed)
+        spinner.message(`${getSampleLabel(sample.sample_id)} flushed pending tail`)
+      spinner.stop(`${getSampleLabel(sample.sample_id)} ready`)
+    }
+    else {
+      progress.stop(`${getSampleLabel(sample.sample_id)} ingested`)
+    }
     ids[sample.sample_id] = conversationId
     await observer?.onConversationAssigned?.(sample.sample_id, conversationId)
     observer?.onEvent?.(sample.sample_id, `${sample.sample_id} import complete (${conversationId})`)

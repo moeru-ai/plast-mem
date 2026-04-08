@@ -15,7 +15,6 @@ use uuid::Uuid;
 pub struct EpisodicMemory {
   pub id: Uuid,
   pub conversation_id: Uuid,
-  pub source_span_id: Option<Uuid>,
   pub messages: Vec<Message>,
   pub title: String,
   pub content: String,
@@ -30,7 +29,6 @@ pub struct EpisodicMemory {
   pub created_at: DateTime<Utc>,
   pub last_reviewed_at: DateTime<Utc>,
   pub consolidated_at: Option<DateTime<Utc>>,
-  pub derivation_status: String,
 }
 
 impl EpisodicMemory {
@@ -38,7 +36,6 @@ impl EpisodicMemory {
     Ok(Self {
       id: model.id,
       conversation_id: model.conversation_id,
-      source_span_id: model.source_span_id,
       messages: serde_json::from_value(model.messages)?,
       title: model.title,
       content: model.content,
@@ -51,7 +48,6 @@ impl EpisodicMemory {
       created_at: model.created_at.with_timezone(&Utc),
       last_reviewed_at: model.last_reviewed_at.with_timezone(&Utc),
       consolidated_at: model.consolidated_at.map(|dt| dt.with_timezone(&Utc)),
-      derivation_status: model.derivation_status,
     })
   }
 
@@ -59,7 +55,6 @@ impl EpisodicMemory {
     Ok(episodic_memory::Model {
       id: self.id,
       conversation_id: self.conversation_id,
-      source_span_id: self.source_span_id,
       messages: serde_json::to_value(self.messages.clone())?,
       title: self.title.clone(),
       content: self.content.clone(),
@@ -72,7 +67,6 @@ impl EpisodicMemory {
       created_at: self.created_at.into(),
       last_reviewed_at: self.last_reviewed_at.into(),
       consolidated_at: self.consolidated_at.map(Into::into),
-      derivation_status: self.derivation_status.clone(),
     })
   }
 
@@ -114,7 +108,19 @@ impl EpisodicMemory {
       GROUP BY id
     )
     SELECT
-      m.*,
+      m.id,
+      m.conversation_id,
+      m.messages,
+      m.title,
+      m.content,
+      m.embedding,
+      m.stability,
+      m.difficulty,
+      m.surprise,
+      m.start_at,
+      m.end_at,
+      m.created_at,
+      m.last_reviewed_at,
       r.score AS score
     FROM rrf_score r
     JOIN episodic_memory m USING (id)

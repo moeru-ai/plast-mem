@@ -8,8 +8,17 @@ use sea_orm::entity::prelude::*;
 pub struct Model {
   #[sea_orm(primary_key, auto_increment = false)]
   pub id: Uuid,
+  #[sea_orm(column_type = "JsonBinary")]
+  pub messages: Json,
   #[sea_orm(column_type = "JsonBinary", nullable)]
   pub pending_reviews: Option<Json>,
+  // Batch segmentation fence: message count when job was triggered
+  // (job processes messages[0..in_progress_fence])
+  pub in_progress_fence: Option<i32>,
+  // When the fence was set (for TTL-based stale job recovery)
+  pub in_progress_since: Option<DateTimeWithTimeZone>,
+  // Content of the last drained episode; reference for next batch's first segment surprise_level
+  pub prev_episode_content: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

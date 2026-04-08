@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url'
 import c from 'tinyrainbow'
 
 import { uuid } from '@insel-null/uuid'
-import { segmentationState } from 'plastmem'
+import { benchmarkJobStatus } from 'plastmem'
 
 import * as p from '@clack/prompts'
 
@@ -55,11 +55,9 @@ const INGEST_CONCURRENCY = 2
 interface ConversationStatus {
   admissible_for_add: boolean
   done: boolean
-  eof_seen: boolean
   fence_active: boolean
-  last_seen_seq?: null | number
+  flushable: boolean
   messages_pending: number
-  next_unsegmented_seq: number
   predict_calibrate_jobs_active: number
   segmentation_jobs_active: number
 }
@@ -181,7 +179,7 @@ const getStatus = async (
   baseUrl: string,
   conversationId: string,
 ): Promise<ConversationStatus> => {
-  const res = await segmentationState({
+  const res = await benchmarkJobStatus({
     baseUrl,
     query: { conversation_id: conversationId },
     throwOnError: true,
@@ -189,11 +187,9 @@ const getStatus = async (
   return {
     admissible_for_add: res.data.admissible_for_add,
     done: res.data.done,
-    eof_seen: res.data.eof_seen,
     fence_active: res.data.fence_active,
-    last_seen_seq: res.data.last_seen_seq,
+    flushable: res.data.flushable,
     messages_pending: res.data.messages_pending,
-    next_unsegmented_seq: res.data.next_unsegmented_seq,
     predict_calibrate_jobs_active: res.data.predict_calibrate_jobs_active,
     segmentation_jobs_active: res.data.segmentation_jobs_active,
   }
