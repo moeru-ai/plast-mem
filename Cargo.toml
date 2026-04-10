@@ -6,6 +6,7 @@ members = [
   "./crates/migration",
   "./crates/entities",
   "./crates/ai",
+  "./crates/event_segmentation",
   "./crates/shared",
   "./crates/worker",
   "./crates/server",
@@ -30,6 +31,7 @@ plastmem_core.path = "./crates/core"
 plastmem_migration.path = "./crates/migration"
 plastmem_entities.path = "./crates/entities"
 plastmem_ai.path = "./crates/ai"
+plastmem_event_segmentation.path = "./crates/event_segmentation"
 plastmem_shared.path = "./crates/shared"
 plastmem_worker.path = "./crates/worker"
 plastmem_server.path = "./crates/server"

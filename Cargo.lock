@@ -3644,6 +3644,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "plastmem_event_segmentation"
+version = "0.0.1"
+dependencies = [
+ "chrono",
+ "plastmem_shared",
+ "schemars",
+ "serde",
+ "tracing",
+]
+
+[[package]]
 name = "plastmem_migration"
 version = "0.0.1"
 dependencies = [
@@ -3704,6 +3715,7 @@ dependencies = [
  "plastmem_ai",
  "plastmem_core",
  "plastmem_entities",
+ "plastmem_event_segmentation",
  "plastmem_shared",
  "schemars",
  "sea-orm",
