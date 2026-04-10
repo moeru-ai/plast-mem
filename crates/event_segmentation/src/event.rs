@@ -11,10 +11,11 @@ pub struct MessageEvent {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum MessageEventRole {
   User,
   Assistant,
+  Custom(String),
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
