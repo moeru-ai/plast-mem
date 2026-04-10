@@ -1,8 +1,8 @@
-use plastmem_shared::Message;
+use crate::Event;
 
 #[derive(Debug, Clone)]
 pub struct EventSegment {
-  messages: Vec<Message>,
+  events: Vec<Event>,
   reasons: Vec<EventSegmentReason>,
 }
 
@@ -15,12 +15,12 @@ pub enum EventSegmentReason {
 }
 
 impl EventSegment {
-  pub fn new(messages: Vec<Message>, reasons: Vec<EventSegmentReason>) -> Self {
-    Self { messages, reasons }
+  pub fn new(events: Vec<Event>, reasons: Vec<EventSegmentReason>) -> Self {
+    Self { events, reasons }
   }
 
-  pub fn messages(&self) -> &[Message] {
-    &self.messages
+  pub fn events(&self) -> &[Event] {
+    &self.events
   }
 
   pub fn reasons(&self) -> &[EventSegmentReason] {
