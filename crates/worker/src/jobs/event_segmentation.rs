@@ -387,10 +387,13 @@ async fn enqueue_episode_creation_jobs(
     return Ok(());
   }
 
-  for span in finalized_spans {
-    let mut storage = episode_creation_storage.clone();
-    storage.push(EpisodeCreationJob::from_span(span)).await?;
-  }
+  let jobs = finalized_spans
+    .iter()
+    .map(EpisodeCreationJob::from_span)
+    .collect::<Vec<_>>();
+
+  let mut storage = episode_creation_storage.clone();
+  storage.push_bulk(jobs).await?;
 
   Ok(())
 }
