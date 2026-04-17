@@ -1,183 +1,216 @@
 # Change Guide
 
-This document provides specific instructions for common types of changes in Plast Mem.
+This guide maps common changes to the current code layout.
 
 ## Quick Reference
 
-| Change Type | Primary Crates | See Section |
-|-------------|----------------|-------------|
-| Add new API endpoint | server, core | [Adding an API Endpoint](#adding-an-api-endpoint) |
-| Modify FSRS parameters | core, worker, shared | [FSRS Changes](#fsrs-changes) |
-| Add memory field | entities, migration, core | [Schema Changes](#schema-changes) |
-| Modify segmentation | core, worker | [Segmentation Changes](#segmentation-changes) |
-| Add AI capability | ai, core | [AI Changes](#ai-changes) |
-| Modify retrieval | core | [Retrieval Changes](#retrieval-changes) |
-| Add job type | worker, core | [Adding a Job Type](#adding-a-job-type) |
+| Change | Primary files |
+| --- | --- |
+| Add or change an API endpoint | `crates/server/src/api/*.rs`, `crates/server/src/api/mod.rs` |
+| Change message ingestion or segmentation claims | `crates/core/src/message_ingest.rs`, `crates/core/src/segmentation_state.rs` |
+| Change active segmentation policy | `crates/event_segmentation/src/batch_segmentation.rs`, `crates/worker/src/jobs/event_segmentation.rs` |
+| Change episode creation | `crates/worker/src/jobs/episode_creation.rs` |
+| Change FSRS review behavior | `crates/worker/src/jobs/memory_review.rs`, `crates/core/src/memory/episodic.rs` |
+| Change semantic consolidation | `crates/worker/src/jobs/predict_calibrate.rs`, `crates/core/src/memory/semantic.rs` |
+| Change schema | `crates/entities/src/*.rs`, `crates/migration/src/*.rs` |
+| Change TypeScript benchmark/example code | `docs/TYPESCRIPT.md`, `benchmarks/*`, `examples/*` |
 
 ## Common Change Patterns
 
-### Adding an API Endpoint
+### API changes
 
-New HTTP endpoints follow the flow: Router → Handler → Core Service.
+Flow:
 
-1. **Define request/response types** in `crates/server/src/api/` or `crates/shared/src/message.rs`
-2. **Add handler function** in `crates/server/src/api/<name>.rs`:
-   ```rust
-   #[handler]
-   pub async fn handler(state: State<AppState>, req: Request) -> Response {
-       // Extract inputs, call core, return response
-   }
-   ```
-3. **Call core logic** - Don't put business logic in handlers; delegate to `plastmem_core`
-4. **Register route** in `crates/server/src/server.rs` or appropriate router module
-5. **Add test** in `crates/server/tests/` or as a `#[cfg(test)]` module
+```text
+api handler -> core call(s) -> optional job enqueue -> response
+```
 
-**Example files to reference:**
-- `crates/server/src/api/add_message.rs` - Simple message ingestion
-- `crates/server/src/api/retrieve_memory.rs` - Retrieval with parameters
+Checklist:
 
-### FSRS Changes
+1. Update request/response types in the handler file.
+2. Keep business logic out of `plastmem_server`.
+3. Register the route in `crates/server/src/api/mod.rs`.
+4. If the endpoint changes memory state, follow the existing core entrypoints
+   instead of writing DB logic in the handler.
 
-FSRS (Free Spaced Repetition Scheduler) parameters affect memory scheduling throughout the system.
+Reference files:
 
-1. **Read `docs/architecture/fsrs.md`** - Understand the algorithm first
-2. **Update parameter definitions** in `crates/shared/src/fsrs.rs` if adding new parameters
-3. **Modify calculation logic**:
-   - `crates/core/src/memory/episodic.rs` - Retrieval and scheduling
-   - `crates/worker/src/jobs/event_segmentation.rs` - Initial FSRS values on episode creation
-4. **Update review logic** in `crates/worker/src/jobs/memory_review.rs`:
-   - LLM evaluation mapping (Again/Hard/Good/Easy)
-   - Parameter update formulas
-5. **Test thoroughly** - FSRS bugs manifest as poor memory recall:
-   ```bash
-   cargo test -p plastmem_core fsrs
-   cargo test -p plastmem_worker memory_review
-   ```
+- `crates/server/src/api/add_message.rs`
+- `crates/server/src/api/retrieve_memory.rs`
+- `crates/server/src/api/recent_memory.rs`
 
-**Key constraint:** FSRS state is owned by core; worker only updates via core APIs.
+### Message ingestion or segmentation state changes
 
-### Schema Changes
+Current segmentation is state-based, not `message_queue` based.
 
-Database schema changes require migration and entity updates.
+Relevant code:
 
-1. **Create migration**:
-   ```bash
-   cargo run --bin migration generate MIGRATION_NAME
-   ```
-2. **Edit migration** in `crates/migration/src/m<timestamp>_<name>.rs`:
-   - Define `up` (apply) and `down` (rollback) operations
-   - Use Sea-ORM migration syntax
-3. **Regenerate entities** or manually update:
-   - `crates/entities/src/episodic_memory.rs`
-   - `crates/entities/src/message_queue.rs`
-4. **Update core logic** to use new fields:
-   - `crates/worker/src/jobs/event_segmentation.rs` - Set defaults on episode creation
-   - `crates/core/src/memory/episodic.rs` - Use in retrieval/updates
-5. **Run migration**:
-   ```bash
-   cargo run --bin migration up
-   ```
+- `crates/core/src/message_ingest.rs`
+- `crates/core/src/segmentation_state.rs`
+- `crates/worker/src/jobs/event_segmentation.rs`
+- `crates/event_segmentation/src/batch_segmentation.rs`
 
-### Segmentation Changes
+Typical questions to answer before editing:
 
-Event segmentation determines when conversations become memories.
+1. Does the change affect claim creation?
+2. Does it affect stale claim recovery?
+3. Does it affect commit semantics (`next_segment_start_seq`, finalized spans)?
+4. Does it affect follow-up job enqueueing?
 
-1. **Understand batch detection**: a single LLM call segments the whole window; see `docs/architecture/segmentation.md`
-2. **Modify trigger logic** in `crates/core/src/message_queue.rs` (thresholds, fence TTL)
-3. **Modify LLM segmentation** in `crates/worker/src/jobs/event_segmentation.rs` (batch_segment function, prompt, output schema)
-4. **Adjust job dispatch** in `crates/worker/src/jobs/event_segmentation.rs` (process_event_segmentation)
-5. **Test with varied inputs** - segmentation quality affects memory quality
+### Active segmentation policy changes
 
-**Key constraint:** Drain happens before episode creation; a crash after drain loses messages (acceptable) but never creates duplicate episodes.
+There are two layers:
 
-### AI Changes
+- `plastmem_event_segmentation`: policy, prompts, structural validation
+- `plastmem_worker::event_segmentation`: runtime orchestration, commit, side effects
 
-The AI crate wraps LLM and embedding operations.
+Use this rule:
 
-1. **Add provider/functionality** in `crates/ai/src/`:
-   - `embed.rs` - Embedding operations
-   - `generate_text.rs` - Text generation
-   - `generate_object.rs` - Structured output
-2. **Update public API** in `crates/ai/src/lib.rs`
-3. **Handle errors** using `plastmem_shared::error`
-4. **Add cost tracking** if adding new LLM calls
+- boundary or classification logic -> `batch_segmentation.rs`
+- claim validation / commit / enqueueing -> `event_segmentation.rs`
 
-**Key constraint:** AI calls are expensive; always use embeddings for pre-filtering before LLM calls.
+### Episode creation changes
 
-### Retrieval Changes
+Relevant files:
 
-Memory retrieval uses hybrid ranking (BM25 + vector) with FSRS re-ranking.
+- `crates/worker/src/jobs/episode_creation.rs`
+- `crates/core/src/segmentation_state.rs`
+- `crates/entities/src/episodic_memory.rs`
 
-1. **Understand current flow** in `crates/core/src/memory/episodic.rs`:
-   - BM25 text search
-   - Vector similarity
-   - RRF (Reciprocal Rank Fusion)
-   - FSRS retrievability weighting
-2. **Modify ranking** in `crates/core/src/memory/retrieval.rs` if applicable
-3. **Update review queue** - retrieval records pending reviews via `MessageQueue::add_pending_review()` in `crates/core/src/message_queue.rs`
-4. **Test retrieval quality** with representative queries
+Current flow:
 
-### Adding a Job Type
+```text
+EpisodeSpan
+  -> EpisodeCreationJob
+  -> ensure episodic_memory exists
+  -> generate artifacts
+  -> insert episodic_memory
+  -> optionally enqueue PredictCalibrateJob
+```
 
-Background jobs handle segmentation and memory review.
+If you change episode fields, update:
 
-1. **Define job data** in `crates/core/src/message_queue.rs` if it needs queue storage (for pending reviews)
-2. **Create job handler** in `crates/worker/src/jobs/<name>.rs`:
-   ```rust
-   pub async fn run(state: AppState, job_data: JobData) -> Result<()> {
-       // Job logic
-   }
-   ```
-3. **Register in mod** at `crates/worker/src/jobs/mod.rs`
-4. **Add dispatch logic** where the job is triggered (often in segmentation or API handlers)
-5. **Handle failures** - jobs should be idempotent and handle retries
+1. entity
+2. migration
+3. `create_episode_record`
+4. retrieval or downstream jobs if they read the field
+
+### Retrieval changes
+
+Relevant files:
+
+- `crates/core/src/memory/episodic.rs`
+- `crates/core/src/memory/semantic.rs`
+- `crates/core/src/memory/retrieval.rs`
+- `crates/server/src/api/retrieve_memory.rs`
+
+Current behavior to remember:
+
+- episodic retrieval: BM25 on `search_text` + vector + FSRS rerank
+- semantic retrieval: BM25 on `fact` + vector, no FSRS
+- `detail` is still part of the API, but the current markdown formatter ignores it
+- pending review recording happens in `retrieve_memory.rs`, not inside the memory models
+
+### FSRS review changes
+
+Relevant files:
+
+- `crates/worker/src/jobs/memory_review.rs`
+- `crates/core/src/memory/episodic.rs`
+- `docs/architecture/fsrs.md`
+
+Current review path:
+
+```text
+retrieve_memory
+  -> add_pending_review_item
+  -> segmentation commit
+  -> take_pending_review_items
+  -> MemoryReviewJob
+  -> FSRS next_states update
+```
+
+### Semantic consolidation changes
+
+Relevant files:
+
+- `crates/worker/src/jobs/predict_calibrate.rs`
+- `crates/core/src/memory/semantic.rs`
+- `crates/entities/src/semantic_memory.rs`
+
+Current model:
+
+- no direct write API for semantic facts
+- all writes go through `PredictCalibrateJob`
+- invalidation uses `invalid_at`, not hard delete
+
+### Schema changes
+
+Migration history has been reset. The current `crates/migration` crate is a
+fresh-DB schema snapshot, not a compatibility chain for old databases.
+
+That means:
+
+- changing table shape requires updating the create migrations directly
+- existing development databases are expected to be recreated
+
+Checklist:
+
+1. Update the entity in `crates/entities/src`.
+2. Update the corresponding create migration in `crates/migration/src`.
+3. Update all code that constructs or reads the model.
+4. Run at least:
+
+```bash
+cargo check -p plastmem_entities
+cargo check -p plastmem_migration
+cargo check -p plastmem
+```
+
+### TypeScript benchmark / example changes
+
+This workspace uses `pnpm`, not `npm`.
+
+Relevant docs and files:
+
+- `docs/TYPESCRIPT.md`
+- `benchmarks/locomo`
+- `benchmarks/longmemeval`
+- `examples/haru`
+
+For CLI-style TypeScript files, match the pattern already used in
+`benchmarks/locomo/src/cli.ts`.
 
 ## Architecture Rules
 
-### Layer Dependencies
+### Dependency directions
 
+```text
+server -> core
+worker -> core
+worker -> event_segmentation
+core -> entities / shared
+ai -> shared
 ```
-plastmem_server → plastmem_core ← plastmem_worker
-       ↓              ↓
-   plastmem_ai    plastmem_entities
-       ↓              ↓
-   plastmem_shared ← plastmem_migration
-```
 
-- **Never** call DB directly from server handlers—always go through core
-- **Never** spawn async tasks directly—use job queue in worker
-- **Never** let core depend on server or worker (core is the inner layer)
-- **Never** let shared depend on any other crate (shared is the bottom layer)
+Avoid:
 
-### Memory Flow Rules
+- server depending on worker internals
+- core depending on server or worker
+- worker putting segmentation policy back into runtime orchestration
 
-1. **Creation flow**: Message → Queue → Segmentation → Episode → DB
-2. **Retrieval flow**: Query → Embeddings → BM25/Vector search → FSRS rerank → Return
-3. **Review flow**: Pending review → LLM evaluation → FSRS update → Mark reviewed
+### Data ownership
 
-### Testing Rules
+- `conversation_message` is the source-of-truth message log
+- `segmentation_state` owns unsegmented progress
+- `episode_span` owns committed ranges
+- `episodic_memory` owns rendered episode artifacts + FSRS state
+- `semantic_memory` owns durable facts
 
-- Core logic should have unit tests with `#[cfg(test)]`
-- API tests should use the test database
-- Mock AI calls in tests—don't hit real LLM APIs
-- Integration tests go in `crates/<name>/tests/`
+## Pitfalls
 
-## Commit Message Conventions
-
-- `feat(api):` - New endpoints or API changes
-- `feat(memory):` - New memory features or types
-- `feat(fsrs):` - FSRS algorithm changes
-- `refactor(core):` - Core logic restructuring
-- `fix(segmentation):` - Boundary detection fixes
-- `fix(retrieval):` - Memory retrieval fixes
-- `docs:` - Documentation only changes
-
-## Common Pitfalls
-
-1. **Forgetting FSRS updates** - When modifying memory, check if FSRS parameters need recalculation
-2. **Direct DB access** - Don't bypass core; it handles caching and consistency
-3. **Missing migrations** - Entity changes need corresponding migrations
-4. **Synchronous AI calls** - AI operations should be async and handle timeouts
-5. **Not handling job failures** - Jobs can retry; make handlers idempotent
-6. **sea-orm `cust_with_values` CAST syntax** - PostgreSQL rejects `CAST(? AS type)` in parameterized queries. Use `execute_raw` with `$1::type` cast syntax instead, or embed literals directly in the SQL string (safe for fixed-format values like UUIDs)
-7. **OpenAI strict mode schema** - schemars 1.x emits `$defs`, `oneOf`, `anyOf`, and `$ref` with siblings — all rejected by strict mode. `fix_schema_for_strict` in `crates/ai/src/generate_object.rs` handles these automatically; do not bypass it
+1. Do not reintroduce `message_queue` assumptions into docs or code.
+2. Do not document `detail` behavior that the current renderer does not implement.
+3. Do not treat migration history as an upgrade path anymore.
+4. `surprise` still exists in schema, but current episode creation initializes it to `0.0`.
+5. `predict_calibrate` enqueueing is intentionally retry-tolerant; avoid documenting it as strong queue deduplication.

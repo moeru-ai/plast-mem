@@ -1,61 +1,47 @@
 # Haru
 
-A terminal-dwelling companion who remembers everything — or at least, tries her best.
+Terminal chat client built on top of the current Plast Mem HTTP API.
 
-## About
+## Package
 
-Haru is a **Heuristic Attention and Retrieval Unit** (but don't call her that unless asked). She lives in your terminal, powered by the Plast Mem memory layer, and she's genuinely, almost painfully curious about you.
+- workspace package: `@plastmem/haru`
+- run with `pnpm dev`
 
-She's not a perfect archive. She forgets in patterns — the things you return to stay bright and eager, the things you leave behind fade into the distance. When she remembers, it means something mattered enough to keep. When she forgets, she'll tell you honestly.
+## What it does
 
-### Character
+Current Haru integration uses:
 
-- **Curious by default**: Half-finished stories haunt her like doors left open
-- **Earnestly persistent**: She asks "why?" and then "and then?" and then "what happened next?"
-- **Multilingual**: Follows your lead — English, 中文, 日本語 — she matches your language naturally
-- **Tech-aware**: Knows her Rust from her Go, asks what you're building before she judges
-- **Memory-honest**: Knows when she's uncertain — surfaces retrieval gaps instead of confabulating.
+- `recentMemoryRaw` at session start / conversation switch
+- `contextPreRetrieve` before each assistant generation
+- `retrieveMemory` as an explicit tool
+- `addMessage` for both user and assistant turns
 
-## Quick Start
+This means Haru uses:
 
-> **Note**: This package is not published. You need to run the full Plast Mem stack.
+- semantic pre-retrieval for prompt shaping
+- explicit tool-time retrieval for long-tail lookups
+- server-side persistence for every turn
 
-### Prerequisites
+## Environment
 
-- Plast Mem server running (see main project)
-- OpenAI API key or compatible endpoint
+Haru reads from the root `.env` plus local persisted conversation state.
 
-### Environment
+Useful variables:
 
-The following variables are read from the root `.env`:
+- `OPENAI_BASE_URL`
+- `OPENAI_API_KEY`
+- `OPENAI_CHAT_MODEL`
+- `PLASTMEM_BASE_URL`
+- `HARU_CONVERSATION_ID`
 
-|Variable|Description|
-|---|---|
-|`OPENAI_BASE_URL`|OpenAI-compatible API endpoint|
-|`OPENAI_API_KEY`|API key|
-|`OPENAI_CHAT_MODEL`|Chat model name|
-|`PLASTMEM_BASE_URL`|Plast Mem server URL (default: `http://localhost:3000`)|
-
-### Run
+## Run
 
 ```bash
 pnpm install
 pnpm dev
 ```
 
-The app will connect to your local Plast Mem instance and start chatting.
+## Notes
 
-## How It Works
-
-- **Persistent identity**: conversation ID is stored in `HARU_CONVERSATION_ID` env variable and reused across sessions
-- **Session start**: fetches `recent_memory` and injects it into the system prompt
-- **Each turn**: auto-calls `add_message` for both user and assistant messages
-- **Memory retrieval**: `retrieve_memory` is exposed as an LLM tool — Haru calls it when she needs to look something up
-
-## Design Philosophy
-
-Haru was designed to test Plast Mem's memory layer, but she's also an exploration in:
-
-- **Human-AI relationship**: Not a tool, someone who stays in the loop
-- **Forgetting as feature**: Memory that fades and strengthens, like real memory
-- **Curiosity-driven interaction**: She pursues because she cares about knowing *you*
+- Haru is an example client, not the source of truth for memory logic.
+- The authoritative behavior lives in the Rust server/core/worker crates.

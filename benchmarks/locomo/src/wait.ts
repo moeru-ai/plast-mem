@@ -1,15 +1,12 @@
 import { spinner as createSpinner } from '@clack/prompts'
 import { sleep } from '@moeru/std'
-import { benchmarkFlush, benchmarkJobStatus } from 'plastmem'
+import { benchmarkJobStatus } from 'plastmem'
 
 const POLL_INTERVAL_MS = 10_000
-const ADMISSION_POLL_INTERVAL_MS = 1_000
 
 export interface ConversationStatus {
-  admissible_for_add: boolean
   done: boolean
   fence_active: boolean
-  flushable: boolean
   messages_pending: number
   predict_calibrate_jobs_active: number
   segmentation_jobs_active: number
@@ -47,45 +44,7 @@ const renderStatus = (
   return `${prefix}pending=${status.messages_pending}, `
     + `fence=${renderFlag(status.fence_active)}, `
     + `segmentation=${status.segmentation_jobs_active}, `
-    + `predict_calibrate=${status.predict_calibrate_jobs_active}, `
-    + `admissible=${renderFlag(status.admissible_for_add)}, `
-    + `flushable=${renderFlag(status.flushable)}`
-}
-
-export const waitUntilConversationAdmissible = async (
-  baseUrl: string,
-  conversationId: string,
-): Promise<void> => {
-  while (true) {
-    const status = await getStatus(baseUrl, conversationId)
-    if (status.admissible_for_add)
-      return
-
-    await sleep(ADMISSION_POLL_INTERVAL_MS)
-  }
-}
-
-export const flushConversationTailWhenReady = async (
-  baseUrl: string,
-  conversationId: string,
-): Promise<boolean> => {
-  while (true) {
-    const status = await getStatus(baseUrl, conversationId)
-
-    if (status.flushable) {
-      await benchmarkFlush({
-        baseUrl,
-        body: { conversation_id: conversationId },
-        throwOnError: true,
-      })
-      return true
-    }
-
-    if (status.messages_pending === 0 && !status.fence_active && status.segmentation_jobs_active === 0)
-      return false
-
-    await sleep(ADMISSION_POLL_INTERVAL_MS)
-  }
+    + `predict_calibrate=${status.predict_calibrate_jobs_active}`
 }
 
 const collectStatuses = async (
@@ -96,25 +55,6 @@ const collectStatuses = async (
     const status = await getStatus(baseUrl, id)
     return { id, status }
   }))
-
-const flushReadyConversations = async (
-  statuses: StatusEntry[],
-  baseUrl: string,
-  flushedIds: Set<string>,
-): Promise<void> => {
-  for (const { id, status } of statuses) {
-    if (!status.flushable || flushedIds.has(id))
-      continue
-
-    const res = await benchmarkFlush({
-      baseUrl,
-      body: { conversation_id: id },
-      throwOnError: true,
-    })
-    if (res.data?.enqueued === true)
-      flushedIds.add(id)
-  }
-}
 
 const removeCompletedConversations = (
   statuses: StatusEntry[],
@@ -136,7 +76,6 @@ export const waitForAll = async (
     return
 
   const pendingIds = new Set(uniqueIds)
-  const flushedIds = new Set<string>()
   const spinner = createSpinner()
   spinner.start(uniqueIds.length === 1 ? 'Waiting for background jobs' : `Waiting for ${uniqueIds.length} conversations`)
   while (pendingIds.size > 0) {
@@ -150,7 +89,6 @@ export const waitForAll = async (
       .join(' | ')
     spinner.message(line)
 
-    await flushReadyConversations(statuses, baseUrl, flushedIds)
     removeCompletedConversations(statuses, pendingIds)
 
     if (pendingIds.size === 0) {

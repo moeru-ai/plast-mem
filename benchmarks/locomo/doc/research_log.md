@@ -1,5 +1,9 @@
 # Research Log
 
+Status note: this is a historical benchmark log. It is not an authoritative
+description of the current implementation. For current behavior, use the code in
+`benchmarks/locomo/src` and the active docs in `docs/` and crate READMEs.
+
 _We've already implemented the pipeline based on the correct idea, but why does the eval score not as high as SOTA such as Nemori?_
 
 ## 14 March 2026

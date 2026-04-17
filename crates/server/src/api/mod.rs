@@ -11,9 +11,9 @@ mod benchmark;
 mod recent_memory;
 mod retrieve_memory;
 
-pub use add_message::{AddMessage, AddMessageMessage, AddMessageResult};
+pub use add_message::{IngestMessageResult, InputConversationMessage, InputConversationMessages, InputMessage};
 #[cfg(debug_assertions)]
-pub use benchmark::{BenchmarkFlush, BenchmarkFlushResult, BenchmarkJobStatus};
+pub use benchmark::BenchmarkJobStatus;
 pub use recent_memory::RecentMemory;
 pub use retrieve_memory::{
   ContextPreRetrieve, EpisodicMemoryResult, RetrieveMemory, RetrieveMemoryRawResult,
@@ -23,6 +23,7 @@ pub use retrieve_memory::{
 pub fn app() -> Router<AppState> {
   let router = OpenApiRouter::with_openapi(ApiDoc::openapi())
     .routes(routes!(add_message::add_message))
+    .routes(routes!(add_message::import_batch_messages))
     .routes(routes!(recent_memory::recent_memory))
     .routes(routes!(recent_memory::recent_memory_raw))
     .routes(routes!(retrieve_memory::retrieve_memory))
@@ -31,7 +32,6 @@ pub fn app() -> Router<AppState> {
 
   #[cfg(debug_assertions)]
   let router = router
-    .routes(routes!(benchmark::benchmark_flush))
     .routes(routes!(benchmark::benchmark_job_status));
 
   let (router, openapi) = router.split_for_parts();
@@ -51,11 +51,10 @@ pub fn app() -> Router<AppState> {
 #[openapi(
   info(title = "Plast Mem"),
   components(schemas(
-    AddMessage,
-    AddMessageMessage,
-    AddMessageResult,
-    BenchmarkFlush,
-    BenchmarkFlushResult,
+    InputMessage,
+    InputConversationMessage,
+    InputConversationMessages,
+    IngestMessageResult,
     BenchmarkJobStatus,
     RecentMemory,
     RetrieveMemory,
@@ -77,9 +76,10 @@ pub struct ApiDoc;
 #[openapi(
   info(title = "Plast Mem"),
   components(schemas(
-    AddMessage,
-    AddMessageMessage,
-    AddMessageResult,
+    InputMessage,
+    InputConversationMessage,
+    InputConversationMessages,
+    IngestMessageResult,
     RecentMemory,
     RetrieveMemory,
     ContextPreRetrieve,

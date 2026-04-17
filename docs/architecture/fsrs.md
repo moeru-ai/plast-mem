@@ -1,44 +1,69 @@
-# FSRS Integration
+# FSRS
 
-## Memory State
+FSRS currently applies only to `episodic_memory`.
 
-Each memory is associated with the following state parameters:
+`semantic_memory` does not use FSRS.
 
-- `stability` (S) — boosted by surprise on creation: `S * (1.0 + surprise * 0.5)`
-- `difficulty` (D)
+## Stored state
+
+Per episodic record:
+
+- `stability`
+- `difficulty`
 - `last_reviewed_at`
 
-New memories are initialized with **high retrievability but low stability**, meaning they are fresh in memory but haven't been reinforced yet. Surprising events receive a stability boost, making them decay slower.
+## Initialization
 
-## Reranking
+Code:
 
-Each memory retrieval first searches 100 candidates via BM25 + vector (RRF), then applies the FSRS retrievability multiplier:
+- `crates/worker/src/jobs/episode_creation.rs`
 
+On episode creation, the worker:
+
+1. creates an `FSRS` instance with `DEFAULT_PARAMETERS`
+2. calls `next_states(None, DESIRED_RETENTION, 0)`
+3. uses the `good` branch as the initial memory state
+
+Current episode creation writes:
+
+- `stability = initial_state.stability`
+- `difficulty = initial_state.difficulty`
+
+There is no current surprise-based boost in the write path.
+
+## Retrieval usage
+
+Code:
+
+- `crates/core/src/memory/episodic.rs`
+
+Episodic retrieval computes:
+
+```text
+final_score = rrf_score * retrievability
 ```
-final_score = rrf_score × retrievability
-```
 
-The top `limit` items are returned.
+Where retrievability comes from:
 
-## Review
+- current `stability`
+- current `difficulty`
+- days since `last_reviewed_at`
 
-Review is decoupled from retrieval. Retrieval only records pending reviews in `MessageQueue`; FSRS parameters are never updated at retrieval time.
+## Review usage
 
-When event segmentation triggers, the segmentation worker checks for pending reviews and enqueues a `MemoryReviewJob`. The review worker then:
+Code:
 
-1. Aggregates pending reviews (deduplicates memory IDs, collects matched queries)
-2. Calls an LLM reviewer with the conversation context + retrieved memory summaries
-3. Updates FSRS parameters (stability, difficulty, last_reviewed_at) based on the rating
+- `crates/worker/src/jobs/memory_review.rs`
 
-If the job's `reviewed_at` is not newer than the stored `last_reviewed_at`, the update is skipped to avoid stale writes.
+The review worker:
 
-| Rating    | Description                                                      | FSRS Effect                        |
-|-----------|------------------------------------------------------------------|------------------------------------|
-| **Again** | Memory was noise — not used in the conversation at all           | Stability drops significantly      |
-| **Hard**  | Tangentially related, required significant inference to connect  | Stability roughly unchanged        |
-| **Good**  | Directly relevant, visibly influenced the conversation           | Stability increases moderately     |
-| **Easy**  | Core pillar of the conversation, essential to its flow           | Stability increases substantially  |
+1. builds `MemoryState { stability, difficulty }`
+2. computes `next_states(Some(current_state), DESIRED_RETENTION, days_elapsed)`
+3. picks the branch matching the LLM rating
+4. updates `stability`, `difficulty`, and `last_reviewed_at`
 
-## Cleanup
+## What is not implemented
 
-TBD, it is expected that an "inactive memories" will be implemented, with permanent deletion occurring after prolonged inactivity.
+- semantic-memory FSRS
+- automatic deletion or archival based on FSRS
+- retrieval-time FSRS mutation

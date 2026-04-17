@@ -1,64 +1,44 @@
 # plastmem_migration
 
-Database schema migrations using Sea-ORM Migration.
+SeaORM migrations for the current Plast Mem schema.
 
-## Overview
+## Current model
 
-Manages database schema evolution. Migrations are applied automatically
-at application startup by the main `plastmem` binary.
+Migration history has been reset. This crate now describes the current schema as
+a fresh-DB snapshot, not a compatibility chain for older databases.
 
-## Migrations
+Current tables:
 
-| File | Description |
-|------|-------------|
-| `m20260216_01_create_message_queue_table.rs` | Creates `message_queue` table |
-| `m20260216_02_create_episodic_memory_table.rs` | Creates `episodic_memory` table with pgvector support |
-| `m20260218_01_create_semantic_memory_table.rs` | Creates `semantic_memory` table |
-| `m20260228_01_refactor_semantic_memory.rs` | Refactors semantic memory (SPO → category+keywords, adds search_text generated column) |
-| `m20260328_01_restore_semantic_fact_bm25.rs` | Removes semantic keywords/search_text and restores BM25 on `fact` |
+- `conversation_message`
+- `segmentation_state`
+- `episode_span`
+- `pending_review_queue`
+- `episodic_memory`
+- `semantic_memory`
 
-## Running Migrations
+## Files
 
-### Programmatically (recommended)
-
-```rust
-use plastmem_migration::Migrator;
-use sea_orm_migration::MigratorTrait;
-
-Migrator::up(db, None).await?;
-```
-
-### CLI
-
-```bash
-# Install sea-orm-cli
-cargo install sea-orm-cli
-
-# Run pending migrations
-sea-orm-cli migrate up
-
-# Create new migration
-sea-orm-cli migrate generate create_new_table
-```
+| File | Purpose |
+| --- | --- |
+| `m20260417_01_create_conversation_message_table.rs` | raw message log |
+| `m20260417_02_create_segmentation_state_table.rs` | segmentation progress and active claim |
+| `m20260417_03_create_episode_span_table.rs` | committed segment ranges |
+| `m20260417_04_create_pending_review_queue_table.rs` | pending FSRS review items |
+| `m20260417_05_create_episodic_memory_table.rs` | episodic memories, FSRS state, search index |
+| `m20260417_06_create_semantic_memory_table.rs` | semantic facts and indexes |
 
 ## Requirements
 
-- PostgreSQL 14+
-- `pgvector` extension (automatically enabled by migrations)
+The migrations assume the database already supports:
 
-## Creating New Migrations
+- `vector(1024)` / pgvector
+- ParadeDB `bm25` indexing and `pdb.icu`
 
-1. Generate migration file:
-   ```bash
-   sea-orm-cli migrate generate your_migration_name
-   ```
+These migrations do not create extensions for you.
 
-2. Implement `up` and `down` in the generated file
+## Development note
 
-3. Test migration:
-   ```bash
-   sea-orm-cli migrate up
-   sea-orm-cli migrate down
-   ```
+Because the history is reset:
 
-4. Regenerate entities in `crates/entities`
+- editing schema means editing the create migrations directly
+- old development databases are expected to be recreated

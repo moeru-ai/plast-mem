@@ -1,6 +1,9 @@
 mod event_segmentation;
 pub use event_segmentation::*;
 
+mod episode_creation;
+pub use episode_creation::*;
+
 mod memory_review;
 pub use memory_review::*;
 

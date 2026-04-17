@@ -1,145 +1,59 @@
 # LoCoMo Benchmark
 
-Evaluates plast-mem's long-term memory retrieval quality using the [LoCoMo dataset](https://github.com/snap-research/locomo) — 10 annotated multi-session conversations with 5 QA categories.
+LoCoMo benchmark runner for the current Plast Mem stack.
+
+## Package
+
+- workspace package: `@plastmem/benchmark-locomo`
+- entry script: `pnpm -F @plastmem/benchmark-locomo start`
 
 ## Setup
 
 ```bash
-# from workspace root
-pnpm i
-
-# download dataset
+pnpm install
 curl -L https://github.com/snap-research/locomo/raw/main/data/locomo10.json --create-dirs -o benchmarks/locomo/data/locomo10.json
-
-# configure env (root .env is loaded automatically)
-PLASTMEM_BASE_URL=http://localhost:3000
-OPENAI_API_KEY=...
-OPENAI_BASE_URL=http://localhost:11434/v1   # Ollama or any OpenAI-compatible endpoint
-OPENAI_CHAT_MODEL=qwen3:8b
-OPENAI_CHAT_SEED=42
 ```
 
-## Usage
+The benchmark reads the root `.env` with `loadEnvFile(...)`.
 
-```bash
-# interactive run
-pnpm -F @plastmem/benchmark-locomo start
-```
+Useful variables:
 
-## Pipeline
+- `PLASTMEM_BASE_URL`
+- `OPENAI_API_KEY`
+- `OPENAI_BASE_URL`
+- `OPENAI_CHAT_MODEL`
+- `OPENAI_CHAT_SEED`
 
-```
-for each selected sample:
-1. Ingest    — replay the conversation turn-by-turn into plast-mem via addMessage
-2. Eval      — run plast-mem QA, and optionally Full Context QA
-3. Score     — compute F1 / Nemori F1 / optional LLM judge
-4. Persist   — update checkpoint + aggregate output JSON
-```
+## Runtime shape
 
-## Interactive Options
+For each sample the runner:
 
-At startup the CLI prompts for:
+1. replays the source conversation into Plast Mem
+2. waits for background jobs to finish
+3. runs plast-mem QA
+4. optionally runs the full-context baseline
+5. scores and persists checkpoints/results
 
-- sample scope (`Minimal`, `Recommended`, `Long-context`, `All`, or `Custom`; only `Custom` opens sample-by-sample selection, and it defaults to `conv-42`, `conv-44`, `conv-48`, `conv-50`)
-- compare mode (`plast-mem only` or `plast-mem + Full Context`)
-- whether to enable LLM judge scoring
+## Server dependency
 
-The benchmark always:
+The benchmark expects a running Plast Mem server. It polls the debug-only
+endpoint:
 
-- uses QA concurrency `4`
-- waits for background jobs after each sample ingest
+- `GET /api/v0/benchmark/job_status`
 
-If a previous checkpoint exists in `benchmarks/locomo/results/`, the CLI first asks whether to resume that latest checkpoint. When resuming, it reuses the saved config instead of asking for fresh run options.
+to decide when ingestion has fully settled.
 
-`PLASTMEM_BASE_URL` is read from the root `.env`. If unset, it defaults to `http://localhost:3000`.
-`OPENAI_CHAT_MODEL` is read from the root `.env` and recorded in the output JSON metadata for fresh runs. If unset, the CLI exits with an error instead of prompting interactively.
-`OPENAI_CHAT_SEED` is optional. When set in the root `.env`, LoCoMo passes it to the answer model and LLM judge, and records it in checkpoint/output metadata.
+## Related helpers
 
-## Resume / Checkpoint
+Useful scripts in this package:
 
-- The dataset is always loaded from `benchmarks/locomo/data/locomo10.json`
-- If that file is missing, the CLI exits with the expected path and a `curl` command to download it
-- Each output file writes a sibling checkpoint file: `results/<run>.checkpoint.json`
-- Fresh runs always write to a timestamped output path automatically
-- Progress is persisted at sample-stage granularity:
-  - ingest complete
-  - plast-mem eval complete
-  - plast-mem score complete
-  - full-context eval complete
-  - full-context score complete
-- On restart, the CLI detects a compatible checkpoint and asks whether to resume it
-- Final results and checkpoint state are stored separately
+- `src/cli.ts`: interactive runner
+- `src/checkpoint.ts`: resume and compatibility checks
+- `src/ingest.ts`: sample replay
+- `src/retrieve.ts`: benchmark retrieval calls
+- `src/export-memories.ts`: export episodic/semantic memories for one conversation
 
-## Full Context Baseline
+## Notes
 
-- `plast-mem` is always run
-- `Full Context` is optional and can be enabled in the interactive prompt
-- The Full Context baseline follows the LoCoMo official non-RAG style:
-  - build a chronological transcript from the full conversation
-  - feed that transcript directly to the answer model
-  - do not apply retrieval, reranking, or query-aware chunking
-- This benchmark does not truncate for context length. If the model cannot handle the transcript, the sample fails and can be resumed later.
-
-## QA Categories
-
-| # | Name | Scoring |
-|---|------|---------|
-| 1 | Multi-hop | Mean token-F1 over comma-split gold sub-answers |
-| 2 | Single-hop | Token-F1 |
-| 3 | Temporal | Token-F1 on first semicolon-delimited gold part |
-| 4 | Open-domain | Token-F1 |
-| 5 | Adversarial | Binary: 1 if model says "no information available" |
-
-## Output
-
-Results are written to `results/<timestamp>.json`:
-
-```json
-{
-  "meta": {
-    "model": "...",
-    "seed": 42,
-    "base_url": "...",
-    "timestamp": "...",
-    "compare_full_context": true
-  },
-  "variants": {
-    "plastmem": {
-      "stats": { "overall": { "overall": 0.42, "...": "..." }, "by_sample": { "...": "..." } },
-      "results": [
-        {
-          "sample_id": "...",
-          "category": 2,
-          "question": "...",
-          "gold_answer": "...",
-          "prediction": "...",
-          "score": 0.8,
-          "context_retrieved": "...",
-          "evidence": ["..."]
-        }
-      ]
-    },
-    "full_context": {
-      "stats": { "overall": { "overall": 0.37 } },
-      "results": []
-    }
-  },
-  "comparison": {
-    "overall": { "score_delta": 0.05 }
-  }
-}
-```
-
-## Source Files
-
-| File | Purpose |
-|------|---------|
-| `cli.ts` | Entry point, interactive prompts, orchestration |
-| `checkpoint.ts` | Checkpoint creation, compatibility, persistence |
-| `full-context.ts` | Full transcript baseline context builder |
-| `ingest.ts` | Replay conversations into plast-mem |
-| `retrieve.ts` | `retrieve_memory` call |
-| `llm.ts` | LLM answer generation via `@xsai/generate-text` |
-| `evaluation.ts` | Per-category F1 scoring |
-| `stats.ts` | Aggregate stats and formatted output |
-| `types.ts` | Dataset and result types |
+- this workspace uses `pnpm`, not `npm`
+- TypeScript linting follows the repo-wide CLI conventions in `docs/TYPESCRIPT.md`

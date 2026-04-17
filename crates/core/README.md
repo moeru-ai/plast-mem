@@ -2,70 +2,77 @@
 
 Core domain logic for Plast Mem.
 
-## Overview
+## Scope
 
-This crate implements the central business logic:
+This crate owns:
 
-- **Episodic Memory** - Storage and retrieval of conversation segments
-- **Semantic Memory** - Long-term fact storage and consolidation
-- **Message Queue** - Buffering, trigger detection, and batch segmentation
+- message ingestion into `conversation_message`
+- segmentation state, claim, commit, and stale recovery
+- pending review queue operations
+- episodic retrieval
+- semantic retrieval
+- shared retrieval markdown rendering
 
-## Key Types
+It does not own:
 
-### [EpisodicMemory](src/memory/episodic.rs)
+- HTTP routing
+- worker runtime orchestration
+- segmentation policy prompts
 
-The main memory type representing a conversation segment with FSRS parameters for spaced repetition scheduling.
+## Main modules
 
-### [SemanticMemory](src/memory/semantic.rs)
+### `message_ingest.rs`
 
-A long-term fact extracted from episodic memories. Uses 8 categories: `identity`, `preference`, `interest`, `personality`, `relationship`, `experience`, `goal`, `guideline`.
+- `append_message`
+- `append_batch_messages`
+- `try_claim_segmentation_job`
+- `get_claim_messages`
 
-### [MessageQueue](src/message_queue.rs)
+This is the hot-path write side for incoming messages.
 
-Per-conversation message buffer with segmentation trigger logic.
+### `segmentation_state.rs`
 
-Key operations:
-```rust
-// Push a message; returns Some(SegmentationCheck) if a job should be enqueued
-let check = MessageQueue::push(conversation_id, message, db).await?;
+- `get_segmentation_state`
+- `recover_stale_segmentation_job`
+- `commit_segmentation_job`
+- `abort_segmentation_job`
+- `get_episode_span`
+- `get_messages_in_range`
 
-// Drain the first N messages after a job completes
-MessageQueue::drain(conversation_id, count, db).await?;
-```
+This module owns the `segmentation_state` and `episode_span` tables.
 
-### [PendingReview](src/message_queue.rs)
+### `pending_review_queue.rs`
 
-Tracks memories retrieved for later FSRS review.
+- `add_pending_review_item`
+- `take_pending_review_items`
 
-## Key Functions
+This replaces the old queue-embedded pending-review storage.
 
-### Episodic Retrieval
+### `memory/episodic.rs`
 
-```rust
-let embedding = embed(query).await?;
-let results = EpisodicMemory::retrieve_by_embedding(
-    query, embedding, limit, conversation_id, db
-).await?;
-```
+Hybrid episodic retrieval:
 
-### Semantic Retrieval
+- BM25 on `episodic_memory.search_text`
+- vector similarity on `embedding`
+- RRF merge
+- FSRS retrievability reranking
 
-```rust
-let embedding = embed(query).await?;
-let results = SemanticMemory::retrieve_by_embedding(
-    query, embedding, limit, conversation_id, db, category
-).await?;
-```
+### `memory/semantic.rs`
 
-## Modules
+Hybrid semantic retrieval:
 
-- `memory/episodic.rs` - `EpisodicMemory` struct, hybrid BM25 + vector retrieval with FSRS re-ranking
-- `memory/semantic.rs` - `SemanticMemory` struct, hybrid BM25 + vector retrieval (no FSRS)
-- `memory/retrieval.rs` - Shared markdown formatting (`format_tool_result`, `DetailLevel`)
-- `message_queue.rs` - `MessageQueue`, `PendingReview`, `SegmentationCheck`, push/drain/get
+- BM25 on `semantic_memory.fact`
+- vector similarity on `embedding`
+- RRF merge
+- optional category filter
 
-## Architecture Notes
+### `memory/retrieval.rs`
 
-- Core logic is pure domain code — no HTTP or job queue specifics
-- Database operations use Sea-ORM
-- LLM calls go through `plastmem_ai`
+Shared markdown formatter for retrieval endpoints.
+
+## Notes
+
+- `DetailLevel` is still part of the retrieval API, but the current formatter
+  renders episodic `content` blocks directly and does not branch on `detail`.
+- `surprise` is still part of episodic records, but current episode creation
+  initializes it to `0.0`.

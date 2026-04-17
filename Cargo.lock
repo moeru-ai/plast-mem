@@ -3624,11 +3624,13 @@ dependencies = [
  "fsrs",
  "plastmem_ai",
  "plastmem_entities",
+ "plastmem_migration",
  "plastmem_shared",
  "schemars",
  "sea-orm",
  "serde",
  "serde_json",
+ "tokio",
  "tracing",
  "utoipa",
  "uuid",
@@ -3641,13 +3643,17 @@ dependencies = [
  "sea-orm",
  "serde",
  "serde_json",
+ "utoipa",
 ]
 
 [[package]]
 name = "plastmem_event_segmentation"
 version = "0.0.1"
 dependencies = [
+ "anyhow",
  "chrono",
+ "plastmem_ai",
+ "plastmem_core",
  "plastmem_shared",
  "schemars",
  "serde",
@@ -4900,6 +4906,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "sha1_smol"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbfa15b3dddfee50a0fff136974b3e1bde555604ba463834a7eb7deb6417705d"
+
+[[package]]
 name = "sha2"
 version = "0.10.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6020,6 +6032,7 @@ dependencies = [
  "getrandom 0.3.4",
  "js-sys",
  "serde_core",
+ "sha1_smol",
  "wasm-bindgen",
 ]
 

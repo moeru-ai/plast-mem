@@ -1,88 +1,82 @@
 # plastmem_worker
 
-Background job worker for Plast Mem.
+Background job execution for Plast Mem.
 
-## Overview
+## Jobs
 
-Runs three background job processors:
+### `EventSegmentationJob`
 
-1. **Event Segmentation** - Batch-segments message queues and creates episodic memories
-2. **Memory Review** - Evaluates retrieved memories and updates FSRS parameters
-3. **Predict-Calibrate** - Real-time knowledge learning from episodic memories
+Files:
 
-Uses [Apalis](https://github.com/apalis-rs/apalis) for job queue management with PostgreSQL storage.
+- `src/jobs/event_segmentation.rs`
+- `crates/event_segmentation/src/batch_segmentation.rs`
 
-## Job Types
+Worker responsibilities:
 
-### [EventSegmentationJob](src/jobs/event_segmentation.rs)
+- validate the active claim
+- load claimed messages
+- call the active segmentation policy
+- build commit plan
+- commit `episode_span`
+- enqueue follow-up jobs
 
-Triggered when `MessageQueue::push()` returns a `SegmentationCheck`.
+Policy responsibilities live in `plastmem_event_segmentation`:
 
-Processing flow:
+- temporal rule segmentation
+- primitive LLM review / split
+- informative boundary review / constrained resegmentation
 
-1. Fetch queue; validate fence (skip if stale)
-2. Run `batch_segment(messages[0..fence_count])` — single LLM call
-3. **Drain + finalize first** (crash-safe: loss preferred over duplicate)
-4. Create episodes for drained segments in parallel (`try_join_all`)
-5. Enqueue `PredictCalibrateJob` for each new episode
+### `EpisodeCreationJob`
 
-Window doubling: if LLM returns 1 segment and window not yet doubled → double window, clear fence, wait for more messages.
+File:
 
-### [MemoryReviewJob](src/jobs/memory_review.rs)
+- `src/jobs/episode_creation.rs`
 
-Triggered after retrieval to evaluate memory relevance.
+Responsibilities:
 
-Processing flow:
+- load the current `EpisodeSpan`
+- ensure `episodic_memory` exists
+- generate episode title/content
+- embed and initialize FSRS state
+- enqueue `PredictCalibrateJob` when needed
 
-1. Aggregate pending reviews (deduplicate memory IDs)
-2. Call LLM to evaluate relevance (Again/Hard/Good/Easy)
-3. Update FSRS parameters based on rating
+### `MemoryReviewJob`
 
-### [PredictCalibrateJob](src/jobs/predict_calibrate.rs)
+File:
 
-Triggered immediately after each episode is created for real-time learning.
+- `src/jobs/memory_review.rs`
 
-Processing flow:
+Responsibilities:
 
-1. Load the newly created episode
-2. Check if episode is already consolidated (skip if yes)
-3. Load related existing semantic facts via hybrid search
-4. If no existing knowledge → cold start extraction
-5. Otherwise:
-   - PREDICT: Generate content prediction from relevant facts (guidelines prioritized)
-   - CALIBRATE: Compare prediction with actual messages, extract knowledge from gaps
-6. Consolidate extracted facts (deduplicate, categorize, embed)
-7. Mark episode as consolidated
+- aggregate pending review items
+- ask an LLM for Again/Hard/Good/Easy ratings
+- update `stability`, `difficulty`, and `last_reviewed_at`
 
-## Usage
+### `PredictCalibrateJob`
 
-Start the worker:
+File:
 
-```rust
-use plastmem_worker::worker;
+- `src/jobs/predict_calibrate.rs`
 
-worker(db, segmentation_storage, review_storage, semantic_storage).await?;
-```
+Responsibilities:
 
-This runs indefinitely until SIGINT (Ctrl+C) is received.
+- load related semantic facts
+- run cold-start extraction or predict-calibrate extraction
+- consolidate semantic actions
+- mark the episode as consolidated
 
-## Worker Configuration
+## Runtime model
 
-Each worker has:
+All jobs use Apalis PostgreSQL storage. The main binary creates storages for:
 
-- **Name**: "event-segmentation", "memory-review", or "predict-calibrate"
-- **Tracing**: Enabled via `enable_tracing()`
-- **Shutdown timeout**: 5 seconds
+- `EventSegmentationJob`
+- `EpisodeCreationJob`
+- `MemoryReviewJob`
+- `PredictCalibrateJob`
 
-## Error Handling
+## Notes
 
-Jobs use `WorkerError` as a boundary type to satisfy Apalis constraints.
-Internal errors are `AppError`, converted at the job boundary.
-
-## Module Structure
-
-- `jobs/mod.rs` - Job definitions and error types
-- `jobs/event_segmentation.rs` - Segmentation job implementation
-- `jobs/memory_review.rs` - Review job implementation
-- `jobs/predict_calibrate.rs` - Predict-Calibrate Learning job implementation
-- `lib.rs` - Worker registration and monitor setup
+- `EventSegmentationJob` is lease-aware and retry-tolerant. It validates the
+  current active claim before doing work.
+- `EpisodeCreationJob` may re-enqueue `PredictCalibrateJob` if the episode
+  already exists but has not been consolidated yet.

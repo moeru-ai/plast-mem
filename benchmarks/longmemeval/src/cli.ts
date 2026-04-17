@@ -53,10 +53,8 @@ const COLON_DOT_RE = /[:.]/g
 const INGEST_CONCURRENCY = 2
 
 interface ConversationStatus {
-  admissible_for_add: boolean
   done: boolean
   fence_active: boolean
-  flushable: boolean
   messages_pending: number
   predict_calibrate_jobs_active: number
   segmentation_jobs_active: number
@@ -185,10 +183,8 @@ const getStatus = async (
     throwOnError: true,
   })
   return {
-    admissible_for_add: res.data.admissible_for_add,
     done: res.data.done,
     fence_active: res.data.fence_active,
-    flushable: res.data.flushable,
     messages_pending: res.data.messages_pending,
     predict_calibrate_jobs_active: res.data.predict_calibrate_jobs_active,
     segmentation_jobs_active: res.data.segmentation_jobs_active,

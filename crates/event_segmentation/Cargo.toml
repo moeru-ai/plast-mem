@@ -16,9 +16,12 @@ name = "plastmem_event_segmentation"
 path = "src/lib.rs"
 
 [dependencies]
+anyhow.workspace = true
 chrono.workspace = true
 schemars.workspace = true
 serde.workspace = true
+plastmem_ai.workspace = true
+plastmem_core.workspace = true
 plastmem_shared.workspace = true
 tracing.workspace = true
 uuid.workspace = true
