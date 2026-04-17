@@ -3662,12 +3662,10 @@ dependencies = [
 name = "plastmem_event"
 version = "0.0.1"
 dependencies = [
- "anyhow",
  "chrono",
  "enum_dispatch",
  "serde",
  "strum 0.28.0",
- "tracing",
  "uuid",
 ]
 
