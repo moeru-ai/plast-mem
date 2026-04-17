@@ -1,7 +1,8 @@
 use chrono::TimeDelta;
+use plastmem_event::Event;
 use plastmem_shared::AppError;
 
-use crate::{Event, EventSegment, EventSegmentReason};
+use crate::{EventSegment, EventSegmentReason};
 
 pub struct EventSegmenter {}
 
@@ -21,7 +22,7 @@ impl EventSegmenter {
     let mut prev = &events[0];
 
     for curr in events.iter().skip(1) {
-      let gap = curr.timestamp().signed_duration_since(prev.timestamp());
+      let gap = curr.timestamp.signed_duration_since(prev.timestamp);
 
       if gap > Self::TIME_GAP_THRESHOLD {
         segments.push(EventSegment::new(

@@ -27,7 +27,7 @@ sea-orm.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 schemars.workspace = true
-tracing = "0.1"
+tracing.workspace = true
 uuid.workspace = true
 utoipa.workspace = true
 

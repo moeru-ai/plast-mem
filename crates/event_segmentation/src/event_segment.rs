@@ -1,4 +1,4 @@
-use crate::Event;
+use plastmem_event::Event;
 
 #[derive(Debug, Clone)]
 pub struct EventSegment {

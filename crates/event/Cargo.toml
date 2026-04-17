@@ -1,5 +1,5 @@
 [package]
-name = "plastmem_event_segmentation"
+name = "plastmem_event"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
@@ -12,17 +12,14 @@ homepage.workspace = true
 repository.workspace = true
 
 [lib]
-name = "plastmem_event_segmentation"
+name = "plastmem_event"
 path = "src/lib.rs"
 
 [dependencies]
-plastmem_ai.workspace = true
-plastmem_core.workspace = true
-plastmem_event.workspace = true
-plastmem_shared.workspace = true
 anyhow.workspace = true
 chrono.workspace = true
-schemars.workspace = true
+enum_dispatch.workspace = true
 serde.workspace = true
+strum.workspace = true
 tracing.workspace = true
 uuid.workspace = true
