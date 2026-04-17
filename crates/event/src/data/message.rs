@@ -1,8 +1,6 @@
-use std::str::FromStr;
-
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use strum::Display;
+use strum::{Display, EnumString};
 
 use super::EventDataToString;
 
@@ -26,22 +24,34 @@ impl EventDataToString for MessageEventData {
   }
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Display)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Display, EnumString)]
 #[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case", ascii_case_insensitive)]
 pub enum MessageEventRole {
   User,
   Assistant,
+  #[strum(default)]
   Custom(String),
 }
 
-impl FromStr for MessageEventRole {
-  type Err = std::convert::Infallible;
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use std::str::FromStr;
 
-  fn from_str(s: &str) -> Result<Self, Self::Err> {
-    match s.to_lowercase().as_str() {
-      "user" => Ok(MessageEventRole::User),
-      "assistant" => Ok(MessageEventRole::Assistant),
-      _ => Ok(MessageEventRole::Custom(s.to_string())),
-    }
+  #[test]
+  fn test_from_str() {
+    assert_eq!(
+      MessageEventRole::from_str("user").unwrap(),
+      MessageEventRole::User
+    );
+    assert_eq!(
+      MessageEventRole::from_str("assistant").unwrap(),
+      MessageEventRole::Assistant
+    );
+    assert_eq!(
+      MessageEventRole::from_str("system").unwrap(),
+      MessageEventRole::Custom("system".to_string())
+    );
   }
 }
