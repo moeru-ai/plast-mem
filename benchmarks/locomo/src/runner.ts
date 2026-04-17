@@ -47,7 +47,7 @@ import {
   renderStatsMarkdown,
 } from './stats'
 
-const SAMPLE_VARIANT_CONCURRENCY = 1
+const SAMPLE_VARIANT_CONCURRENCY = 3
 
 interface RunBenchmarkResult {
   manifest: RunManifest
@@ -285,7 +285,7 @@ const formatWaitLine = (
   formatSampleLine(
     sampleId,
     labelWidth,
-    `wait     pending=${status.messages_pending} fence=${renderFlag(status.fence_active)} seg=${status.segmentation_jobs_active} pc=${status.predict_calibrate_jobs_active} eof=${renderFlag(status.eof_seen)}`,
+    `wait     pending=${status.messages_pending} fence=${renderFlag(status.fence_active)} seg=${status.segmentation_jobs_active} pc=${status.predict_calibrate_jobs_active}`,
   )
 
 const formatEvaluateLine = (

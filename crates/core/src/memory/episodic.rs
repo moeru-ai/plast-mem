@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 use fsrs::{DEFAULT_PARAMETERS, FSRS, FSRS6_DEFAULT_DECAY, MemoryState};
-use plastmem_entities::episodic_memory;
+use plastmem_entities::{EpisodeClassification, episodic_memory};
 use plastmem_shared::{AppError, Message};
 
 use sea_orm::{
@@ -18,6 +18,7 @@ pub struct EpisodicMemory {
   pub messages: Vec<Message>,
   pub title: String,
   pub content: String,
+  pub classification: Option<EpisodeClassification>,
   /// Vector embedding (internal use, not exposed in API)
   #[serde(skip)]
   pub embedding: PgVector,
@@ -39,6 +40,7 @@ impl EpisodicMemory {
       messages: serde_json::from_value(model.messages)?,
       title: model.title,
       content: model.content,
+      classification: model.classification,
       embedding: model.embedding,
       stability: model.stability,
       difficulty: model.difficulty,
@@ -58,6 +60,7 @@ impl EpisodicMemory {
       messages: serde_json::to_value(self.messages.clone())?,
       title: self.title.clone(),
       content: self.content.clone(),
+      classification: self.classification.clone(),
       embedding: self.embedding.clone(),
       stability: self.stability,
       difficulty: self.difficulty,
@@ -113,6 +116,7 @@ impl EpisodicMemory {
       m.messages,
       m.title,
       m.content,
+      m.classification,
       m.embedding,
       m.stability,
       m.difficulty,

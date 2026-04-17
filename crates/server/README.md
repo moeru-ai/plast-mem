@@ -2,137 +2,45 @@
 
 HTTP API server for Plast Mem.
 
-## Overview
+## Endpoints
 
-Axum-based HTTP server providing REST API endpoints for:
+### Ingestion
 
-- Adding messages to conversations
-- Retrieving semantic facts and episodic memories
-- Pre-retrieval semantic context injection for system prompts
+- `POST /api/v0/add_message`
+- `POST /api/v0/import_batch_messages`
 
-Includes OpenAPI documentation served via Scalar UI.
+Both endpoints append messages and may enqueue `EventSegmentationJob` if core
+creates a fresh segmentation claim.
 
-## API Endpoints
+### Retrieval
 
-### POST /api/v0/add_message
+- `POST /api/v0/retrieve_memory`
+- `POST /api/v0/retrieve_memory/raw`
+- `POST /api/v0/context_pre_retrieve`
 
-Add a message to a conversation queue (triggers background segmentation):
+`retrieve_memory*` returns semantic and episodic results together.
+`context_pre_retrieve` returns semantic-only markdown and has no pending-review
+side effects.
 
-```json
-{
-  "conversation_id": "550e8400-e29b-41d4-a716-446655440001",
-  "message": {
-    "role": "user",
-    "content": "Hello, how are you?"
-  }
-}
-```
+### Recent episodic memory
 
-See [add_message.rs](src/api/add_message.rs) for implementation.
+- `POST /api/v0/recent_memory`
+- `POST /api/v0/recent_memory/raw`
 
-### POST /api/v0/retrieve_memory
+### Debug-only benchmark route
 
-Search memories with hybrid retrieval. Returns Markdown-formatted results optimized for LLM tool use. Records a pending FSRS review.
+- `GET /api/v0/benchmark/job_status`
 
-```json
-{
-  "query": "what did we discuss about Rust",
-  "conversation_id": "550e8400-e29b-41d4-a716-446655440001",
-  "episodic_limit": 5,
-  "semantic_limit": 20,
-  "detail": "auto",
-  "category": null
-}
-```
+This route is compiled only in debug builds.
 
-Response:
+## OpenAPI
 
-```markdown
-## Semantic Memory
-- [experience] User has been doing Python for 5 years (sources: 2 conversations)
-- [guideline] Assistant should use practical examples (sources: 1 conversation)
+- `/openapi.json`
+- `/openapi/`
 
-## Episodic Memories
+## Notes
 
-### Career switch to Rust [rank: 1, score: 0.92, key moment]
-**When:** 2 days ago
-**Summary:** User switching careers from Python to Rust...
-
-**Details:**
-- user: "I've been doing Python for 5 years..."
-```
-
-See [retrieve_memory.rs](src/api/retrieve_memory.rs) for implementation.
-
-### POST /api/v0/retrieve_memory/raw
-
-Same search, returns JSON with `{ "semantic": [...], "episodic": [...] }`. Records a pending FSRS review.
-
-### POST /api/v0/context_pre_retrieve
-
-Semantic-only retrieval for system prompt injection. Does **not** record a pending review.
-
-```json
-{
-  "query": "User is asking about career decisions",
-  "conversation_id": "550e8400-e29b-41d4-a716-446655440001",
-  "semantic_limit": 20,
-  "detail": "auto",
-  "category": null
-}
-```
-
-Returns Markdown of semantic facts only.
-
-### POST /api/v0/recent_memory
-
-Recent episodic memories, optionally filtered by recency. Returns Markdown.
-
-See [recent_memory.rs](src/api/recent_memory.rs) for implementation.
-
-### POST /api/v0/recent_memory/raw
-
-Recent episodic memories as JSON array.
-
-### Benchmark Endpoints
-
-`/api/v0/benchmark/flush` and `/api/v0/benchmark/job_status` are compiled only in development builds
-(`debug_assertions`). They are not available in release builds and are omitted from the release OpenAPI spec.
-
-## Running the Server
-
-```rust
-use plastmem_server::server;
-
-server(db, segment_job_storage).await?;
-```
-
-## OpenAPI Documentation
-
-Available at `/openapi/` when server is running:
-
-- Interactive docs (Scalar UI)
-- Raw spec at `/openapi.json`
-
-## Request Types
-
-Request/response types are defined in the API handler files:
-
-- [AddMessage](src/api/add_message.rs) - Message ingestion request
-- [RetrieveMemory](src/api/retrieve_memory.rs) - Memory retrieval request with `episodic_limit`, `semantic_limit`, `detail`, `category`
-- [ContextPreRetrieve](src/api/retrieve_memory.rs) - Semantic-only pre-retrieval request
-
-`DetailLevel` controls whether full message details are included in episodic results:
-
-- `None` - Never include details
-- `Low` - Only rank 1 with high surprise
-- `Auto` - Ranks 1-2 with surprise >= 0.7 (default)
-- `High` - Always include details
-
-## Architecture
-
-- `api/` - HTTP handlers and request/response types
-- `utils/` - Server utilities (AppState, shutdown handling)
-- `server.rs` - Axum server setup
-
-All endpoints return `Result<Json<T>, AppError>` with proper status codes.
+- The root route (`/`) returns a simple HTML page in release builds.
+- The Apalis board UI is mounted under `/board` in debug builds.
+- All business logic should stay in `plastmem_core`; handlers should only
+  validate inputs, call core, and enqueue jobs when needed.

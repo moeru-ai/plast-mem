@@ -1,14 +1,14 @@
-import type { AddMessage } from 'plastmem'
+import type { InputConversationMessages } from 'plastmem'
 
 import type { DialogTurn, LoCoMoSample } from './types'
 import type { ConversationStatus } from './wait'
 
 import { progress as createProgress, spinner as createSpinner, log } from '@clack/prompts'
 import { uuid } from '@insel-null/uuid'
-import { addMessage } from 'plastmem'
+import { importBatchMessages } from 'plastmem'
 
 import { runWithConcurrency } from './concurrency'
-import { flushConversationTailWhenReady, waitUntilConversationAdmissible } from './wait'
+import { waitForAll } from './wait'
 
 // Minutes between consecutive turns within a session
 const TURN_INTERVAL_MINS = 1
@@ -88,40 +88,19 @@ const parseSessionDate = (dateStr: string): Date | null => {
   return new Date(Date.UTC(Number.parseInt(yearStr, 10), monthIndex, Number.parseInt(dStr, 10), hours, mins))
 }
 
-interface AddMessageResult {
-  accepted: boolean
-  reason?: string
-}
-
-const isBackpressured = (value: unknown): value is AddMessageResult =>
-  typeof value === 'object'
-  && value !== null
-  && 'accepted' in value
-  && (value as { accepted: unknown }).accepted === false
-  && (!('reason' in value) || (value as { reason?: unknown }).reason === 'backpressure')
-
-const sendMessage = async (
+const importSampleMessages = async (
   baseUrl: string,
   conversationId: string,
-  message: BatchMessage,
-): Promise<boolean> => {
-  const res = await addMessage({
+  messages: BatchMessage[],
+): Promise<void> => {
+  await importBatchMessages({
     baseUrl,
     body: {
       conversation_id: conversationId,
-      message: message as unknown as AddMessage['message'],
+      messages: messages as unknown as InputConversationMessages['messages'],
     },
-    throwOnError: false,
+    throwOnError: true,
   })
-
-  if (res.response?.ok)
-    return true
-
-  if (res.response?.status === 429 && isBackpressured(res.error))
-    return false
-
-  const status = res.response?.status ?? 'network'
-  throw new Error(`addMessage failed with status ${status}`)
 }
 
 export const getOrderedSessions = (sample: LoCoMoSample): OrderedSession[] => {
@@ -182,21 +161,9 @@ const ingestSample = async (
 ): Promise<void> => {
   const messages = buildMessages(sample)
   const totalMessages = messages.length
-  let done = 0
-  observer?.onIngestProgress?.(sample.sample_id, conversationId, done, totalMessages)
-
-  for (const message of messages) {
-    while (true) {
-      const accepted = await sendMessage(baseUrl, conversationId, message)
-      if (accepted) {
-        done++
-        observer?.onIngestProgress?.(sample.sample_id, conversationId, done, totalMessages)
-        break
-      }
-
-      await waitUntilConversationAdmissible(baseUrl, conversationId)
-    }
-  }
+  observer?.onIngestProgress?.(sample.sample_id, conversationId, 0, totalMessages)
+  await importSampleMessages(baseUrl, conversationId, messages)
+  observer?.onIngestProgress?.(sample.sample_id, conversationId, totalMessages, totalMessages)
 }
 
 export const ingestAll = async (
@@ -245,9 +212,6 @@ export const ingestAll = async (
       progress.stop(`${getSampleLabel(sample.sample_id)} ingested ${totalMessages} messages`)
       const spinner = createSpinner()
       spinner.start(`${getSampleLabel(sample.sample_id)} waiting for background jobs`)
-      const flushed = await flushConversationTailWhenReady(baseUrl, conversationId)
-      if (flushed)
-        spinner.message(`${getSampleLabel(sample.sample_id)} flushed pending tail`)
       spinner.stop(`${getSampleLabel(sample.sample_id)} ready`)
     }
     else {

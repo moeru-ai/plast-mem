@@ -1,27 +1,83 @@
-# TypeScript Conventions (examples/ and benchmarks/)
+# TypeScript Conventions
 
-## ESLint Config (`@antfu/eslint-config` + `@moeru/eslint-config`)
+These conventions apply to `benchmarks/` and `examples/`.
 
-Key rules enforced — violating these causes lint errors:
+## Workspace assumptions
 
-- **`prefer-arrow/prefer-arrow-functions`**: No `function foo()` declarations. Always `const foo = () =>`
-- **`@masknet/no-top-level`**: No side-effect calls at module top level. Move into functions; use `// eslint-disable-next-line @masknet/no-top-level` for unavoidable entry-point invocations (e.g. `main().catch(...)`)
-- **`node/prefer-global/process`**: Always `import { ... } from 'node:process'` explicitly
-- **`ts/strict-boolean-expressions`**: No implicit boolean coercion. `if (!str)` on `string | undefined` → `if (str == null || str.length === 0)`; `if (num)` on `number` → `if (num != null && num > 0)`
-- **`ts/no-use-before-define` (variables: true)**: `const` arrow functions don't hoist. Define helpers before their callers
-- **`@masknet/prefer-timer-id`**: `setTimeout`/`setInterval` return values must be assigned: `const timer = setTimeout(...); void timer`
-- **`no-console`**: Only `console.warn`/`console.error` allowed in library code. Use `stdout.write(str + '\n')` for output
-- **`depend/ban-dependencies`**: `dotenv` is banned — use `loadEnvFile()` (Node.js v20.12+) inside a `try/catch`
-- **`perfectionist/sort-imports`** with `newlinesBetween: 1`: Import groups in order: `type` imports → `node:` builtins → external packages → local. One blank line between groups
+- package manager: `pnpm`
+- root workspace uses `catalog:` dependencies
+- do not use `npm install` inside this repo
 
-## TypeScript Config (`@moeru/tsconfig`)
+## TypeScript config
 
-- `moduleResolution: "bundler"` — required for importing workspace packages that export `.ts` source directly (like `plastmem`)
-- `allowImportingTsExtensions: true` + `noEmit: true` — bundler mode assumption; compilation via `tsx` at runtime
-- Import paths: **no `.js` extensions** (bundler mode resolves without them)
-- All new `tsconfig.json` files in `examples/` or `benchmarks/` should `extend: "@moeru/tsconfig"` and be added to the root `tsconfig.json` references
+Use `@moeru/tsconfig` as the base config:
 
-## AI / LLM
+```json
+{
+  "extends": "@moeru/tsconfig",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts"]
+}
+```
 
-- Use `@xsai/generate-text` (`generateText`) — not `openai` SDK directly. `openai` has a `zod@^3` peer dep conflict with workspace's zod v4
-- Env vars: `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_CHAT_MODEL`; read via `env` after `loadEnvFile()`
+Notes:
+
+- `moduleResolution: "bundler"` comes from the base config
+- workspace packages such as `plastmem` export `.ts` sources directly, so keep
+  bundler-style import resolution
+- if you create a new TS package, add its `tsconfig.json` to the root
+  `tsconfig.json` references
+
+## Lint rules that matter in practice
+
+The repo uses `eslint.config.js` with `@moeru/eslint-config`.
+
+Common constraints:
+
+- prefer arrow functions over named `function` declarations
+- no top-level side effects except the explicit entrypoint call
+- use `exit` from `node:process`, not `process.exit(...)`
+- `console.log` is rejected; use `stdout.write(...)` for CLI output
+- keep imports sorted
+- avoid implicit boolean coercion on nullable values
+
+## CLI entrypoint pattern
+
+Match the style already used in `benchmarks/locomo/src/cli.ts`:
+
+```ts
+import { exit, loadEnvFile } from 'node:process'
+
+const main = async (): Promise<void> => {
+  try {
+    loadEnvFile(...)
+  }
+  catch {}
+
+  // real work
+}
+
+// eslint-disable-next-line @masknet/no-top-level
+main().catch((error) => {
+  console.error(error)
+  exit(1)
+})
+```
+
+## Useful commands
+
+```bash
+pnpm exec eslint benchmarks/locomo/src/export-memories.ts
+pnpm -F @plastmem/benchmark-locomo exec tsc --noEmit
+pnpm -F @plastmem/haru exec tsc --noEmit
+```
+
+## Current packages
+
+- `benchmarks/locomo`
+- `benchmarks/longmemeval`
+- `examples/haru`
+- `packages/plastmem`

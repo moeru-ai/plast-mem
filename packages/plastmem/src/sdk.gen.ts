@@ -2,7 +2,7 @@
 
 import type { Client, Options as Options2, TDataShape } from './client';
 import { client } from './client.gen';
-import type { AddMessageData, AddMessageErrors, AddMessageResponses, BenchmarkFlushData, BenchmarkFlushErrors, BenchmarkFlushResponses, BenchmarkJobStatusData, BenchmarkJobStatusErrors, BenchmarkJobStatusResponses, ContextPreRetrieveData, ContextPreRetrieveErrors, ContextPreRetrieveResponses, RecentMemoryData, RecentMemoryRawData, RecentMemoryRawResponses, RecentMemoryResponses, RetrieveMemoryData, RetrieveMemoryErrors, RetrieveMemoryRawData, RetrieveMemoryRawErrors, RetrieveMemoryRawResponses, RetrieveMemoryResponses } from './types.gen';
+import type { AddMessageData, AddMessageErrors, AddMessageResponses, BenchmarkJobStatusData, BenchmarkJobStatusErrors, BenchmarkJobStatusResponses, ContextPreRetrieveData, ContextPreRetrieveErrors, ContextPreRetrieveResponses, ImportBatchMessagesData, ImportBatchMessagesErrors, ImportBatchMessagesResponses, RecentMemoryData, RecentMemoryRawData, RecentMemoryRawResponses, RecentMemoryResponses, RetrieveMemoryData, RetrieveMemoryErrors, RetrieveMemoryRawData, RetrieveMemoryRawErrors, RetrieveMemoryRawResponses, RetrieveMemoryResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -18,20 +18,8 @@ export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends 
     meta?: Record<string, unknown>;
 };
 
-/**
- * Legacy append alias that now routes into the v2 ingestion path.
- */
 export const addMessage = <ThrowOnError extends boolean = false>(options: Options<AddMessageData, ThrowOnError>) => (options.client ?? client).post<AddMessageResponses, AddMessageErrors, ThrowOnError>({
     url: '/api/v0/add_message',
-    ...options,
-    headers: {
-        'Content-Type': 'application/json',
-        ...options.headers
-    }
-});
-
-export const benchmarkFlush = <ThrowOnError extends boolean = false>(options: Options<BenchmarkFlushData, ThrowOnError>) => (options.client ?? client).post<BenchmarkFlushResponses, BenchmarkFlushErrors, ThrowOnError>({
-    url: '/api/v0/benchmark/flush',
     ...options,
     headers: {
         'Content-Type': 'application/json',
@@ -54,6 +42,15 @@ export const benchmarkJobStatus = <ThrowOnError extends boolean = false>(options
  */
 export const contextPreRetrieve = <ThrowOnError extends boolean = false>(options: Options<ContextPreRetrieveData, ThrowOnError>) => (options.client ?? client).post<ContextPreRetrieveResponses, ContextPreRetrieveErrors, ThrowOnError>({
     url: '/api/v0/context_pre_retrieve',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+export const importBatchMessages = <ThrowOnError extends boolean = false>(options: Options<ImportBatchMessagesData, ThrowOnError>) => (options.client ?? client).post<ImportBatchMessagesResponses, ImportBatchMessagesErrors, ThrowOnError>({
+    url: '/api/v0/import_batch_messages',
     ...options,
     headers: {
         'Content-Type': 'application/json',

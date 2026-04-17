@@ -2,6 +2,8 @@
 
 use sea_orm::entity::prelude::*;
 
+use crate::EpisodeClassification;
+
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
 #[sea_orm(table_name = "episodic_memory")]
 pub struct Model {
@@ -21,6 +23,7 @@ pub struct Model {
   pub difficulty: f32,
   #[sea_orm(column_type = "Float")]
   pub surprise: f32,
+  pub classification: Option<EpisodeClassification>,
   pub start_at: DateTimeWithTimeZone,
   pub end_at: DateTimeWithTimeZone,
   pub created_at: DateTimeWithTimeZone,

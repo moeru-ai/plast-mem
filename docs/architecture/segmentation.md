@@ -1,121 +1,129 @@
-# Event Segmentation
+# Segmentation
 
-Plast Mem implements a **batch event segmentation** system aligned with **Event Segmentation Theory (EST)**. The dual-channel boundary detection design (topic shift + surprise) is inspired by [HiMem](https://arxiv.org/abs/2601.06377).
+Current segmentation is a stateful worker pipeline built on:
 
-The system accumulates messages in a per-conversation queue and periodically runs a single LLM call to segment the batch into coherent episodes.
+- `conversation_message`
+- `segmentation_state`
+- `episode_span`
+- `plastmem_event_segmentation::batch_segmentation`
 
-## Architecture
+It no longer uses the old `message_queue` table or the old single-call batch
+segmenter.
 
-```text
-New Message → MessageQueue::push()
-                    ↓
-             RETURNING jsonb_array_length(messages) → trigger_count
-                    ↓
-             MessageQueue::check(trigger_count)
-                    ↓ (count trigger OR time trigger OR force trigger at max)
-             try_set_fence (CAS) → EventSegmentationJob enqueued
-                    ↓
-             batch_segment(messages[0..fence_count])  ← single LLM call
-                    ↓
-        ┌───────────┴─────────────────┐
-        │ 1 segment, not forced       │  → defer, clear fence (wait for more)
-        │ 1 segment, forced (at max)  │  → drain + finalize, create 1 episode
-        │ N segments                  │  → drain N-1, finalize, create N-1 episodes in parallel
-        └─────────────────────────────┘
-```
-
-## Trigger Conditions
-
-**Code**: `crates/core/src/message_queue.rs` (MessageQueue::check)
-
-A segmentation job is triggered when **either** condition is met:
-
-| Condition | Threshold |
-| --------- | --------- |
-| Count trigger | `trigger_count >= WINDOW_BASE` (20) |
-| Force trigger | `trigger_count >= WINDOW_MAX` (40) — always process |
-| Time trigger | Oldest message in queue is > 2 hours old |
-| Minimum floor | Always skip if `trigger_count < MIN_MESSAGES` (5) |
-
-### Fence Mechanism (TOCTOU prevention)
-
-`push()` uses `RETURNING jsonb_array_length(messages)` to capture the exact post-push message count. This `trigger_count` is passed directly to `check()` and then to `try_set_fence()`, so the fence boundary is pinned to the triggering message's position — not a re-read that could include later arrivals.
-
-`try_set_fence()` is a CAS operation:
-
-```sql
-UPDATE message_queue
-SET in_progress_fence = $2, in_progress_since = NOW()
-WHERE id = $1 AND in_progress_fence IS NULL
-RETURNING id
-```
-
-Only one concurrent caller wins; others get 0 rows and bail out.
-
-Stale fences (> 120 minutes) are cleared automatically before trigger evaluation.
-
-## Batch Segmentation (LLM)
-
-**Code**: `crates/worker/src/jobs/event_segmentation.rs` (batch_segment function)
-
-A single LLM call (`batch_segment`) receives all messages in the window and returns a list of segments. Each segment includes:
-
-- `start_message_index` / `end_message_index` / `num_messages` — slice boundaries
-- `title` — 5–15 word theme description
-- `content` — detailed third-person episodic narrative
-- `surprise_level` — `low` | `high` | `extremely_high`
-
-### Boundary Criteria (OR relationship)
-
-1. **Topic shift** — subject, activity, or intent changes; discourse markers ("by the way", "换个话题") and intent reversals (chatting→deciding) count
-2. **Surprise** — emotional reversal, domain jump, tone change, or notable time gap
-
-### Surprise Level → FSRS Signal
-
-| Level | Signal |
-| ----- | ------ |
-| `low` | 0.2 |
-| `high` | 0.6 |
-| `extremely_high` | 0.9 |
-
-Surprise signal feeds into FSRS stability boost on episode creation:
-
-```rust
-boosted_stability = initial_stability * (1.0 + surprise * SURPRISE_BOOST_FACTOR)
-```
-
-`extremely_high` (≥ 0.85) also triggers immediate semantic consolidation (flashbulb memory path).
-
-## Max Window (Force Processing)
-
-When the queue reaches `WINDOW_MAX` (40 messages), segmentation is forced regardless of whether the LLM detects a boundary:
-
-- **Before max**: If LLM returns 1 segment, job defers and waits for more messages
-- **At max**: Always process all messages, creating at least 1 episode
-
-This prevents unbounded queue growth while maintaining quality for most cases.
-
-## Drain Order (crash safety)
-
-To prevent duplicate episodes on job retry, the drain order is:
+## Flow
 
 ```text
-drain + finalize_job  ←── committed first (fence released)
-enqueue_pending_reviews
-create episodes in parallel  ←── if crash here, messages already gone (acceptable loss)
-enqueue semantic consolidation
+append_message / append_batch_messages
+  -> update segmentation_state
+  -> try_claim_segmentation_job
+  -> enqueue EventSegmentationJob
+
+EventSegmentationJob
+  -> validate active claim
+  -> load claimed messages
+  -> temporal_rule_segmenter
+  -> primitive_review_llm_segmenter
+  -> temporal_boundary_review_llm_segmenter
+  -> build_commit_plan
+  -> commit_segmentation_job
+  -> enqueue EpisodeCreationJob for finalized spans
+  -> optionally enqueue MemoryReviewJob
+  -> optionally enqueue follow-up EventSegmentationJob
 ```
 
-## Edge Message
+## State model
 
-The **last segment** from a multi-segment result is never drained — it stays in the queue as the start of the next event context. Only `segments[0..N-1]` are drained and converted to episodes.
+`segmentation_state` tracks:
 
-## Code Locations
+- `last_message_seq`
+- `eof_identified`
+- `next_segment_start_seq`
+- current active claim:
+  - `active_segment_start_seq`
+  - `active_segment_end_seq`
+  - `active_since`
 
-| Component | Location |
-| --------- | -------- |
-| Trigger check + fence | `crates/core/src/message_queue.rs` (check, try_set_fence) |
-| Batch LLM segmentation | `crates/worker/src/jobs/event_segmentation.rs` (batch_segment) |
-| Queue push + drain | `crates/core/src/message_queue.rs` (push, drain) |
-| Job dispatch | `crates/worker/src/jobs/event_segmentation.rs` (process_event_segmentation) |
-| Episode creation | `crates/worker/src/jobs/event_segmentation.rs` (create_episode) |
+Core owns claim creation, stale recovery, commit, and abort.
+
+Worker still re-validates the claim before running, because an already-enqueued
+job may be stale by the time it is consumed.
+
+## Active policy stages
+
+### 1. Temporal rule segmentation
+
+Code:
+
+- `crates/event_segmentation/src/batch_segmentation.rs`
+
+Behavior:
+
+- gap >= 30 minutes -> soft boundary candidate
+- gap > 3 hours -> hard boundary candidate
+
+This produces `RuleSegOutput` and bucket ranges.
+
+### 2. Primitive review
+
+For each bucket:
+
+- if bucket length <= 4 messages: run classification LLM and decide
+  `low_info` vs `informative`
+- if bucket length <= 20 messages and > 4: keep as one informative segment
+- if bucket length > 20: run split LLM, then classify small child segments
+
+Outputs:
+
+- `ReviewedSegment`
+- `ReviewedBoundary`
+
+### 3. Informative boundary review
+
+The pipeline then merges adjacent informative segments across `RuleSoft`
+boundaries while the group stays below the second-stage threshold.
+
+- group length threshold: 30 messages
+- only soft boundaries are eligible
+- hard boundaries stay locked
+
+Eligible groups are passed to constrained resegmentation.
+
+## Segment classes
+
+Current final classification is binary:
+
+- `low_info`
+- `informative`
+
+Worker maps this to `EpisodeClassification` before writing `episode_span`.
+
+## Commit semantics
+
+`build_commit_plan` runs in the worker pipeline.
+
+Rules:
+
+- if `eof_identified = true`: finalize all reviewed segments
+- if not EOF and there is only one reviewed segment: finalize nothing, carry it
+  forward
+- if not EOF and there are multiple reviewed segments: finalize all except the
+  last one, and carry the last segment forward
+
+This keeps the latest unresolved conversational tail available for future
+messages.
+
+## Side effects after commit
+
+After `commit_segmentation_job`:
+
+- finalized spans become `EpisodeCreationJob`s
+- pending review items may become one `MemoryReviewJob`
+- if more unsegmented work is now claimable, a new `EventSegmentationJob` is
+  enqueued
+
+## Current code split
+
+- policy: `crates/event_segmentation/src/batch_segmentation.rs`
+- runtime orchestration: `crates/worker/src/jobs/event_segmentation.rs`
+- claim and commit state: `crates/core/src/message_ingest.rs`,
+  `crates/core/src/segmentation_state.rs`

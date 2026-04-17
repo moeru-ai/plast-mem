@@ -6,7 +6,7 @@ use axum::{
   response::{IntoResponse, Response},
 };
 use chrono::{DateTime, Utc};
-use plastmem_core::{ADD_BACKPRESSURE_LIMIT, FENCE_TTL_MINUTES, MessageQueue};
+use plastmem_core::{append_batch_messages, append_message};
 use plastmem_shared::{AppError, Message, MessageRole};
 use plastmem_worker::EventSegmentationJob;
 use serde::{Deserialize, Serialize};
@@ -15,14 +15,9 @@ use uuid::Uuid;
 
 use crate::utils::AppState;
 
+// Input message type with timestamp optional
 #[derive(Debug, Deserialize, ToSchema)]
-pub struct AddMessage {
-  pub conversation_id: Uuid,
-  pub message: AddMessageMessage,
-}
-
-#[derive(Debug, Deserialize, ToSchema)]
-pub struct AddMessageMessage {
+pub struct InputMessage {
   pub role: MessageRole,
   pub content: String,
   #[serde(
@@ -33,37 +28,38 @@ pub struct AddMessageMessage {
   pub timestamp: Option<DateTime<Utc>>,
 }
 
+// Input message type with conversation ID
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct InputConversationMessage {
+  pub conversation_id: Uuid,
+  pub message: InputMessage,
+}
+
+// Input batch messages type with conversation ID
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct InputConversationMessages {
+  pub conversation_id: Uuid,
+  pub messages: Vec<InputMessage>,
+}
+
 #[derive(Debug, Serialize, ToSchema)]
-pub struct AddMessageResult {
+pub struct IngestMessageResult {
   pub accepted: bool,
-  #[serde(skip_serializing_if = "Option::is_none")]
-  pub reason: Option<String>,
 }
 
-impl AddMessageResult {
+impl IngestMessageResult {
   const fn accepted() -> Self {
-    Self {
-      accepted: true,
-      reason: None,
-    }
-  }
-
-  fn backpressure() -> Self {
-    Self {
-      accepted: false,
-      reason: Some("backpressure".to_owned()),
-    }
+    Self { accepted: true }
   }
 }
 
-/// Add a message to a conversation
+// Add a message of a conversation
 #[utoipa::path(
   post,
   path = "/api/v0/add_message",
-  request_body = AddMessage,
+  request_body = InputConversationMessage,
   responses(
-    (status = 200, description = "Message accepted", body = AddMessageResult),
-    (status = 429, description = "Backpressured - message not accepted", body = AddMessageResult),
+    (status = 200, description = "Message accepted", body = IngestMessageResult),
     (status = 400, description = "Invalid request - message content cannot be empty")
   )
 )]
@@ -71,22 +67,12 @@ impl AddMessageResult {
 #[tracing::instrument(skip(state), fields(conversation_id = %payload.conversation_id))]
 pub async fn add_message(
   State(state): State<AppState>,
-  Json(payload): Json<AddMessage>,
+  Json(payload): Json<InputConversationMessage>,
 ) -> Result<Response, AppError> {
   if payload.message.content.is_empty() {
     return Err(AppError::new(anyhow::anyhow!(
       "Message content cannot be empty"
     )));
-  }
-
-  if is_backpressured(payload.conversation_id, &state.db).await? {
-    return Ok(
-      (
-        StatusCode::TOO_MANY_REQUESTS,
-        Json(AddMessageResult::backpressure()),
-      )
-        .into_response(),
-    );
   }
 
   let timestamp = payload.message.timestamp.unwrap_or_else(Utc::now);
@@ -97,32 +83,58 @@ pub async fn add_message(
     timestamp,
   };
 
-  if let Some(check) = MessageQueue::push(payload.conversation_id, message, &state.db).await? {
+  if let Some(claim) = append_message(payload.conversation_id, message, false, &state.db).await? {
     let mut job_storage = state.segmentation_job_storage.clone();
     job_storage
-      .push(EventSegmentationJob {
-        conversation_id: payload.conversation_id,
-        fence_count: check.fence_count,
-        force_process: check.force_process,
-        keep_tail_segment: true,
-      })
+      .push(EventSegmentationJob::from_claim(claim))
       .await?;
   }
 
-  Ok((StatusCode::OK, Json(AddMessageResult::accepted())).into_response())
+  Ok((StatusCode::OK, Json(IngestMessageResult::accepted())).into_response())
 }
 
-async fn is_backpressured(
-  conversation_id: Uuid,
-  db: &sea_orm::DatabaseConnection,
-) -> Result<bool, AppError> {
-  let mut status = MessageQueue::get_processing_status(conversation_id, db).await?;
-
-  if status.fence_active
-    && MessageQueue::clear_stale_fence(conversation_id, FENCE_TTL_MINUTES, db).await?
+// Add a batch of messages to a conversation
+#[utoipa::path(
+  post,
+  path = "/api/v0/import_batch_messages",
+  request_body = InputConversationMessages,
+  responses(
+    (status = 200, description = "Batch import accepted", body = IngestMessageResult),
+    (status = 400, description = "Invalid request - one or more messages are empty")
+  )
+)]
+#[axum::debug_handler]
+#[tracing::instrument(skip(state), fields(conversation_id = %payload.conversation_id, message_count = payload.messages.len()))]
+pub async fn import_batch_messages(
+  State(state): State<AppState>,
+  Json(payload): Json<InputConversationMessages>,
+) -> Result<Response, AppError> {
+  if payload
+    .messages
+    .iter()
+    .any(|message| message.content.is_empty())
   {
-    status = MessageQueue::get_processing_status(conversation_id, db).await?;
+    return Err(AppError::new(anyhow::anyhow!(
+      "Message content cannot be empty"
+    )));
   }
 
-  Ok(status.fence_active && status.messages_pending >= ADD_BACKPRESSURE_LIMIT)
+  let messages = payload
+    .messages
+    .into_iter()
+    .map(|message| Message {
+      role: message.role,
+      content: message.content,
+      timestamp: message.timestamp.unwrap_or_else(Utc::now),
+    })
+    .collect::<Vec<_>>();
+
+  if let Some(claim) = append_batch_messages(payload.conversation_id, &messages, &state.db).await? {
+    let mut job_storage = state.segmentation_job_storage.clone();
+    job_storage
+      .push(EventSegmentationJob::from_claim(claim))
+      .await?;
+  }
+
+  Ok((StatusCode::OK, Json(IngestMessageResult::accepted())).into_response())
 }

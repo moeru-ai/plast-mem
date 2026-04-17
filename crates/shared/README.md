@@ -1,48 +1,37 @@
 # plastmem_shared
 
-Shared types and utilities used across all crates.
+Minimal shared types used across the workspace.
 
-## Overview
+## Main exports
 
-This crate contains definitions that need to be shared between the core domain logic,
-server API, worker jobs, and AI processing. Keeping these in a separate crate prevents
-circular dependencies.
+### `Message` and `MessageRole`
 
-## Key Types
+Conversation payload used by:
 
-### [Message](src/message.rs)
+- server ingestion APIs
+- worker jobs
+- episodic storage
+- review context
 
-The fundamental unit of conversation with `role`, `content`, and `timestamp`.
+### `AppError`
 
-### [AppError](src/error.rs)
+Shared error boundary used across Rust crates.
 
-Application-wide error type with HTTP status code support:
+### `APP_ENV`
 
-```rust
-// Create a 500 error
-let err = AppError::new("something went wrong");
+Process-wide environment snapshot with:
 
-// Create with custom status
-let err = AppError::with_status(StatusCode::BAD_REQUEST, "invalid input");
-```
+- `database_url`
+- `openai_base_url`
+- `openai_api_key`
+- `openai_chat_model`
+- `openai_chat_seed`
+- `openai_embedding_model`
+- `openai_request_timeout_seconds`
+- `enable_fsrs_review`
+- `predict_calibrate_concurrency`
 
-### [AppEnv](src/env.rs)
+## Goal
 
-Global application configuration via `APP_ENV`:
-
-```rust
-let database_url = &APP_ENV.database_url;
-let openai_api_key = &APP_ENV.openai_api_key;
-```
-
-## Modules
-
-- `error` - `AppError` definition
-- `env` - Environment configuration (`AppEnv`, `APP_ENV`)
-- `fsrs` - FSRS retrievability calculation utilities
-- `message` - `Message` and `MessageRole` types
-
-## Dependencies
-
-This crate intentionally has minimal dependencies to maximize reusability.
-Key dependencies: `serde`, `chrono`, `axum` (for error response integration).
+Keep this crate dependency-light so it can stay at the bottom of the workspace
+dependency graph.

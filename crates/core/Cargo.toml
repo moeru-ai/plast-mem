@@ -30,3 +30,7 @@ schemars.workspace = true
 tracing = "0.1"
 uuid.workspace = true
 utoipa.workspace = true
+
+[dev-dependencies]
+plastmem_migration.workspace = true
+tokio.workspace = true

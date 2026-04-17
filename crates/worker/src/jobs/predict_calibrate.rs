@@ -65,8 +65,15 @@ Extract only high-value, durable semantic facts that should become active semant
 5. Do not rewrite stable speaker labels into `User` or `Assistant` unless the source only uses those labels.
 6. Skip temporary reactions, acknowledgements, and low-value contextual chatter.
 7. Use present tense for persistent facts.
-8. For `target_fact_id`, use an empty string in cold start mode.
-9. For `confidence`, use a number between 0 and 1.
+8. When the episode contains grounded time anchors (parenthetical dates like \"(October 20, 2022)\"), \
+preserve both the original time expression AND the grounded anchor in the fact.
+   - GOOD: fact='James won an online gaming tournament last week (July 3-4, 2022)'
+   - GOOD: fact='John is starting his dream job next month (July 2022)'
+   - BAD:  fact='James won an online gaming tournament last week'  (missing anchor)
+   - BAD:  fact='James won an online gaming tournament (July 3-4, 2022)'  (dropped original expression)
+   - If no grounded anchor exists in the episode for a time expression, keep the original expression as-is.
+9. For `target_fact_id`, use an empty string in cold start mode.
+10. For `confidence`, use a number between 0 and 1.
 
 ## Action semantics
 - `new`: create a new active fact
@@ -132,6 +139,12 @@ Decide how semantic memory should change after seeing where the prediction was w
 - Keep specific supported details instead of broadening them into a more generic summary.
 - Skip temporary reactions, acknowledgements, vague statements, and context-dependent chatter.
 - Prefer a small set of precise facts, but if the episode supports multiple distinct durable facts, keep them separate.
+- When the episode contains grounded time anchors (parenthetical dates like \"(October 20, 2022)\"), \
+preserve both the original time expression AND the grounded anchor in the fact.
+  - GOOD: fact='James won an online gaming tournament last week (July 3-4, 2022)'
+  - BAD:  fact='James won an online gaming tournament last week'  (missing anchor)
+  - BAD:  fact='James won an online gaming tournament (July 3-4, 2022)'  (dropped original expression)
+  - If no grounded anchor exists in the episode for a time expression, keep the original expression as-is.
 
 ## Update guidance
 - Use `update` for contradiction or material refinement, such as location changes, relationship changes, job changes, or replacing a vague fact with a more precise durable fact.

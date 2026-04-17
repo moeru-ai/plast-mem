@@ -1,38 +1,66 @@
 # plastmem_entities
 
-Sea-ORM entities for database tables.
+SeaORM entities for the active Plast Mem schema.
 
-## Overview
+## Tables
 
-This crate contains the database schema definitions as Sea-ORM entities.
-Entities are manually maintained alongside migrations in the `migration` crate.
+### `conversation_message`
 
-## Entities
+Primary key: `(conversation_id, seq)`
 
-### [episodic_memory](src/episodic_memory.rs)
+Stores the canonical ordered message stream for each conversation.
 
-Stores episodic memories with FSRS parameters (stability, difficulty) for spaced repetition scheduling.
+### `segmentation_state`
 
-Key fields: `id`, `conversation_id`, `messages`, `title`, `summary`, `embedding`, `stability`, `difficulty`, `surprise`, `start_at`, `end_at`, `consolidated_at`.
+Primary key: `conversation_id`
 
-### [semantic_memory](src/semantic_memory.rs)
+Tracks:
 
-Stores categorized long-term facts with temporal validity tracking.
+- `last_message_seq`
+- `eof_identified`
+- `next_segment_start_seq`
+- active claim fields (`active_segment_start_seq`, `active_segment_end_seq`, `active_since`)
 
-Key fields: `id`, `conversation_id`, `category`, `fact`, `source_episodic_ids`, `valid_at`, `invalid_at`, `embedding`.
+### `episode_span`
 
-### [message_queue](src/message_queue.rs)
+Primary key: `(conversation_id, start_seq)`
 
-Per-conversation message buffer and segmentation state.
+Stores committed segment ranges and `EpisodeClassification`.
 
-Key fields: `id`, `messages`, `pending_reviews`, `in_progress_fence`, `in_progress_since`, `prev_episode_summary`.
+### `pending_review_queue`
 
-## Updating Entities
+Primary key: `id`
 
-After schema changes, update the entity files manually to match the migration:
+Stores retrieval-time pending review work items.
 
-1. Apply the migration (`cargo run` will auto-migrate on startup)
-2. Edit `crates/entities/src/<table>.rs` to add/remove fields
-3. Run `cargo check -p plastmem_entities` to verify
+### `episodic_memory`
 
-The `sea-orm-cli generate entity` command can be used as a starting point but will overwrite manual customizations (like `PgVector` types), so prefer manual edits.
+Primary key: `id`
+
+Stores:
+
+- source `messages`
+- rendered `content`
+- `title`
+- `embedding`
+- FSRS fields (`stability`, `difficulty`, `last_reviewed_at`)
+- `surprise`
+- optional `classification`
+- `consolidated_at`
+
+### `semantic_memory`
+
+Primary key: `id`
+
+Stores:
+
+- `category`
+- `fact`
+- `source_episodic_ids`
+- `valid_at` / `invalid_at`
+- `embedding`
+
+## Notes
+
+- `EpisodeClassification` is defined in `episode_classification.rs`.
+- Entities are maintained manually alongside `crates/migration`.

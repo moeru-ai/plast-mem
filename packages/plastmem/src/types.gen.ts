@@ -4,36 +4,10 @@ export type ClientOptions = {
     baseUrl: 'http://localhost:3000' | (string & {});
 };
 
-export type AddMessage = {
-    conversation_id: string;
-    message: AddMessageMessage;
-};
-
-export type AddMessageMessage = {
-    content: string;
-    role: MessageRole;
-    timestamp?: string | null;
-};
-
-export type AddMessageResult = {
-    accepted: boolean;
-    reason?: string | null;
-};
-
-export type BenchmarkFlush = {
-    conversation_id: string;
-};
-
-export type BenchmarkFlushResult = {
-    enqueued: boolean;
-    reason: string;
-};
-
 export type BenchmarkJobStatus = {
-    admissible_for_add: boolean;
     done: boolean;
+    episode_creation_jobs_active: number;
     fence_active: boolean;
-    flushable: boolean;
     messages_pending: number;
     predict_calibrate_jobs_active: number;
     segmentation_jobs_active: number;
@@ -53,18 +27,19 @@ export type ContextPreRetrieve = {
 
 export type DetailLevel = 'auto' | 'none' | 'low' | 'high';
 
+export type EpisodeClassification = 'low_info' | 'informative';
+
 export type EpisodicMemory = {
+    classification?: null | EpisodeClassification;
     consolidated_at?: string | null;
     content: string;
     conversation_id: string;
     created_at: string;
-    derivation_status: string;
     difficulty: number;
     end_at: string;
     id: string;
     last_reviewed_at: string;
     messages: Array<Message>;
-    source_span_id?: string | null;
     stability: number;
     start_at: string;
     surprise: number;
@@ -76,6 +51,26 @@ export type EpisodicMemoryResult = EpisodicMemory & {
      * Final score (RRF score × FSRS retrievability)
      */
     score: number;
+};
+
+export type IngestMessageResult = {
+    accepted: boolean;
+};
+
+export type InputConversationMessage = {
+    conversation_id: string;
+    message: InputMessage;
+};
+
+export type InputConversationMessages = {
+    conversation_id: string;
+    messages: Array<InputMessage>;
+};
+
+export type InputMessage = {
+    content: string;
+    role: MessageRole;
+    timestamp?: string | null;
 };
 
 export type Message = {
@@ -162,7 +157,7 @@ export type SemanticMemoryResult = SemanticMemory & {
 };
 
 export type AddMessageData = {
-    body: AddMessage;
+    body: InputConversationMessage;
     path?: never;
     query?: never;
     url: '/api/v0/add_message';
@@ -173,45 +168,16 @@ export type AddMessageErrors = {
      * Invalid request - message content cannot be empty
      */
     400: unknown;
-    /**
-     * Backpressured - message not accepted
-     */
-    429: AddMessageResult;
 };
-
-export type AddMessageError = AddMessageErrors[keyof AddMessageErrors];
 
 export type AddMessageResponses = {
     /**
      * Message accepted
      */
-    200: AddMessageResult;
+    200: IngestMessageResult;
 };
 
 export type AddMessageResponse = AddMessageResponses[keyof AddMessageResponses];
-
-export type BenchmarkFlushData = {
-    body: BenchmarkFlush;
-    path?: never;
-    query?: never;
-    url: '/api/v0/benchmark/flush';
-};
-
-export type BenchmarkFlushErrors = {
-    /**
-     * Invalid request
-     */
-    400: unknown;
-};
-
-export type BenchmarkFlushResponses = {
-    /**
-     * Flush result
-     */
-    200: BenchmarkFlushResult;
-};
-
-export type BenchmarkFlushResponse = BenchmarkFlushResponses[keyof BenchmarkFlushResponses];
 
 export type BenchmarkJobStatusData = {
     body?: never;
@@ -263,6 +229,29 @@ export type ContextPreRetrieveResponses = {
 };
 
 export type ContextPreRetrieveResponse = ContextPreRetrieveResponses[keyof ContextPreRetrieveResponses];
+
+export type ImportBatchMessagesData = {
+    body: InputConversationMessages;
+    path?: never;
+    query?: never;
+    url: '/api/v0/import_batch_messages';
+};
+
+export type ImportBatchMessagesErrors = {
+    /**
+     * Invalid request - one or more messages are empty
+     */
+    400: unknown;
+};
+
+export type ImportBatchMessagesResponses = {
+    /**
+     * Batch import accepted
+     */
+    200: IngestMessageResult;
+};
+
+export type ImportBatchMessagesResponse = ImportBatchMessagesResponses[keyof ImportBatchMessagesResponses];
 
 export type RecentMemoryData = {
     body: RecentMemory;

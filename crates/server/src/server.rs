@@ -7,11 +7,13 @@ use apalis_board_api::{
 use apalis_postgres::PostgresStorage;
 #[cfg(not(debug_assertions))]
 use axum::response::Html;
-use axum::{Router, routing::get};
 #[cfg(debug_assertions)]
 use axum::{Extension, response::Redirect};
+use axum::{Router, routing::get};
 use plastmem_shared::AppError;
-use plastmem_worker::{EventSegmentationJob, MemoryReviewJob, PredictCalibrateJob};
+use plastmem_worker::{
+  EpisodeCreationJob, EventSegmentationJob, MemoryReviewJob, PredictCalibrateJob,
+};
 use sea_orm::DatabaseConnection;
 #[cfg(debug_assertions)]
 use std::sync::{Arc, Mutex};
@@ -32,6 +34,7 @@ async fn handler() -> Html<&'static str> {
 pub async fn server(
   db: DatabaseConnection,
   segment_job_storage: PostgresStorage<EventSegmentationJob>,
+  episode_creation_job_storage: PostgresStorage<EpisodeCreationJob>,
   review_job_storage: PostgresStorage<MemoryReviewJob>,
   predict_calibrate_job_storage: PostgresStorage<PredictCalibrateJob>,
   #[cfg(debug_assertions)] board_broadcaster: Arc<Mutex<TracingBroadcaster>>,
@@ -39,6 +42,7 @@ pub async fn server(
   let app_state = AppState::new(
     db,
     segment_job_storage,
+    episode_creation_job_storage,
     review_job_storage,
     predict_calibrate_job_storage,
   );
@@ -72,6 +76,7 @@ fn board_app(
 ) -> Router<AppState> {
   let board_api = ApiBuilder::new(Router::new())
     .register(app_state.segmentation_job_storage.clone())
+    .register(app_state.episode_creation_job_storage.clone())
     .register(app_state.review_job_storage.clone())
     .register(app_state.predict_calibrate_job_storage.clone())
     .build();

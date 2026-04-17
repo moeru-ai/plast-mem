@@ -1,200 +1,109 @@
 # Episodic Memory
 
-Episodic memory stores conversation segments as discrete events, representing "what happened" in specific contexts. It is the primary memory type for contextual retrieval.
+`episodic_memory` stores committed conversation episodes plus the FSRS state
+used for retrieval reranking.
 
-## Overview
+## Inputs
 
-Unlike semantic memory (facts) or procedural memory (skills), episodic memory captures concrete experiences with temporal boundaries—conversations, interactions, and events that occurred at specific times.
+Episodes are not created directly from message ingestion. The path is:
 
+```text
+conversation_message
+  -> segmentation pipeline
+  -> episode_span
+  -> EpisodeCreationJob
+  -> episodic_memory
 ```
-Conversation Messages → Event Segmentation → EpisodicMemory (with FSRS state)
-                              ↓
-                        Surprise Detection
-                              ↓
-                   Stability Boost (1.0 + surprise × 0.5)
-                              ↓
-                   (real-time per episode) → PredictCalibrate
-```
+
+`episode_span` is the committed range artifact. `EpisodeCreationJob` turns that
+range into a stored episode record.
 
 ## Schema
 
-- **Core struct**: `crates/core/src/memory/episodic.rs`
-- **Episode creation**: `crates/worker/src/jobs/event_segmentation.rs`
-- **Database entity**: `crates/entities/src/episodic_memory.rs`
+Entity:
 
-### Field Semantics
+- `crates/entities/src/episodic_memory.rs`
 
-| Field | Purpose | Mutable |
-|-------|---------|---------|
-| `id` | Primary key | No |
-| `conversation_id` | Grouping key for multi-conversation isolation | No |
-| `messages` | Source conversation (preserved for detail views) | No |
-| `title` | Short episode title (5-15 words, LLM-generated) | No |
-| `content` | Searchable dated observation log (LLM-generated) | No |
-| `embedding` | Vector of `title + content` for semantic search | No |
-| `stability` | FSRS decay parameter | Yes (reviews update) |
-| `difficulty` | FSRS difficulty parameter | Yes (reviews update) |
-| `surprise` | Creation-time significance score | No |
-| `start_at` / `end_at` | Temporal boundaries of the episode | No |
-| `created_at` | Record creation | No |
-| `last_reviewed_at` | Last retrieval / review | Yes |
-| `consolidated_at` | When processed into semantic memory; `NULL` = pending consolidation | Yes |
+Important fields:
 
-## Lifecycle
+| Field | Purpose |
+| --- | --- |
+| `id` | deterministic episode id derived from conversation + seq range |
+| `conversation_id` | conversation scope |
+| `messages` | preserved source messages |
+| `title` | generated episode title |
+| `content` | rendered episode content used for retrieval |
+| `classification` | optional `low_info` / `informative` |
+| `embedding` | vector embedding of episode content |
+| `stability` / `difficulty` | FSRS state |
+| `surprise` | currently stored but initialized to `0.0` |
+| `start_at` / `end_at` | time bounds from source messages |
+| `consolidated_at` | semantic consolidation completion marker |
 
-### 1. Creation (Event Segmentation)
+The migration also creates a generated `search_text` column:
 
-Episodic memories are created via the [segmentation](segmentation.md) pipeline:
-
-1. **Rule check** — Fast path for obvious cases (e.g., < 3 messages = no split)
-2. **Dual-channel boundary detection** — Surprise channel (embedding divergence) + Topic channel (embedding pre-filter → LLM)
-3. **Episode generation** — LLM generates title + dated observation content
-4. **FSRS initialization** — Initial stability boosted by surprise signal
-
-```rust
-// Stability boost formula
-let boosted_stability = base_stability * (1.0 + surprise * 0.5);
-// surprise 1.0 → 1.5x stability (slower decay)
-// surprise 0.0 → 1.0x stability (normal decay)
+```text
+title + " " + content
 ```
 
-### 2. Storage
+That is the text BM25 leg uses for episodic retrieval.
 
-Stored in PostgreSQL with `pgvector` extension:
-- BM25 index on generated `search_text` for full-text search
-- HNSW index on `embedding` for vector similarity
+## Creation flow
 
-### 3. Retrieval
+Code:
 
-See [retrieve_memory](retrieve_memory.md) for detailed API documentation.
+- `crates/worker/src/jobs/episode_creation.rs`
 
-Brief pipeline:
-1. Hybrid search (BM25 + vector) with RRF fusion → 100 candidates
-2. FSRS re-ranking: `final_score = rrf_score × retrievability`
-3. Sort and truncate to limit
-4. Enqueue `MemoryReviewJob` for async FSRS update
+Current order:
 
-### 4. Review (FSRS Update)
+1. `try_load_current_span`
+2. `try_ensure_episode_exists`
+3. if missing:
+   - load source messages
+   - generate episode artifacts
+   - embed content
+   - initialize FSRS state
+   - insert `episodic_memory`
+4. `try_enqueue_predict_calibrate_if_needed`
 
-Each retrieval records pending reviews; when event segmentation triggers, a `MemoryReviewJob` evaluates relevance:
-- LLM assigns Again/Hard/Good/Easy ratings based on actual usage in conversation
-- Updates `stability`, `difficulty`, `last_reviewed_at`
+## Artifact generation
 
-See [Memory Review](memory_review.md) and [FSRS](fsrs.md) for details.
+Current artifact generation is split into:
 
-### 5. Semantic Consolidation
+### Deterministic rendering
 
-After creation, a `PredictCalibrateJob` is immediately enqueued for real-time knowledge extraction. On completion, `consolidated_at` is set.
+- render transcript lines grouped by hour
+- format them as `Spoken At: ...`
 
-See [Semantic Memory](semantic_memory.md) for details.
+### Optional time anchoring
 
-## Surprise Detection
+The LLM may append grounded calendar anchors to already-present time phrases.
 
-Surprise measures prediction error—the unexpectedness of information relative to the current event model. It is computed as `1 - cosine_sim(event_model_embedding, new_message_embedding)` during boundary detection. It serves two purposes:
+### Title generation
 
-### 1. FSRS Stability Boost
+The title is generated after content is finalized.
 
-Higher surprise → higher initial stability → slower decay. Rationale: surprising events contain more learning value and warrant longer retention.
+## Retrieval role
 
-### 2. Display Significance
+`episodic_memory` participates in hybrid retrieval:
 
-High-surprise memories are labeled "key moment" in tool results and may include full message details based on detail level settings.
+1. BM25 on `search_text`
+2. vector similarity on `embedding`
+3. RRF merge
+4. FSRS retrievability rerank
 
-### Scoring Scale
+See [retrieve_memory](retrieve_memory.md) and [fsrs](fsrs.md).
 
-| Score | Interpretation | Example |
-|-------|---------------|---------|
-| 0.0 | Fully expected, no new information | "Got it" / "Understood" |
-| 0.3 | Minor information gain | "I see" / "Makes sense" |
-| 0.7 | Significant pivot or revelation | "Wait, what?" / "That's different" |
-| 1.0 | Complete surprise, model-breaking | "I had no idea" / "That changes everything" |
+## Consolidation role
 
-### Why Surprise Over Valence?
+After episode creation, informative episodes can trigger
+`PredictCalibrateJob`. That job extracts or updates semantic facts and finally
+sets `consolidated_at`.
 
-| Aspect | Valence (positive/negative) | Surprise |
-|--------|---------------------------|----------|
-| Memory relevance | Low (emotion ≠ importance) | High (unexpected = learning) |
-| Detection cost | Sentiment analysis | Single scale, objective |
-| EST alignment | Weak | Strong (implements prediction error) |
+## Notes
 
-## Access Patterns
-
-### Via API
-
-See [retrieve_memory](retrieve_memory.md) for endpoint details.
-
-| Endpoint | Location |
-| -------- | -------- |
-| `POST /api/v0/retrieve_memory` | `crates/server/src/api/retrieve_memory.rs` |
-| `POST /api/v0/retrieve_memory/raw` | `crates/server/src/api/retrieve_memory.rs` |
-| `POST /api/v0/recent_memory` | `crates/server/src/api/recent_memory.rs` |
-| `POST /api/v0/recent_memory/raw` | `crates/server/src/api/recent_memory.rs` |
-
-### Programmatic
-
-| Operation | Location |
-|-----------|----------|
-| `EpisodicMemory::retrieve_by_embedding()` | `crates/core/src/memory/episodic.rs` |
-| `EpisodicMemory::from_model()` | `crates/core/src/memory/episodic.rs` |
-| `EpisodicMemory::to_model()` | `crates/core/src/memory/episodic.rs` |
-
-## Design Decisions
-
-### Why Store Full Messages?
-
-While `content` is used for search, `messages` preserves the original conversation for detail views. This supports:
-- Audit/debugging (see what actually happened)
-- High-detail tool results for key moments
-- Potential future re-summarization
-
-### Why Separate `start_at` and `end_at`?
-
-Temporal boundaries enable:
-- Duration calculation (how long did this interaction take?)
-- Temporal queries (memories from morning vs evening)
-- Future: temporal decay alongside FSRS decay
-
-### Why FSRS for Memory?
-
-Traditional TTL (time-to-live) or LRU (least-recently-used) don't model human memory:
-- TTL deletes regardless of importance
-- LRU ignores that some memories should persist even if old
-
-FSRS models retrievability—how likely you are to recall something given when you last reviewed it. This naturally balances relevance and recency.
-
-## Thresholds Reference
-
-| Threshold | Usage |
-|-----------|-------|
-| `surprise ≥ 0.7` | Key moment flag in tool results |
-| `rank ≤ 2` | Eligible for details in `auto` detail level |
-
-## Relationships
-
-```
-┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
-│  MessageQueue   │────▶│ EventSegmentation│────▶│ EpisodicMemory  │
-│  (pending)      │     │ (LLM analysis)   │     │ (stored)        │
-└─────────────────┘     └──────────────────┘     └─────────────────┘
-                                                           │
-                           ┌───────────────────────────────┤
-                           │                               │ (real-time per episode)
-                           ▼                               ▼
-                    ┌─────────────────┐     ┌──────────────────────┐
-                    │ retrieve_memory │◀─── │ PredictCalibrate     │
-                    │ (hybrid search) │     │ (facts extraction)   │
-                    └─────────────────┘     └──────────────────────┘
-                           │
-                           ▼
-                    ┌─────────────────┐
-                    │ MemoryReviewJob │───▶ FSRS update
-                    │ (async worker)  │
-                    └─────────────────┘
-```
-
-## See Also
-
-- [Segmentation](segmentation.md) — How conversations become memories
-- [Semantic Memory](semantic_memory.md) — Long-term facts extracted from episodes
-- [FSRS](fsrs.md) — Spaced repetition mechanics
-- [Retrieve Memory](retrieve_memory.md) — API for memory access
+- `surprise` is still present in schema and some renderers still check it, but
+  current creation writes `0.0`, so “key moment” behavior is effectively
+  dormant.
+- `title` and `content` are generated once on creation; there is no current
+  re-render or re-summarization job.

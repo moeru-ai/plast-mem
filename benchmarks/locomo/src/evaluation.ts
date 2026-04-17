@@ -178,9 +178,15 @@ const buildJudgeGuidance = (category: QACategory): string => {
       return [
         'This is a temporal question.',
         'Use only CORRECT or WRONG.',
-        'Accept semantically equivalent time expressions, including absolute vs relative phrasing, if they refer to the same date, time period, duration, or ordering.',
-        'Do not require the exact wording of the gold answer.',
-        'Label the answer WRONG if it refers to the wrong date, wrong time period, wrong duration, or wrong sequence of events.',
+        'Rules:',
+        '1. A more specific date that falls within the gold time period is CORRECT.',
+        '   Example: gold "October 2022", prediction "October 8, 2022" → CORRECT.',
+        '   Example: gold "summer 2023", prediction "August 2023" → CORRECT.',
+        '2. A relative expression and an absolute date referring to the same calendar point are equivalent.',
+        '   Example: gold "the week before August 7", prediction "July 31 - August 6" → CORRECT.',
+        '   Example: gold "Saturday after September 11, 2023", prediction "September 16, 2023" → CORRECT.',
+        '3. Label WRONG only if the prediction refers to a clearly different date, period, duration, or sequence.',
+        '4. Do not require the exact wording of the gold answer.',
       ].join('\n')
     case 3:
       return [

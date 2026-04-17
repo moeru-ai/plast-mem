@@ -1,17 +1,15 @@
-import type { AddMessage, AddMessageResult, BenchmarkJobStatus } from 'plastmem'
+import type { InputConversationMessages } from 'plastmem'
 
-import type { LongMemEvalSample, LongMemEvalTurn } from './types'
+import type { LongMemEvalSample } from './types'
 
 import { progress as createProgress } from '@clack/prompts'
-import { sleep } from '@moeru/std'
-import { addMessage, benchmarkFlush, benchmarkJobStatus } from 'plastmem'
+import { importBatchMessages } from 'plastmem'
 
 const TURN_INTERVAL_MINS = 1
-const ADMISSION_POLL_INTERVAL_MS = 1_000
 
 interface BatchMessage {
   content: string
-  role: LongMemEvalTurn['role']
+  role: 'assistant' | 'user'
   timestamp?: number
 }
 
@@ -51,84 +49,19 @@ const buildMessages = (sample: LongMemEvalSample): BatchMessage[] => {
   return messages
 }
 
-const isBackpressured = (value: unknown): value is AddMessageResult =>
-  typeof value === 'object'
-  && value !== null
-  && 'accepted' in value
-  && (value as { accepted: unknown }).accepted === false
-  && (!('reason' in value) || (value as { reason?: unknown }).reason === 'backpressure')
-
-const getStatus = async (
+const importSampleMessages = async (
   baseUrl: string,
   conversationId: string,
-): Promise<BenchmarkJobStatus> => {
-  const res = await benchmarkJobStatus({
-    baseUrl,
-    query: { conversation_id: conversationId },
-    throwOnError: true,
-  })
-
-  return res.data
-}
-
-const waitUntilConversationAdmissible = async (
-  baseUrl: string,
-  conversationId: string,
+  messages: BatchMessage[],
 ): Promise<void> => {
-  while (true) {
-    const status = await getStatus(baseUrl, conversationId)
-    if (status.admissible_for_add)
-      return
-
-    await sleep(ADMISSION_POLL_INTERVAL_MS)
-  }
-}
-
-const sendMessage = async (
-  baseUrl: string,
-  conversationId: string,
-  message: BatchMessage,
-): Promise<boolean> => {
-  const res = await addMessage({
+  await importBatchMessages({
     baseUrl,
     body: {
       conversation_id: conversationId,
-      message: message as unknown as AddMessage['message'],
+      messages: messages as unknown as InputConversationMessages['messages'],
     },
-    throwOnError: false,
+    throwOnError: true,
   })
-
-  if (res.response?.ok)
-    return true
-
-  if (res.response?.status === 429 && isBackpressured(res.error))
-    return false
-
-  const status = res.response?.status ?? 'network'
-  throw new Error(`addMessage failed with status ${status}`)
-}
-
-const flushConversationTail = async (
-  baseUrl: string,
-  conversationId: string,
-): Promise<void> => {
-  while (true) {
-    const status = await getStatus(baseUrl, conversationId)
-
-    if (status.flushable) {
-      await benchmarkFlush({
-        baseUrl,
-        body: { conversation_id: conversationId },
-        throwOnError: true,
-      })
-      return
-    }
-
-    if (status.messages_pending === 0 && !status.fence_active && status.segmentation_jobs_active === 0)
-      return
-
-    await sleep(ADMISSION_POLL_INTERVAL_MS)
-  }
 }
 
 export const ingestSample = async (
@@ -140,21 +73,9 @@ export const ingestSample = async (
   const messages = buildMessages(sample)
   const total = messages.length
 
-  let done = 0
-  for (const message of messages) {
-    while (true) {
-      const accepted = await sendMessage(baseUrl, conversationId, message)
-      if (accepted) {
-        done++
-        onProgress?.(done, total)
-        break
-      }
-
-      await waitUntilConversationAdmissible(baseUrl, conversationId)
-    }
-  }
-
-  await flushConversationTail(baseUrl, conversationId)
+  onProgress?.(0, total)
+  await importSampleMessages(baseUrl, conversationId, messages)
+  onProgress?.(total, total)
 }
 
 export const countSampleMessages = (sample: LongMemEvalSample): number =>
