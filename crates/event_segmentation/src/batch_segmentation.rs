@@ -93,8 +93,6 @@ const LOW_INFO_LLM_MAX_MESSAGES: i64 = 4;
 const PRIMITIVE_SPLIT_TRIGGER_MESSAGES: i64 = 20;
 const SECOND_STAGE_RESEG_TRIGGER_MESSAGES: i64 = 30;
 
-pub const LLM_MAX_WINDOW: usize = 20;
-
 const JSON_SCHEMA_REQUIREMENT: &str = r#"
 Return only JSON that matches the provided schema.
 "#;
