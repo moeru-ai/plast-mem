@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 mod data;
-pub use data::{EventData, EventDataToString};
+pub use data::{EventData, EventDataToString, MessageEventData, MessageEventRole};
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Event {

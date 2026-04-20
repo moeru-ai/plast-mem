@@ -3,7 +3,7 @@ use enum_dispatch::enum_dispatch;
 use serde::{Deserialize, Serialize};
 
 mod message;
-use message::MessageEventData;
+pub use message::{MessageEventData, MessageEventRole};
 
 #[enum_dispatch]
 pub trait EventDataToString {

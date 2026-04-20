@@ -1,4 +1,6 @@
 use plastmem_event::Event;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone)]
 pub struct EventSegment {
@@ -6,7 +8,8 @@ pub struct EventSegment {
   reasons: Vec<EventSegmentReason>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
 pub enum EventSegmentReason {
   TopicShift,
   TimeGap,
