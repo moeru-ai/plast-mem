@@ -3681,6 +3681,8 @@ dependencies = [
  "plastmem_shared",
  "schemars",
  "serde",
+ "serde_json",
+ "tokio",
  "tracing",
  "uuid",
 ]
