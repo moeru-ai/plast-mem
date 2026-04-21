@@ -128,12 +128,13 @@ impl EventSegmenter {
       return Ok(Some(segment));
     }
 
-    let merge_output = Self::should_merge_small_segment(&previous.events, &segment.events)
-      .await
-      .unwrap_or(SmallSegmentMergeOutput {
-        merge_with_previous: false,
-        reason_if_separate: EventSegmentReason::TopicShift,
-      });
+    let merge_output =
+      Self::should_merge_small_segment(&previous.events, &segment.events, &segment.reasons)
+        .await
+        .unwrap_or(SmallSegmentMergeOutput {
+          merge_with_previous: false,
+          reason_if_separate: EventSegmentReason::TopicShift,
+        });
 
     if !merge_output.merge_with_previous {
       return Ok(Some(
@@ -148,8 +149,9 @@ impl EventSegmenter {
   async fn should_merge_small_segment(
     previous_events: &[Event],
     current_events: &[Event],
+    boundary_reasons: &[EventSegmentReason],
   ) -> Result<SmallSegmentMergeOutput, AppError> {
-    let prompt = small_segment_merge_prompt(previous_events, current_events);
+    let prompt = small_segment_merge_prompt(previous_events, current_events, boundary_reasons);
     let system = ChatCompletionRequestSystemMessage::from(prompt.system);
     let user = ChatCompletionRequestUserMessage::from(prompt.user);
 

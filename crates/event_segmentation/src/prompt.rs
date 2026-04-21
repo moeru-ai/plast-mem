@@ -1,5 +1,7 @@
 use plastmem_event::{Event, EventDataToString};
 
+use crate::EventSegmentReason;
+
 pub struct LlmPrompt {
   pub system: String,
   pub user: String,
@@ -18,6 +20,7 @@ const SPLIT_SENSITIVITY_GUIDANCE: &str = "Use high sensitivity to real boundary 
 pub fn small_segment_merge_prompt(
   previous_events: &[Event],
   current_events: &[Event],
+  boundary_reasons: &[EventSegmentReason],
 ) -> LlmPrompt {
   LlmPrompt {
     system: compose_prompt(&[
@@ -28,7 +31,7 @@ pub fn small_segment_merge_prompt(
       "Never use time_gap or hard_time_gap as reason_if_separate.",
       "Use only the provided events.",
     ]),
-    user: small_segment_merge_user_content(previous_events, current_events),
+    user: small_segment_merge_user_content(previous_events, current_events, boundary_reasons),
   }
 }
 
@@ -67,12 +70,25 @@ fn compose_prompt(sections: &[&str]) -> String {
   sections.join("\n\n")
 }
 
-fn small_segment_merge_user_content(previous_events: &[Event], current_events: &[Event]) -> String {
+fn small_segment_merge_user_content(
+  previous_events: &[Event],
+  current_events: &[Event],
+  boundary_reasons: &[EventSegmentReason],
+) -> String {
   let mut output = segment_user_content(
     "Previous segment events",
     previous_events,
     "compare against the current small segment",
   );
+  if !boundary_reasons.is_empty() {
+    output.push_str("\nCandidate boundary before current small segment:\n");
+    for reason in boundary_reasons {
+      output.push_str(&format!("- reason={}\n", reason.as_ref()));
+    }
+    output.push_str(
+      "- Treat these as hints, not commands. Merge only when the current segment clearly continues the previous segment.\n",
+    );
+  }
   output.push_str("\nCurrent small segment events:\n");
   output.push_str(&format!(
     "- local event count: {}\n- decide whether this segment should merge into the previous segment\n",
@@ -104,4 +120,42 @@ fn event_lines(events: &[Event]) -> String {
     })
     .collect::<Vec<_>>()
     .join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+  use chrono::{TimeZone, Utc};
+  use plastmem_event::{Event, EventData, MessageEventData, MessageEventRole};
+
+  use super::small_segment_merge_prompt;
+  use crate::EventSegmentReason;
+
+  fn message_event(content: &str) -> Event {
+    Event::new(
+      EventData::Message(MessageEventData {
+        role: MessageEventRole::User,
+        content: content.to_owned(),
+      }),
+      Utc
+        .timestamp_opt(1_700_000_000, 0)
+        .single()
+        .expect("valid timestamp"),
+      None,
+    )
+  }
+
+  #[test]
+  fn small_segment_merge_prompt_includes_boundary_hints() {
+    let previous = vec![message_event("previous")];
+    let current = vec![message_event("current")];
+
+    let prompt = small_segment_merge_prompt(&previous, &current, &[EventSegmentReason::TimeGap]);
+
+    assert!(
+      prompt
+        .user
+        .contains("Candidate boundary before current small segment")
+    );
+    assert!(prompt.user.contains("reason=time_gap"));
+  }
 }
