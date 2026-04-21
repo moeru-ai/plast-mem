@@ -55,7 +55,11 @@ pub fn large_segment_split_prompt(events: &[Event]) -> LlmPrompt {
       "Never use time_gap as an internal split reason.",
       "Use only the provided events.",
     ]),
-    user: segment_user_content("Large event segment", events),
+    user: segment_user_content(
+      "Large event segment",
+      events,
+      "return split_start_event_indices",
+    ),
   }
 }
 
@@ -64,14 +68,25 @@ fn compose_prompt(sections: &[&str]) -> String {
 }
 
 fn small_segment_merge_user_content(previous_events: &[Event], current_events: &[Event]) -> String {
-  let mut output = segment_user_content("Previous segment events", previous_events);
+  let mut output = segment_user_content(
+    "Previous segment events",
+    previous_events,
+    "compare against the current small segment",
+  );
   output.push_str("\nCurrent small segment events:\n");
+  output.push_str(&format!(
+    "- local event count: {}\n- decide whether this segment should merge into the previous segment\n",
+    current_events.len()
+  ));
   output.push_str(&event_lines(current_events));
   output
 }
 
-fn segment_user_content(title: &str, events: &[Event]) -> String {
-  let mut output = format!("{title}:\n");
+fn segment_user_content(title: &str, events: &[Event], idx_purpose: &str) -> String {
+  let mut output = format!(
+    "{title}:\n- local event count: {}\n- use only the shown `idx` values to {idx_purpose}\n",
+    events.len()
+  );
   output.push_str(&event_lines(events));
   output
 }
