@@ -68,7 +68,7 @@ impl EventSegmenter {
     let mut segments = Vec::new();
 
     for segment in input_segments {
-      if segment.events().is_empty() {
+      if segment.events.is_empty() {
         continue;
       }
 
@@ -87,16 +87,16 @@ impl EventSegmenter {
   }
 
   async fn check_large_segment(segment: EventSegment) -> Vec<EventSegment> {
-    if segment.events().len() <= Self::LARGE_SEGMENT_SPLIT_TRIGGER {
+    if segment.events.len() <= Self::LARGE_SEGMENT_SPLIT_TRIGGER {
       return vec![segment];
     }
 
-    let reason = segment.reasons().first().copied();
-    let split_segments = Self::try_split_large_segment(segment.events()).await;
+    let reason = segment.reasons.first().copied();
+    let split_segments = Self::try_split_large_segment(&segment.events).await;
 
     if split_segments.is_empty() {
       return vec![EventSegment::new(
-        segment.events().to_vec(),
+        segment.events,
         reason.into_iter().collect(),
       )];
     }
@@ -106,7 +106,7 @@ impl EventSegmenter {
       .enumerate()
       .map(|(index, segment)| {
         if index == 0 {
-          Self::apply_reason(segment, reason)
+          segment.prepend_reason_if_missing(reason)
         } else {
           segment
         }
@@ -118,15 +118,15 @@ impl EventSegmenter {
     previous: &mut EventSegment,
     segment: EventSegment,
   ) -> Result<Option<EventSegment>, AppError> {
-    if segment.events().len() > Self::SMALL_SEGMENT_MAX_EVENTS {
+    if segment.events.len() > Self::SMALL_SEGMENT_MAX_EVENTS {
       return Ok(Some(segment));
     }
 
-    if segment.reasons().contains(&EventSegmentReason::TimeGap) {
+    if segment.reasons.contains(&EventSegmentReason::TimeGap) {
       return Ok(Some(segment));
     }
 
-    let merge_output = Self::should_merge_small_segment(previous.events(), segment.events())
+    let merge_output = Self::should_merge_small_segment(&previous.events, &segment.events)
       .await
       .unwrap_or(SmallSegmentMergeOutput {
         merge_with_previous: false,
@@ -134,13 +134,12 @@ impl EventSegmenter {
       });
 
     if !merge_output.merge_with_previous {
-      return Ok(Some(Self::replace_reason(
-        segment,
-        merge_output.reason_if_separate,
-      )));
+      return Ok(Some(
+        segment.replace_reason(merge_output.reason_if_separate),
+      ));
     }
 
-    Self::merge_segment_into_previous(previous, segment.events().to_vec());
+    previous.extend_events(segment.events);
     Ok(None)
   }
 
@@ -233,29 +232,6 @@ impl EventSegmenter {
     Self::split_large_segment(events)
       .await
       .unwrap_or_else(|_| vec![EventSegment::new(events.to_vec(), Vec::new())])
-  }
-
-  fn merge_segment_into_previous(segment: &mut EventSegment, segment_events: Vec<Event>) {
-    let mut merged_events = segment.events().to_vec();
-    merged_events.extend(segment_events);
-    *segment = EventSegment::new(merged_events, segment.reasons().to_vec());
-  }
-
-  fn apply_reason(segment: EventSegment, reason: Option<EventSegmentReason>) -> EventSegment {
-    if let Some(reason) = reason
-      && !segment.reasons().contains(&reason)
-    {
-      let events = segment.events().to_vec();
-      let mut reasons = vec![reason];
-      reasons.extend_from_slice(segment.reasons());
-      return EventSegment::new(events, reasons);
-    }
-
-    segment
-  }
-
-  fn replace_reason(segment: EventSegment, reason: EventSegmentReason) -> EventSegment {
-    EventSegment::new(segment.events().to_vec(), vec![reason])
   }
 
   fn resolve_large_segment_split(
@@ -410,9 +386,9 @@ mod tests {
 
     let segments = EventSegmenter::segment_by_time_gap(&events).expect("segments");
     assert_eq!(segments.len(), 2);
-    assert_eq!(segments[0].events().len(), 2);
-    assert_eq!(segments[1].events().len(), 1);
-    assert_eq!(segments[1].reasons(), &[EventSegmentReason::TimeGap]);
+    assert_eq!(segments[0].events.len(), 2);
+    assert_eq!(segments[1].events.len(), 1);
+    assert_eq!(segments[1].reasons, &[EventSegmentReason::TimeGap]);
   }
 
   #[test]
@@ -437,10 +413,10 @@ mod tests {
         .expect("segments");
 
     assert_eq!(segments.len(), 2);
-    assert_eq!(segments[0].events().len(), 2);
-    assert!(segments[0].reasons().is_empty());
-    assert_eq!(segments[1].events().len(), 2);
-    assert_eq!(segments[1].reasons(), &[EventSegmentReason::TopicShift]);
+    assert_eq!(segments[0].events.len(), 2);
+    assert!(segments[0].reasons.is_empty());
+    assert_eq!(segments[1].events.len(), 2);
+    assert_eq!(segments[1].reasons, &[EventSegmentReason::TopicShift]);
   }
 
   #[test]
@@ -453,9 +429,9 @@ mod tests {
       vec![EventSegmentReason::TopicShift],
     );
 
-    let segment = EventSegmenter::replace_reason(segment, EventSegmentReason::IntentShift);
+    let segment = segment.replace_reason(EventSegmentReason::IntentShift);
 
-    assert_eq!(segment.reasons(), &[EventSegmentReason::IntentShift]);
+    assert_eq!(segment.reasons, &[EventSegmentReason::IntentShift]);
   }
 
   #[test]

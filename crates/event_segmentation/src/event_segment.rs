@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone)]
 pub struct EventSegment {
-  events: Vec<Event>,
-  reasons: Vec<EventSegmentReason>,
+  pub events: Vec<Event>,
+  pub reasons: Vec<EventSegmentReason>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -22,11 +22,22 @@ impl EventSegment {
     Self { events, reasons }
   }
 
-  pub fn events(&self) -> &[Event] {
-    &self.events
+  pub fn prepend_reason_if_missing(mut self, reason: Option<EventSegmentReason>) -> Self {
+    if let Some(reason) = reason
+      && !self.reasons.contains(&reason)
+    {
+      self.reasons.insert(0, reason);
+    }
+
+    self
   }
 
-  pub fn reasons(&self) -> &[EventSegmentReason] {
-    &self.reasons
+  pub fn replace_reason(mut self, reason: EventSegmentReason) -> Self {
+    self.reasons = vec![reason];
+    self
+  }
+
+  pub fn extend_events(&mut self, events: impl IntoIterator<Item = Event>) {
+    self.events.extend(events);
   }
 }

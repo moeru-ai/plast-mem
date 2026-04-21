@@ -77,21 +77,21 @@ async fn main() -> Result<()> {
 
   for (index, segment) in segments.iter().enumerate() {
     let first = segment
-      .events()
+      .events
       .first()
       .ok_or_else(|| anyhow!("segment unexpectedly empty"))?;
     let last = segment
-      .events()
+      .events
       .last()
       .ok_or_else(|| anyhow!("segment unexpectedly empty"))?;
     println!(
       "\nsegment[{index:02}] len={} reasons={:?} start={} end={}",
-      segment.events().len(),
-      segment.reasons(),
+      segment.events.len(),
+      segment.reasons,
       first.timestamp.format("%Y-%m-%dT%H:%M:%SZ"),
       last.timestamp.format("%Y-%m-%dT%H:%M:%SZ"),
     );
-    for event in segment.events() {
+    for event in &segment.events {
       println!(
         "  - {} {}",
         event.timestamp.format("%Y-%m-%dT%H:%M:%SZ"),
