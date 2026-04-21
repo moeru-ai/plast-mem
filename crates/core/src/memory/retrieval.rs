@@ -51,8 +51,8 @@ pub fn format_tool_result(
 
 #[cfg(test)]
 mod tests {
-  use chrono::Utc;
   use chrono::TimeZone;
+  use chrono::Utc;
   use sea_orm::prelude::PgVector;
   use uuid::Uuid;
 
@@ -87,8 +87,14 @@ mod tests {
   #[test]
   fn format_tool_result_outputs_only_episodic_content_blocks() {
     let episodic = vec![
-      (episodic_memory("Spoken At: Jun 15, 2026 3 PM\nSam: hello"), 0.9),
-      (episodic_memory("Spoken At: Jun 16, 2026 4 PM\nEvan: hi"), 0.8),
+      (
+        episodic_memory("Spoken At: Jun 15, 2026 3 PM\nSam: hello"),
+        0.9,
+      ),
+      (
+        episodic_memory("Spoken At: Jun 16, 2026 4 PM\nEvan: hi"),
+        0.8,
+      ),
     ];
 
     let rendered = format_tool_result(&[], &episodic, &DetailLevel::Auto);

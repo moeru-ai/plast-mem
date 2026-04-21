@@ -120,7 +120,8 @@ fn parse_args() -> Result<Config> {
       }
       "--sample-id" => {
         sample_id = Some(
-          args.next()
+          args
+            .next()
             .ok_or_else(|| anyhow!("--sample-id requires a value"))?,
         );
       }
@@ -198,7 +199,11 @@ fn build_events(sample: &LoCoMoSample) -> Result<Vec<Event>> {
       }
 
       let mut parts = vec![text.to_owned()];
-      append_image_context(&mut parts, turn.blip_caption.as_deref(), turn.query.as_deref().or(turn.search_query.as_deref()));
+      append_image_context(
+        &mut parts,
+        turn.blip_caption.as_deref(),
+        turn.query.as_deref().or(turn.search_query.as_deref()),
+      );
       let content = parts.join(" ");
       let timestamp = get_turn_timestamp(session.date, turn_index)?;
       let role = parse_role(&turn.speaker);
@@ -238,7 +243,10 @@ fn get_ordered_sessions(sample: &LoCoMoSample) -> Result<Vec<OrderedSession>> {
   Ok(sessions)
 }
 
-fn get_turn_timestamp(session_date: Option<DateTime<Utc>>, turn_index: usize) -> Result<DateTime<Utc>> {
+fn get_turn_timestamp(
+  session_date: Option<DateTime<Utc>>,
+  turn_index: usize,
+) -> Result<DateTime<Utc>> {
   if let Some(session_date) = session_date {
     let offset = i64::try_from(turn_index).context("turn index overflow")?;
     return Ok(session_date + Duration::minutes(offset * TURN_INTERVAL_MINS));

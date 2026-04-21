@@ -11,7 +11,9 @@ mod benchmark;
 mod recent_memory;
 mod retrieve_memory;
 
-pub use add_message::{IngestMessageResult, InputConversationMessage, InputConversationMessages, InputMessage};
+pub use add_message::{
+  IngestMessageResult, InputConversationMessage, InputConversationMessages, InputMessage,
+};
 #[cfg(debug_assertions)]
 pub use benchmark::BenchmarkJobStatus;
 pub use recent_memory::RecentMemory;
@@ -31,8 +33,7 @@ pub fn app() -> Router<AppState> {
     .routes(routes!(retrieve_memory::context_pre_retrieve));
 
   #[cfg(debug_assertions)]
-  let router = router
-    .routes(routes!(benchmark::benchmark_job_status));
+  let router = router.routes(routes!(benchmark::benchmark_job_status));
 
   let (router, openapi) = router.split_for_parts();
 

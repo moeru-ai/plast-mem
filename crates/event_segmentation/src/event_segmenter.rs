@@ -62,7 +62,9 @@ impl EventSegmenter {
     Ok(segments)
   }
 
-  async fn segment_by_llm(input_segments: Vec<EventSegment>) -> Result<Vec<EventSegment>, AppError> {
+  async fn segment_by_llm(
+    input_segments: Vec<EventSegment>,
+  ) -> Result<Vec<EventSegment>, AppError> {
     let mut segments = Vec::new();
 
     for segment in input_segments {
@@ -93,7 +95,10 @@ impl EventSegmenter {
     let split_segments = Self::try_split_large_segment(segment.events()).await;
 
     if split_segments.is_empty() {
-      return vec![EventSegment::new(segment.events().to_vec(), reason.into_iter().collect())];
+      return vec![EventSegment::new(
+        segment.events().to_vec(),
+        reason.into_iter().collect(),
+      )];
     }
 
     split_segments
@@ -154,10 +159,9 @@ impl EventSegmenter {
       ]
       .join("\n\n"),
     );
-    let user = ChatCompletionRequestUserMessage::from(Self::build_small_segment_merge_user_content(
-      previous_events,
-      current_events,
-    ));
+    let user = ChatCompletionRequestUserMessage::from(
+      Self::build_small_segment_merge_user_content(previous_events, current_events),
+    );
 
     let output = generate_object::<SmallSegmentMergeOutput>(
       vec![
@@ -165,7 +169,9 @@ impl EventSegmenter {
         ChatCompletionRequestMessage::User(user),
       ],
       "event_small_segment_merge".to_owned(),
-      Some("Decide whether a small event segment should merge into the previous segment".to_owned()),
+      Some(
+        "Decide whether a small event segment should merge into the previous segment".to_owned(),
+      ),
     )
     .await?;
 
@@ -204,8 +210,10 @@ impl EventSegmenter {
       ]
       .join("\n\n"),
     );
-    let user =
-      ChatCompletionRequestUserMessage::from(Self::build_segment_user_content("Large event segment", events));
+    let user = ChatCompletionRequestUserMessage::from(Self::build_segment_user_content(
+      "Large event segment",
+      events,
+    ));
 
     let output = generate_object::<LargeSegmentSplitOutput>(
       vec![
@@ -233,10 +241,7 @@ impl EventSegmenter {
     *segment = EventSegment::new(merged_events, segment.reasons().to_vec());
   }
 
-  fn apply_reason(
-    segment: EventSegment,
-    reason: Option<EventSegmentReason>,
-  ) -> EventSegment {
+  fn apply_reason(segment: EventSegment, reason: Option<EventSegmentReason>) -> EventSegment {
     if let Some(reason) = reason
       && !segment.reasons().contains(&reason)
     {
