@@ -13,6 +13,8 @@ const BOUNDARY_TRIGGER_GUIDANCE: &str = "Boundary triggers: topic change, intent
 
 const SEGMENT_COHERENCE_GUIDANCE: &str = "A segment should stay centered on one coherent thread, such as one activity, update, discussion, question, or shared object.";
 
+const SEGMENT_LENGTH_GUIDANCE: &str = "Segment length guidance:\n- A segment should usually stay within 10-15 events.\n- Longer segments are acceptable only when the events still clearly belong to the same ongoing topic and splitting would create artificial fragments.\n- Do not merge multiple topic-separated exchanges into one catch-all segment.";
+
 const INDEX_RULES: &str = "Each split index must use the provided `[idx=N]` values exactly as shown.\nIndices are 0-based indices into the provided events. Do not count lines, timestamps, or infer indices from anything else.";
 
 const SPLIT_SENSITIVITY_GUIDANCE: &str = "Use high sensitivity to real boundary signals. When boundary placement is uncertain, prefer splitting rather than merging unrelated exchanges.";
@@ -44,6 +46,7 @@ pub fn large_segment_split_prompt(events: &[Event]) -> LlmPrompt {
       "Add a split when there is a meaningful topic shift, intent transition, structural pivot, or clear surprise/discontinuity.",
       BOUNDARY_TRIGGER_GUIDANCE,
       SEGMENT_COHERENCE_GUIDANCE,
+      SEGMENT_LENGTH_GUIDANCE,
       "If one thread has naturally wrapped up and the conversation moves to a different thread, split them.",
       "Short follow-up questions and acknowledgements may stay in the same segment when they clearly continue the same thread.",
       "Do not merge multiple separate threads into one catch-all segment just because they appear in the same chat session.",
@@ -127,7 +130,7 @@ mod tests {
   use chrono::{TimeZone, Utc};
   use plastmem_event::{Event, EventData, MessageEventData, MessageEventRole};
 
-  use super::small_segment_merge_prompt;
+  use super::{large_segment_split_prompt, small_segment_merge_prompt};
   use crate::EventSegmentReason;
 
   fn message_event(content: &str) -> Event {
@@ -157,5 +160,15 @@ mod tests {
         .contains("Candidate boundary before current small segment")
     );
     assert!(prompt.user.contains("reason=time_gap"));
+  }
+
+  #[test]
+  fn large_segment_split_prompt_includes_length_guidance() {
+    let events = vec![message_event("event")];
+
+    let prompt = large_segment_split_prompt(&events);
+
+    assert!(prompt.system.contains("Segment length guidance"));
+    assert!(prompt.system.contains("10-15 events"));
   }
 }
