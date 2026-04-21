@@ -193,9 +193,17 @@ impl EventSegmenter {
   }
 
   async fn try_split_large_segment(events: &[Event]) -> Vec<EventSegment> {
-    Self::split_large_segment(events)
-      .await
-      .unwrap_or_else(|_| vec![EventSegment::new(events.to_vec(), Vec::new())])
+    match Self::split_large_segment(events).await {
+      Ok(segments) => segments,
+      Err(err) => {
+        tracing::warn!(
+          event_count = events.len(),
+          error = %err,
+          "Large event segment split failed; falling back to one segment"
+        );
+        vec![EventSegment::new(events.to_vec(), Vec::new())]
+      }
+    }
   }
 
   fn resolve_large_segment_split(
