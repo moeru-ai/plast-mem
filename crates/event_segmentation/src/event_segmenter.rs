@@ -4,11 +4,12 @@ use plastmem_ai::{
   ChatCompletionRequestMessage, ChatCompletionRequestSystemMessage,
   ChatCompletionRequestUserMessage, generate_object,
 };
-use plastmem_event::{Event, EventDataToString};
+use plastmem_event::Event;
 use plastmem_shared::AppError;
 use schemars::JsonSchema;
 use serde::Deserialize;
 
+use crate::prompt::{large_segment_split_prompt, small_segment_merge_prompt};
 use crate::{EventSegment, EventSegmentReason};
 
 pub struct EventSegmenter {}
@@ -147,20 +148,9 @@ impl EventSegmenter {
     previous_events: &[Event],
     current_events: &[Event],
   ) -> Result<SmallSegmentMergeOutput, AppError> {
-    let system = ChatCompletionRequestSystemMessage::from(
-      [
-        "You review whether a small event segment should merge into the previous event segment.",
-        "Return only JSON that matches the provided schema.",
-        "Use merge_with_previous=true only when the current segment clearly continues the same topic or intent.",
-        "If merge_with_previous=false, choose reason_if_separate from topic_shift, intent_shift, or structural_cue.",
-        "Never use time_gap as reason_if_separate.",
-        "Use only the provided events.",
-      ]
-      .join("\n\n"),
-    );
-    let user = ChatCompletionRequestUserMessage::from(
-      Self::build_small_segment_merge_user_content(previous_events, current_events),
-    );
+    let prompt = small_segment_merge_prompt(previous_events, current_events);
+    let system = ChatCompletionRequestSystemMessage::from(prompt.system);
+    let user = ChatCompletionRequestUserMessage::from(prompt.user);
 
     let output = generate_object::<SmallSegmentMergeOutput>(
       vec![
@@ -184,35 +174,9 @@ impl EventSegmenter {
   }
 
   async fn split_large_segment(events: &[Event]) -> Result<Vec<EventSegment>, AppError> {
-    let system = ChatCompletionRequestSystemMessage::from(
-      [
-        "You split one large event segment into smaller event segments.",
-        "Return only JSON that matches the provided schema.",
-        "Your job: identify the first event index of every later child segment that should begin a new thread inside this range.",
-        "Add a split when there is a meaningful topic shift, intent transition, structural pivot, or clear surprise/discontinuity.",
-        "Boundary triggers: topic change, intent transition after a natural stopping point, explicit pivots or wrap-up statements, or abrupt discontinuities in tone/content.",
-        "A segment should stay centered on one coherent thread, such as one activity, update, discussion, question, or shared object.",
-        "If one thread has naturally wrapped up and the conversation moves to a different thread, split them.",
-        "Short follow-up questions and acknowledgements may stay in the same segment when they clearly continue the same thread.",
-        "Do not merge multiple separate threads into one catch-all segment just because they appear in the same chat session.",
-        "Do not stop after finding only the most obvious boundary. Review the whole range and return all later split starts needed to separate distinct threads.",
-        "If the range contains several distinct threads, return several split indices in one pass.",
-        "Use high sensitivity to real boundary signals. When boundary placement is uncertain, prefer splitting rather than merging unrelated exchanges.",
-        "Each split index must use the provided `[idx=N]` values exactly as shown.",
-        "Indices are 0-based indices into the provided events. Do not count lines, timestamps, or infer indices from anything else.",
-        "Return only later split starts. Do not include 0.",
-        "Keep split indices unique and strictly ascending.",
-        "If there is no meaningful boundary, return an empty array.",
-        "Use only topic_shift, intent_shift, or structural_cue as boundary reasons.",
-        "Never use time_gap as an internal split reason.",
-        "Use only the provided events.",
-      ]
-      .join("\n\n"),
-    );
-    let user = ChatCompletionRequestUserMessage::from(Self::build_segment_user_content(
-      "Large event segment",
-      events,
-    ));
+    let prompt = large_segment_split_prompt(events);
+    let system = ChatCompletionRequestSystemMessage::from(prompt.system);
+    let user = ChatCompletionRequestUserMessage::from(prompt.user);
 
     let output = generate_object::<LargeSegmentSplitOutput>(
       vec![
@@ -315,37 +279,6 @@ impl EventSegmenter {
     }
 
     Ok(validated)
-  }
-
-  fn build_small_segment_merge_user_content(
-    previous_events: &[Event],
-    current_events: &[Event],
-  ) -> String {
-    let mut output = Self::build_segment_user_content("Previous segment events", previous_events);
-    output.push_str("\nCurrent small segment events:\n");
-    output.push_str(&Self::build_event_lines(current_events));
-    output
-  }
-
-  fn build_segment_user_content(title: &str, events: &[Event]) -> String {
-    let mut output = format!("{title}:\n");
-    output.push_str(&Self::build_event_lines(events));
-    output
-  }
-
-  fn build_event_lines(events: &[Event]) -> String {
-    events
-      .iter()
-      .enumerate()
-      .map(|(index, event)| {
-        format!(
-          "- [idx={index}] {} {}",
-          event.timestamp.format("%Y-%m-%dT%H:%M:%SZ"),
-          event.data.to_string_without_timestamp()
-        )
-      })
-      .collect::<Vec<_>>()
-      .join("\n")
   }
 
   pub async fn segment(events: &[Event]) -> Result<Vec<EventSegment>, AppError> {
