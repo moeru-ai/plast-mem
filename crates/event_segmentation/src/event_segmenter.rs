@@ -30,7 +30,7 @@ impl EventSegmenter {
   const TIME_GAP_THRESHOLD: TimeDelta = TimeDelta::minutes(30);
   const HARD_TIME_GAP_THRESHOLD: TimeDelta = TimeDelta::hours(3);
   const SMALL_SEGMENT_MAX_EVENTS: usize = 4;
-  const LARGE_SEGMENT_SPLIT_TRIGGER: usize = 20;
+  const LARGE_SEGMENT_SPLIT_TRIGGER: usize = 15;
 
   // Perform segmented processing on events with intervals exceeding 30 minutes.
   fn segment_by_time_gap(events: &[Event]) -> Result<Vec<EventSegment>, AppError> {
@@ -95,6 +95,15 @@ impl EventSegmenter {
 
     let reason = segment.reasons.first().copied();
     let split_segments = Self::try_split_large_segment(&segment.events).await;
+    let split_segments = if Self::needs_split_retry(segment.events.len(), &split_segments) {
+      tracing::warn!(
+        event_count = segment.events.len(),
+        "Large event segment split returned one segment; retrying"
+      );
+      Self::try_split_large_segment(&segment.events).await
+    } else {
+      split_segments
+    };
 
     if split_segments.is_empty() {
       return vec![EventSegment::new(
@@ -300,6 +309,12 @@ impl EventSegmenter {
     }
   }
 
+  fn needs_split_retry(event_count: usize, segments: &[EventSegment]) -> bool {
+    event_count > Self::LARGE_SEGMENT_SPLIT_TRIGGER
+      && segments.len() == 1
+      && segments[0].events.len() == event_count
+  }
+
   pub async fn segment(events: &[Event]) -> Result<Vec<EventSegment>, AppError> {
     let segments = Self::segment_by_time_gap(events)?;
     Self::segment_by_llm(segments).await
@@ -381,6 +396,30 @@ mod tests {
     assert!(EventSegmenter::validate_split_indices(5, &[5]).is_err());
     assert!(EventSegmenter::validate_split_indices(5, &[3, 2]).is_err());
     assert!(EventSegmenter::validate_split_indices(5, &[2, 2]).is_err());
+  }
+
+  #[test]
+  fn split_retry_only_applies_to_unsplit_large_segments() {
+    let large_unsplit = vec![crate::EventSegment::new(
+      (0..16)
+        .map(|minute| message_event(minute as u128 + 1, minute, MessageEventRole::User, "x"))
+        .collect(),
+      Vec::new(),
+    )];
+    let large_split = vec![
+      crate::EventSegment::new(
+        vec![message_event(1, 0, MessageEventRole::User, "x")],
+        Vec::new(),
+      ),
+      crate::EventSegment::new(
+        vec![message_event(2, 1, MessageEventRole::User, "y")],
+        vec![EventSegmentReason::TopicShift],
+      ),
+    ];
+
+    assert!(EventSegmenter::needs_split_retry(16, &large_unsplit));
+    assert!(!EventSegmenter::needs_split_retry(16, &large_split));
+    assert!(!EventSegmenter::needs_split_retry(15, &large_unsplit));
   }
 
   #[test]
