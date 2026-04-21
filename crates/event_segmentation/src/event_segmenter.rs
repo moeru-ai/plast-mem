@@ -28,6 +28,7 @@ struct LargeSegmentSplitOutput {
 
 impl EventSegmenter {
   const TIME_GAP_THRESHOLD: TimeDelta = TimeDelta::minutes(30);
+  const HARD_TIME_GAP_THRESHOLD: TimeDelta = TimeDelta::hours(3);
   const SMALL_SEGMENT_MAX_EVENTS: usize = 4;
   const LARGE_SEGMENT_SPLIT_TRIGGER: usize = 20;
 
@@ -51,7 +52,7 @@ impl EventSegmenter {
           std::mem::take(&mut curr_reasons),
         ));
         curr_events.push(curr.clone());
-        curr_reasons.push(EventSegmentReason::TimeGap);
+        curr_reasons.push(Self::time_gap_reason(gap));
       } else {
         curr_events.push(curr.clone());
       }
@@ -123,7 +124,7 @@ impl EventSegmenter {
       return Ok(Some(segment));
     }
 
-    if segment.reasons.contains(&EventSegmentReason::TimeGap) {
+    if segment.reasons.contains(&EventSegmentReason::HardTimeGap) {
       return Ok(Some(segment));
     }
 
@@ -164,9 +165,9 @@ impl EventSegmenter {
     )
     .await?;
 
-    if output.reason_if_separate == EventSegmentReason::TimeGap {
+    if output.reason_if_separate.is_time_gap() {
       return Err(AppError::new(anyhow!(
-        "Small segment merge output cannot use time_gap as a semantic boundary reason"
+        "Small segment merge output cannot use time gap as a semantic boundary reason"
       )));
     }
 
@@ -220,10 +221,10 @@ impl EventSegmenter {
     if output
       .boundary_reasons
       .iter()
-      .any(|reason| *reason == EventSegmentReason::TimeGap)
+      .any(|reason| reason.is_time_gap())
     {
       return Err(
-        "Large segment split output cannot use time_gap as an internal boundary".to_owned(),
+        "Large segment split output cannot use time gap as an internal boundary".to_owned(),
       );
     }
 
@@ -289,6 +290,14 @@ impl EventSegmenter {
     Ok(validated)
   }
 
+  fn time_gap_reason(gap: TimeDelta) -> EventSegmentReason {
+    if gap > Self::HARD_TIME_GAP_THRESHOLD {
+      EventSegmentReason::HardTimeGap
+    } else {
+      EventSegmentReason::TimeGap
+    }
+  }
+
   pub async fn segment(events: &[Event]) -> Result<Vec<EventSegment>, AppError> {
     let segments = Self::segment_by_time_gap(events)?;
     Self::segment_by_llm(segments).await
@@ -330,6 +339,38 @@ mod tests {
     assert_eq!(segments[0].events.len(), 2);
     assert_eq!(segments[1].events.len(), 1);
     assert_eq!(segments[1].reasons, &[EventSegmentReason::TimeGap]);
+  }
+
+  #[test]
+  fn time_gap_segmentation_marks_hard_gaps() {
+    let events = vec![
+      message_event(1, 0, MessageEventRole::User, "one"),
+      message_event(2, 181, MessageEventRole::Assistant, "two"),
+    ];
+
+    let segments = EventSegmenter::segment_by_time_gap(&events).expect("segments");
+
+    assert_eq!(segments.len(), 2);
+    assert_eq!(segments[1].reasons, &[EventSegmentReason::HardTimeGap]);
+  }
+
+  #[tokio::test]
+  async fn hard_time_gap_blocks_small_segment_merge() {
+    let mut previous = crate::EventSegment::new(
+      vec![message_event(1, 0, MessageEventRole::User, "one")],
+      Vec::new(),
+    );
+    let segment = crate::EventSegment::new(
+      vec![message_event(2, 181, MessageEventRole::Assistant, "two")],
+      vec![EventSegmentReason::HardTimeGap],
+    );
+
+    let result = EventSegmenter::check_small_segment(&mut previous, segment)
+      .await
+      .expect("small segment check");
+
+    assert!(result.is_some());
+    assert_eq!(previous.events.len(), 1);
   }
 
   #[test]

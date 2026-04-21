@@ -13,8 +13,15 @@ pub struct EventSegment {
 pub enum EventSegmentReason {
   TopicShift,
   TimeGap,
+  HardTimeGap,
   IntentShift,
   StructuralCue,
+}
+
+impl EventSegmentReason {
+  pub fn is_time_gap(self) -> bool {
+    matches!(self, Self::TimeGap | Self::HardTimeGap)
+  }
 }
 
 impl EventSegment {

@@ -25,7 +25,7 @@ pub fn small_segment_merge_prompt(
       JSON_SCHEMA_REQUIREMENT,
       "Use merge_with_previous=true only when the current segment clearly continues the same topic or intent.",
       "If merge_with_previous=false, choose reason_if_separate from topic_shift, intent_shift, or structural_cue.",
-      "Never use time_gap as reason_if_separate.",
+      "Never use time_gap or hard_time_gap as reason_if_separate.",
       "Use only the provided events.",
     ]),
     user: small_segment_merge_user_content(previous_events, current_events),
@@ -52,7 +52,7 @@ pub fn large_segment_split_prompt(events: &[Event]) -> LlmPrompt {
       "Keep split indices unique and strictly ascending.",
       "If there is no meaningful boundary, return an empty array.",
       "Use only topic_shift, intent_shift, or structural_cue as boundary reasons.",
-      "Never use time_gap as an internal split reason.",
+      "Never use time_gap or hard_time_gap as an internal split reason.",
       "Use only the provided events.",
     ]),
     user: segment_user_content(
