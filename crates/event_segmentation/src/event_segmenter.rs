@@ -1,324 +1,350 @@
-use anyhow::anyhow;
+use std::collections::BTreeSet;
+
 use chrono::TimeDelta;
 use plastmem_ai::{
   ChatCompletionRequestMessage, ChatCompletionRequestSystemMessage,
-  ChatCompletionRequestUserMessage, generate_object,
+  ChatCompletionRequestUserMessage, cosine_similarity, embed_many, generate_object,
 };
-use plastmem_event::Event;
+use plastmem_event::{Event, EventDataToString};
 use plastmem_shared::AppError;
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use crate::prompt::{large_segment_split_prompt, small_segment_merge_prompt};
 use crate::{EventSegment, EventSegmentReason};
 
-pub struct EventSegmenter {}
+pub struct EventSegmenter;
 
-#[derive(Debug, Deserialize, JsonSchema)]
-struct SmallSegmentMergeOutput {
-  merge_with_previous: bool,
-  reason_if_separate: EventSegmentReason,
+#[derive(Debug, Clone)]
+struct BoundaryCandidate {
+  index: usize,
+  score: f32,
+  reason: EventSegmentReason,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
-struct LargeSegmentSplitOutput {
-  split_start_event_indices: Vec<u32>,
-  boundary_reasons: Vec<EventSegmentReason>,
+struct BoundaryReviewOutput {
+  keep_boundary_indices: Vec<u32>,
 }
+
+const SOFT_TIME_GAP: TimeDelta = TimeDelta::minutes(30);
+const HARD_TIME_GAP: TimeDelta = TimeDelta::hours(3);
+const MIN_SEGMENT_EVENTS: usize = 4;
+const REVIEW_CONTEXT_EVENTS: usize = 5;
+const MAX_REVIEW_CANDIDATES: usize = 40;
 
 impl EventSegmenter {
-  const TIME_GAP_THRESHOLD: TimeDelta = TimeDelta::minutes(30);
-  const HARD_TIME_GAP_THRESHOLD: TimeDelta = TimeDelta::hours(3);
-  const SMALL_SEGMENT_MAX_EVENTS: usize = 4;
-  const LARGE_SEGMENT_SPLIT_TRIGGER: usize = 15;
-
-  // Perform segmented processing on events with intervals exceeding 30 minutes.
-  fn segment_by_time_gap(events: &[Event]) -> Result<Vec<EventSegment>, AppError> {
+  pub async fn segment(events: &[Event]) -> Result<Vec<EventSegment>, AppError> {
     if events.is_empty() {
       return Ok(Vec::new());
     }
 
-    let mut segments = Vec::new();
-    let mut curr_events = vec![events[0].clone()];
-    let mut curr_reasons = Vec::new();
-    let mut prev = &events[0];
+    let inputs = events
+      .iter()
+      .map(|event| event.data.to_string_without_timestamp())
+      .collect::<Vec<_>>();
+    let embeddings = embed_many(&inputs)
+      .await?
+      .into_iter()
+      .map(|embedding| embedding.to_vec())
+      .collect::<Vec<_>>();
 
-    for curr in events.iter().skip(1) {
-      let gap = curr.timestamp.signed_duration_since(prev.timestamp);
-
-      if gap > Self::TIME_GAP_THRESHOLD {
-        segments.push(EventSegment::new(
-          std::mem::take(&mut curr_events),
-          std::mem::take(&mut curr_reasons),
-        ));
-        curr_events.push(curr.clone());
-        curr_reasons.push(Self::time_gap_reason(gap));
-      } else {
-        curr_events.push(curr.clone());
-      }
-
-      prev = curr;
-    }
-
-    segments.push(EventSegment::new(curr_events, curr_reasons));
-    Ok(segments)
+    Ok(Self::segment_with_embeddings(events, &embeddings).await)
   }
 
-  async fn segment_by_llm(
-    input_segments: Vec<EventSegment>,
-  ) -> Result<Vec<EventSegment>, AppError> {
+  async fn segment_with_embeddings(events: &[Event], embeddings: &[Vec<f32>]) -> Vec<EventSegment> {
     let mut segments = Vec::new();
+    let mut start = 0usize;
 
-    for segment in input_segments {
-      if segment.events.is_empty() {
+    for end in 1..=events.len() {
+      let is_partition_end = end == events.len()
+        || events[end]
+          .timestamp
+          .signed_duration_since(events[end - 1].timestamp)
+          > HARD_TIME_GAP;
+      if !is_partition_end {
         continue;
       }
 
-      for segment in Self::check_large_segment(segment).await {
-        if let Some(previous) = segments.last_mut() {
-          if let Some(segment) = Self::check_small_segment(previous, segment).await? {
-            segments.push(segment);
-          }
-        } else {
-          segments.push(segment);
-        }
-      }
+      let reason = (start > 0).then_some(EventSegmentReason::HardTimeGap);
+      segments.extend(
+        Self::segment_partition(&events[start..end], &embeddings[start..end])
+          .await
+          .into_iter()
+          .map(|segment| segment.prepend_reason_if_missing(reason)),
+      );
+      start = end;
     }
 
-    Ok(segments)
+    segments
   }
 
-  async fn check_large_segment(segment: EventSegment) -> Vec<EventSegment> {
-    if segment.events.len() <= Self::LARGE_SEGMENT_SPLIT_TRIGGER {
-      return vec![segment];
-    }
-
-    let reason = segment.reasons.first().copied();
-    let split_segments = Self::try_split_large_segment(&segment.events).await;
-    let split_segments = if Self::needs_split_retry(segment.events.len(), &split_segments) {
-      tracing::warn!(
-        event_count = segment.events.len(),
-        "Large event segment split returned one segment; retrying"
-      );
-      Self::try_split_large_segment(&segment.events).await
-    } else {
-      split_segments
-    };
-
-    if split_segments.is_empty() {
-      return vec![EventSegment::new(
-        segment.events,
-        reason.into_iter().collect(),
+  async fn segment_partition(events: &[Event], embeddings: &[Vec<f32>]) -> Vec<EventSegment> {
+    if events.len() <= 1 {
+      return vec![EventSegment::with_metadata(
+        events.to_vec(),
+        Vec::new(),
+        1.0,
+        1.0,
+        1.0,
       )];
     }
 
-    split_segments
-      .into_iter()
-      .enumerate()
-      .map(|(index, segment)| {
-        if index == 0 {
-          segment.prepend_reason_if_missing(reason)
-        } else {
-          segment
-        }
-      })
-      .collect()
-  }
-
-  async fn check_small_segment(
-    previous: &mut EventSegment,
-    segment: EventSegment,
-  ) -> Result<Option<EventSegment>, AppError> {
-    if segment.events.len() > Self::SMALL_SEGMENT_MAX_EVENTS {
-      return Ok(Some(segment));
-    }
-
-    if segment.reasons.contains(&EventSegmentReason::HardTimeGap) {
-      return Ok(Some(segment));
-    }
-
-    let merge_output =
-      Self::should_merge_small_segment(&previous.events, &segment.events, &segment.reasons)
-        .await
-        .unwrap_or(SmallSegmentMergeOutput {
-          merge_with_previous: false,
-          reason_if_separate: EventSegmentReason::TopicShift,
-        });
-
-    if !merge_output.merge_with_previous {
-      return Ok(Some(
-        segment.replace_reason(merge_output.reason_if_separate),
-      ));
-    }
-
-    previous.extend_events(segment.events);
-    Ok(None)
-  }
-
-  async fn should_merge_small_segment(
-    previous_events: &[Event],
-    current_events: &[Event],
-    boundary_reasons: &[EventSegmentReason],
-  ) -> Result<SmallSegmentMergeOutput, AppError> {
-    let prompt = small_segment_merge_prompt(previous_events, current_events, boundary_reasons);
-    let system = ChatCompletionRequestSystemMessage::from(prompt.system);
-    let user = ChatCompletionRequestUserMessage::from(prompt.user);
-
-    let output = generate_object::<SmallSegmentMergeOutput>(
-      vec![
-        ChatCompletionRequestMessage::System(system),
-        ChatCompletionRequestMessage::User(user),
-      ],
-      "event_small_segment_merge".to_owned(),
-      Some(
-        "Decide whether a small event segment should merge into the previous segment".to_owned(),
-      ),
-    )
-    .await?;
-
-    if output.reason_if_separate.is_time_gap() {
-      return Err(AppError::new(anyhow!(
-        "Small segment merge output cannot use time gap as a semantic boundary reason"
-      )));
-    }
-
-    Ok(output)
-  }
-
-  async fn split_large_segment(events: &[Event]) -> Result<Vec<EventSegment>, AppError> {
-    let prompt = large_segment_split_prompt(events);
-    let system = ChatCompletionRequestSystemMessage::from(prompt.system);
-    let user = ChatCompletionRequestUserMessage::from(prompt.user);
-
-    let output = generate_object::<LargeSegmentSplitOutput>(
-      vec![
-        ChatCompletionRequestMessage::System(system),
-        ChatCompletionRequestMessage::User(user),
-      ],
-      "event_large_segment_split".to_owned(),
-      Some("Split a large event segment into topic-consistent event segments".to_owned()),
-    )
-    .await?;
-
-    Self::resolve_large_segment_split(events, output)
-      .map_err(|reason| AppError::new(anyhow!(reason)))
-  }
-
-  async fn try_split_large_segment(events: &[Event]) -> Vec<EventSegment> {
-    match Self::split_large_segment(events).await {
-      Ok(segments) => segments,
+    let prefix = build_prefix(embeddings);
+    let candidates = collect_candidates(events, embeddings, &prefix);
+    let reviewed = match review_candidates_with_llm(events, &candidates).await {
+      Ok(reviewed) => reviewed,
       Err(err) => {
-        tracing::warn!(
-          event_count = events.len(),
-          error = %err,
-          "Large event segment split failed; falling back to one segment"
-        );
-        vec![EventSegment::new(events.to_vec(), Vec::new())]
+        tracing::warn!(error = %err, "Boundary review failed; using embedding candidates");
+        candidates
       }
+    };
+
+    build_segments(events, embeddings, &prefix, &reviewed)
+  }
+}
+
+fn collect_candidates(
+  events: &[Event],
+  embeddings: &[Vec<f32>],
+  prefix: &[Vec<f32>],
+) -> Vec<BoundaryCandidate> {
+  let mut candidates = Vec::new();
+  for index in 1..events.len() {
+    if index < MIN_SEGMENT_EVENTS || events.len() - index < MIN_SEGMENT_EVENTS {
+      continue;
     }
+    candidates.push(BoundaryCandidate {
+      index,
+      score: boundary_score(events, embeddings, prefix, index),
+      reason: if time_gap_before(events, index) >= SOFT_TIME_GAP {
+        EventSegmentReason::TimeGap
+      } else {
+        EventSegmentReason::TopicShift
+      },
+    });
   }
 
-  fn resolve_large_segment_split(
-    events: &[Event],
-    output: LargeSegmentSplitOutput,
-  ) -> Result<Vec<EventSegment>, String> {
-    let split_indices =
-      Self::validate_split_indices(events.len(), &output.split_start_event_indices)?;
+  candidates.sort_by(|left, right| right.score.total_cmp(&left.score));
+  candidates.truncate(MAX_REVIEW_CANDIDATES.min(events.len().saturating_sub(1)));
+  candidates.sort_by_key(|candidate| candidate.index);
+  candidates
+}
 
-    if output.boundary_reasons.len() != split_indices.len() {
-      return Err("boundary_reasons length must match split_start_event_indices".to_owned());
-    }
-
-    if output
-      .boundary_reasons
-      .iter()
-      .any(|reason| reason.is_time_gap())
-    {
-      return Err(
-        "Large segment split output cannot use time gap as an internal boundary".to_owned(),
-      );
-    }
-
-    Ok(Self::rebuild_split_segments(
-      events,
-      &output.split_start_event_indices,
-      &output.boundary_reasons,
-    )?)
+async fn review_candidates_with_llm(
+  events: &[Event],
+  candidates: &[BoundaryCandidate],
+) -> Result<Vec<BoundaryCandidate>, AppError> {
+  let budget = boundary_budget(events.len());
+  if candidates.is_empty() || budget == 0 {
+    return Ok(Vec::new());
   }
 
-  fn rebuild_split_segments(
-    events: &[Event],
-    split_start_event_indices: &[u32],
-    boundary_reasons: &[EventSegmentReason],
-  ) -> Result<Vec<EventSegment>, String> {
-    let split_indices = Self::validate_split_indices(events.len(), split_start_event_indices)?;
-    if split_indices.len() != boundary_reasons.len() {
-      return Err("boundary_reasons length must match split_start_event_indices".to_owned());
-    }
+  let mut ranked = candidates.to_vec();
+  ranked.sort_by_key(|candidate| candidate.index);
 
-    if split_indices.is_empty() {
-      return Ok(vec![EventSegment::new(events.to_vec(), Vec::new())]);
-    }
+  let output = generate_object::<BoundaryReviewOutput>(
+    vec![
+      ChatCompletionRequestMessage::System(ChatCompletionRequestSystemMessage::from(
+        "Return JSON with keep_boundary_indices. Keep only candidate indices where the conversation starts a new event-level topic, activity, plan, story, or intent.",
+      )),
+      ChatCompletionRequestMessage::User(ChatCompletionRequestUserMessage::from(
+        build_review_prompt(events, &ranked),
+      )),
+    ],
+    "event_boundary_review_batch".to_owned(),
+    Some("Review candidate event boundaries".to_owned()),
+  )
+  .await?;
 
-    let mut normalized = Vec::with_capacity(boundary_reasons.len() + 1);
-    normalized.push(EventSegment::new(
-      events[..split_indices[0]].to_vec(),
-      Vec::new(),
+  let keep_indices = output
+    .keep_boundary_indices
+    .into_iter()
+    .filter_map(|index| usize::try_from(index).ok())
+    .collect::<BTreeSet<_>>();
+  Ok(
+    ranked
+      .into_iter()
+      .filter(|candidate| keep_indices.contains(&candidate.index))
+      .take(budget)
+      .collect(),
+  )
+}
+
+fn build_review_prompt(events: &[Event], candidates: &[BoundaryCandidate]) -> String {
+  let mut prompt = format!(
+    "Review candidate boundaries for a multilingual dialogue. Keep at most {} indices. Nearby candidate indices may describe the same transition; choose the single best index, not all of them. Prefer fewer, larger event segments, but keep real pivots between unrelated subjects, activities, plans, stories, or intents. Do not split follow-ups, clarifications, examples, greetings, or closing turns. It is valid to keep none.\n\n",
+    boundary_budget(events.len())
+  );
+
+  for candidate in candidates {
+    let left = candidate.index.saturating_sub(REVIEW_CONTEXT_EVENTS);
+    let right = (candidate.index + REVIEW_CONTEXT_EVENTS).min(events.len());
+    prompt.push_str(&format!(
+      "Candidate boundary_index={} score={:.3}:\n",
+      candidate.index, candidate.score
     ));
-    for (idx, split_index) in split_indices.iter().enumerate() {
-      let end = split_indices.get(idx + 1).copied().unwrap_or(events.len());
-      normalized.push(EventSegment::new(
-        events[*split_index..end].to_vec(),
-        vec![boundary_reasons[idx]],
+    for (offset, event) in events[left..right].iter().enumerate() {
+      let index = left + offset;
+      if index == candidate.index {
+        prompt.push_str("  <BOUNDARY>\n");
+      }
+      prompt.push_str(&format!(
+        "  [idx={index}] {} {}\n",
+        event.timestamp.format("%Y-%m-%dT%H:%M:%SZ"),
+        event.data.to_string_without_timestamp()
       ));
     }
-    Ok(normalized)
+    prompt.push('\n');
   }
 
-  fn validate_split_indices(
-    event_count: usize,
-    split_indices: &[u32],
-  ) -> Result<Vec<usize>, String> {
-    let mut validated = Vec::with_capacity(split_indices.len());
-    let mut previous = 0usize;
+  prompt
+}
 
-    for &split_index in split_indices {
-      let split_index =
-        usize::try_from(split_index).map_err(|_| "Split index conversion overflow".to_owned())?;
-      if split_index == 0 {
-        return Err("Split indices must not include 0".to_owned());
-      }
-      if split_index >= event_count {
-        return Err("Split indices must be within the event range".to_owned());
-      }
-      if !validated.is_empty() && split_index <= previous {
-        return Err("Split indices must be unique and strictly ascending".to_owned());
-      }
-      previous = split_index;
-      validated.push(split_index);
+fn boundary_budget(event_count: usize) -> usize {
+  if event_count >= 36 { 3 } else { 0 }
+}
+
+fn build_segments(
+  events: &[Event],
+  embeddings: &[Vec<f32>],
+  prefix: &[Vec<f32>],
+  boundaries: &[BoundaryCandidate],
+) -> Vec<EventSegment> {
+  let mut result = Vec::new();
+  let mut start = 0usize;
+  let mut points = boundaries
+    .iter()
+    .map(|candidate| candidate.index)
+    .collect::<Vec<_>>();
+  points.push(events.len());
+
+  for end in points {
+    if start >= end {
+      continue;
     }
-
-    Ok(validated)
+    let reason = boundaries
+      .iter()
+      .find(|candidate| candidate.index == start)
+      .map(|candidate| candidate.reason)
+      .into_iter()
+      .collect::<Vec<_>>();
+    let score = segment_cohesion(embeddings, prefix, start, end);
+    result.push(EventSegment::with_metadata(
+      events[start..end].to_vec(),
+      reason,
+      score,
+      confidence_for(boundaries, start),
+      confidence_for(boundaries, end),
+    ));
+    start = end;
   }
 
-  fn time_gap_reason(gap: TimeDelta) -> EventSegmentReason {
-    if gap > Self::HARD_TIME_GAP_THRESHOLD {
-      EventSegmentReason::HardTimeGap
-    } else {
-      EventSegmentReason::TimeGap
+  merge_tiny_segments(result)
+}
+
+fn build_prefix(embeddings: &[Vec<f32>]) -> Vec<Vec<f32>> {
+  let dims = embeddings.first().map_or(0, Vec::len);
+  let mut prefix = vec![vec![0.0; dims]];
+  for embedding in embeddings {
+    let mut next = prefix.last().cloned().unwrap_or_else(|| vec![0.0; dims]);
+    for (value, current) in next.iter_mut().zip(embedding) {
+      *value += current;
+    }
+    prefix.push(next);
+  }
+  prefix
+}
+
+fn boundary_score(
+  events: &[Event],
+  embeddings: &[Vec<f32>],
+  prefix: &[Vec<f32>],
+  index: usize,
+) -> f32 {
+  let left_start = index.saturating_sub(REVIEW_CONTEXT_EVENTS);
+  let right_end = (index + REVIEW_CONTEXT_EVENTS).min(events.len());
+  let left = mean_vector(prefix, left_start, index);
+  let right = mean_vector(prefix, index, right_end);
+  let separation = 1.0 - cosine_similarity(&left, &right);
+  let cohesion = (segment_cohesion(embeddings, prefix, left_start, index)
+    + segment_cohesion(embeddings, prefix, index, right_end))
+    * 0.5;
+  let mut score = separation + 0.12 * cohesion;
+
+  if time_gap_before(events, index) >= SOFT_TIME_GAP {
+    score += 0.16;
+  }
+  score
+}
+
+fn mean_vector(prefix: &[Vec<f32>], start: usize, end: usize) -> Vec<f32> {
+  if start >= end || prefix.is_empty() {
+    return Vec::new();
+  }
+
+  let count = (end - start) as f32;
+  let mut mean = prefix[end]
+    .iter()
+    .zip(&prefix[start])
+    .map(|(right, left)| (right - left) / count)
+    .collect::<Vec<_>>();
+  normalize(&mut mean);
+  mean
+}
+
+fn normalize(vector: &mut [f32]) {
+  let norm = vector.iter().map(|value| value * value).sum::<f32>().sqrt();
+  if norm > f32::EPSILON {
+    for value in vector {
+      *value /= norm;
     }
   }
+}
 
-  fn needs_split_retry(event_count: usize, segments: &[EventSegment]) -> bool {
-    event_count > Self::LARGE_SEGMENT_SPLIT_TRIGGER
-      && segments.len() == 1
-      && segments[0].events.len() == event_count
+fn segment_cohesion(embeddings: &[Vec<f32>], prefix: &[Vec<f32>], start: usize, end: usize) -> f32 {
+  if end <= start + 1 {
+    return 1.0;
   }
 
-  pub async fn segment(events: &[Event]) -> Result<Vec<EventSegment>, AppError> {
-    let segments = Self::segment_by_time_gap(events)?;
-    Self::segment_by_llm(segments).await
+  let mean = mean_vector(prefix, start, end);
+  let total = embeddings[start..end]
+    .iter()
+    .map(|embedding| cosine_similarity(embedding, &mean))
+    .sum::<f32>();
+  (total / (end - start) as f32).clamp(-1.0, 1.0)
+}
+
+fn time_gap_before(events: &[Event], index: usize) -> TimeDelta {
+  if index == 0 || index >= events.len() {
+    return TimeDelta::zero();
   }
+  events[index]
+    .timestamp
+    .signed_duration_since(events[index - 1].timestamp)
+}
+
+fn confidence_for(boundaries: &[BoundaryCandidate], index: usize) -> f32 {
+  if index == 0 || boundaries.iter().all(|candidate| candidate.index != index) {
+    return 1.0;
+  }
+  boundaries
+    .iter()
+    .find(|candidate| candidate.index == index)
+    .map_or(0.35, |candidate| (candidate.score / 1.25).clamp(0.0, 1.0))
+}
+
+fn merge_tiny_segments(mut segments: Vec<EventSegment>) -> Vec<EventSegment> {
+  let mut merged: Vec<EventSegment> = Vec::new();
+  for segment in segments.drain(..) {
+    if segment.events.len() >= MIN_SEGMENT_EVENTS || merged.is_empty() {
+      merged.push(segment);
+    } else if let Some(previous) = merged.last_mut() {
+      previous.events.extend(segment.events);
+      previous.boundary_after_confidence = segment.boundary_after_confidence;
+      previous.score = previous.score.min(segment.score);
+    }
+  }
+  merged
 }
 
 #[cfg(test)]
@@ -326,13 +352,12 @@ mod tests {
   use chrono::{TimeZone, Utc};
   use plastmem_event::{Event, EventData, MessageEventData, MessageEventRole};
 
-  use super::{EventSegmenter, LargeSegmentSplitOutput};
-  use crate::EventSegmentReason;
+  use super::*;
 
-  fn message_event(id: u128, minute: i64, role: MessageEventRole, content: &str) -> Event {
+  fn message_event(id: u128, minute: i64, content: &str) -> Event {
     Event::new(
       EventData::Message(MessageEventData {
-        role,
+        role: MessageEventRole::User,
         content: content.to_owned(),
       }),
       Utc
@@ -343,136 +368,66 @@ mod tests {
     )
   }
 
-  #[test]
-  fn time_gap_segmentation_builds_segments() {
-    let events = vec![
-      message_event(1, 0, MessageEventRole::User, "one"),
-      message_event(2, 5, MessageEventRole::Assistant, "two"),
-      message_event(3, 50, MessageEventRole::User, "three"),
-    ];
-
-    let segments = EventSegmenter::segment_by_time_gap(&events).expect("segments");
-    assert_eq!(segments.len(), 2);
-    assert_eq!(segments[0].events.len(), 2);
-    assert_eq!(segments[1].events.len(), 1);
-    assert_eq!(segments[1].reasons, &[EventSegmentReason::TimeGap]);
+  fn embedding(x: f32, y: f32) -> Vec<f32> {
+    let mut value = vec![x, y];
+    normalize(&mut value);
+    value
   }
 
   #[test]
-  fn time_gap_segmentation_marks_hard_gaps() {
+  fn embedding_candidates_find_obvious_topic_shift() {
+    let events = (0..8)
+      .map(|index| message_event(index + 1, index as i64, "message"))
+      .collect::<Vec<_>>();
+    let embeddings = vec![
+      embedding(1.0, 0.0),
+      embedding(1.0, 0.0),
+      embedding(1.0, 0.0),
+      embedding(1.0, 0.0),
+      embedding(0.0, 1.0),
+      embedding(0.0, 1.0),
+      embedding(0.0, 1.0),
+      embedding(0.0, 1.0),
+    ];
+    let prefix = build_prefix(&embeddings);
+    let candidates = collect_candidates(&events, &embeddings, &prefix);
+    let segments = build_segments(&events, &embeddings, &prefix, &candidates);
+
+    assert_eq!(
+      candidates
+        .iter()
+        .map(|candidate| candidate.index)
+        .collect::<Vec<_>>(),
+      vec![4]
+    );
+    assert_eq!(segments.len(), 2);
+    assert_eq!(segments[1].reasons, &[EventSegmentReason::TopicShift]);
+  }
+
+  #[tokio::test]
+  async fn hard_time_gap_forces_partition_boundary() {
     let events = vec![
-      message_event(1, 0, MessageEventRole::User, "one"),
-      message_event(2, 181, MessageEventRole::Assistant, "two"),
+      message_event(1, 0, "a"),
+      message_event(2, 1, "a"),
+      message_event(3, 240, "a"),
+      message_event(4, 241, "a"),
+    ];
+    let embeddings = vec![
+      embedding(1.0, 0.0),
+      embedding(1.0, 0.0),
+      embedding(1.0, 0.0),
+      embedding(1.0, 0.0),
     ];
 
-    let segments = EventSegmenter::segment_by_time_gap(&events).expect("segments");
+    let segments = EventSegmenter::segment_with_embeddings(&events, &embeddings).await;
 
     assert_eq!(segments.len(), 2);
     assert_eq!(segments[1].reasons, &[EventSegmentReason::HardTimeGap]);
   }
 
-  #[tokio::test]
-  async fn hard_time_gap_blocks_small_segment_merge() {
-    let mut previous = crate::EventSegment::new(
-      vec![message_event(1, 0, MessageEventRole::User, "one")],
-      Vec::new(),
-    );
-    let segment = crate::EventSegment::new(
-      vec![message_event(2, 181, MessageEventRole::Assistant, "two")],
-      vec![EventSegmentReason::HardTimeGap],
-    );
-
-    let result = EventSegmenter::check_small_segment(&mut previous, segment)
-      .await
-      .expect("small segment check");
-
-    assert!(result.is_some());
-    assert_eq!(previous.events.len(), 1);
-  }
-
   #[test]
-  fn validate_split_indices_rejects_invalid_shapes() {
-    assert!(EventSegmenter::validate_split_indices(5, &[0]).is_err());
-    assert!(EventSegmenter::validate_split_indices(5, &[5]).is_err());
-    assert!(EventSegmenter::validate_split_indices(5, &[3, 2]).is_err());
-    assert!(EventSegmenter::validate_split_indices(5, &[2, 2]).is_err());
-  }
-
-  #[test]
-  fn split_retry_only_applies_to_unsplit_large_segments() {
-    let large_unsplit = vec![crate::EventSegment::new(
-      (0..16)
-        .map(|minute| message_event(minute as u128 + 1, minute, MessageEventRole::User, "x"))
-        .collect(),
-      Vec::new(),
-    )];
-    let large_split = vec![
-      crate::EventSegment::new(
-        vec![message_event(1, 0, MessageEventRole::User, "x")],
-        Vec::new(),
-      ),
-      crate::EventSegment::new(
-        vec![message_event(2, 1, MessageEventRole::User, "y")],
-        vec![EventSegmentReason::TopicShift],
-      ),
-    ];
-
-    assert!(EventSegmenter::needs_split_retry(16, &large_unsplit));
-    assert!(!EventSegmenter::needs_split_retry(16, &large_split));
-    assert!(!EventSegmenter::needs_split_retry(15, &large_unsplit));
-  }
-
-  #[test]
-  fn rebuild_split_segments_assigns_boundary_reasons() {
-    let events = vec![
-      message_event(1, 0, MessageEventRole::User, "a"),
-      message_event(2, 1, MessageEventRole::Assistant, "b"),
-      message_event(3, 2, MessageEventRole::User, "c"),
-      message_event(4, 3, MessageEventRole::Assistant, "d"),
-    ];
-
-    let segments =
-      EventSegmenter::rebuild_split_segments(&events, &[2], &[EventSegmentReason::TopicShift])
-        .expect("segments");
-
-    assert_eq!(segments.len(), 2);
-    assert_eq!(segments[0].events.len(), 2);
-    assert!(segments[0].reasons.is_empty());
-    assert_eq!(segments[1].events.len(), 2);
-    assert_eq!(segments[1].reasons, &[EventSegmentReason::TopicShift]);
-  }
-
-  #[test]
-  fn replace_reason_overwrites_existing_boundary_reason() {
-    let segment = crate::EventSegment::new(
-      vec![
-        message_event(1, 0, MessageEventRole::User, "a"),
-        message_event(2, 1, MessageEventRole::Assistant, "b"),
-      ],
-      vec![EventSegmentReason::TopicShift],
-    );
-
-    let segment = segment.replace_reason(EventSegmentReason::IntentShift);
-
-    assert_eq!(segment.reasons, &[EventSegmentReason::IntentShift]);
-  }
-
-  #[test]
-  fn resolve_large_segment_split_rejects_time_gap_reason() {
-    let events = vec![
-      message_event(1, 0, MessageEventRole::User, "a"),
-      message_event(2, 1, MessageEventRole::Assistant, "b"),
-      message_event(3, 2, MessageEventRole::User, "c"),
-    ];
-
-    let result = EventSegmenter::resolve_large_segment_split(
-      &events,
-      LargeSegmentSplitOutput {
-        split_start_event_indices: vec![1],
-        boundary_reasons: vec![EventSegmentReason::TimeGap],
-      },
-    );
-
-    assert!(result.is_err());
+  fn short_partitions_do_not_keep_internal_boundaries() {
+    assert_eq!(boundary_budget(35), 0);
+    assert_eq!(boundary_budget(36), 3);
   }
 }

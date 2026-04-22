@@ -7,6 +7,9 @@ use strum::AsRefStr;
 pub struct EventSegment {
   pub events: Vec<Event>,
   pub reasons: Vec<EventSegmentReason>,
+  pub score: f32,
+  pub boundary_before_confidence: f32,
+  pub boundary_after_confidence: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, AsRefStr)]
@@ -28,7 +31,29 @@ impl EventSegmentReason {
 
 impl EventSegment {
   pub fn new(events: Vec<Event>, reasons: Vec<EventSegmentReason>) -> Self {
-    Self { events, reasons }
+    Self {
+      events,
+      reasons,
+      score: 1.0,
+      boundary_before_confidence: 1.0,
+      boundary_after_confidence: 1.0,
+    }
+  }
+
+  pub fn with_metadata(
+    events: Vec<Event>,
+    reasons: Vec<EventSegmentReason>,
+    score: f32,
+    boundary_before_confidence: f32,
+    boundary_after_confidence: f32,
+  ) -> Self {
+    Self {
+      events,
+      reasons,
+      score,
+      boundary_before_confidence,
+      boundary_after_confidence,
+    }
   }
 
   pub fn prepend_reason_if_missing(mut self, reason: Option<EventSegmentReason>) -> Self {
