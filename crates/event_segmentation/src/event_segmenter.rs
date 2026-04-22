@@ -34,6 +34,19 @@ struct BoundaryDecision {
   confidence: f32,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+struct ShortSegmentMergeReviewOutput {
+  decisions: Vec<ShortSegmentMergeDecision>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct ShortSegmentMergeDecision {
+  segment_index: u32,
+  merge_with_previous: bool,
+  reason: ShortSegmentMergeReason,
+  confidence: f32,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 enum BoundaryLabel {
@@ -52,6 +65,30 @@ impl BoundaryLabel {
     matches!(
       self,
       Self::TopicShift | Self::TopicIntro | Self::IntentShift | Self::ActivityShift
+    )
+  }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum ShortSegmentMergeReason {
+  SameTopicContinuation,
+  DetailElaboration,
+  DirectResponse,
+  ClosingOrFarewell,
+  SeparateTopic,
+  SeparateActivity,
+  SeparateIntent,
+}
+
+impl ShortSegmentMergeReason {
+  fn is_merge(self) -> bool {
+    matches!(
+      self,
+      Self::SameTopicContinuation
+        | Self::DetailElaboration
+        | Self::DirectResponse
+        | Self::ClosingOrFarewell
     )
   }
 }
@@ -134,7 +171,14 @@ impl EventSegmenter {
       }
     };
 
-    build_segments(events, embeddings, &prefix, &reviewed)
+    let segments = build_segments(events, embeddings, &prefix, &reviewed);
+    match review_short_segments_with_llm(&segments).await {
+      Ok(segments) => segments,
+      Err(err) => {
+        tracing::warn!(error = %err, "Short segment merge review failed; keeping reviewed boundaries");
+        segments
+      }
+    }
   }
 }
 
@@ -326,7 +370,96 @@ fn build_segments(
     start = end;
   }
 
-  merge_tiny_segments(result)
+  result
+}
+
+async fn review_short_segments_with_llm(
+  segments: &[EventSegment],
+) -> Result<Vec<EventSegment>, AppError> {
+  let short_indices = segments
+    .iter()
+    .enumerate()
+    .skip(1)
+    .filter_map(|(index, segment)| {
+      (segment.events.len() <= MIN_SEGMENT_EVENTS + 1).then_some(index)
+    })
+    .collect::<Vec<_>>();
+  if short_indices.is_empty() {
+    return Ok(segments.to_vec());
+  }
+
+  let output = generate_object::<ShortSegmentMergeReviewOutput>(
+    vec![
+      ChatCompletionRequestMessage::System(ChatCompletionRequestSystemMessage::from(
+        "Return JSON with decisions. Reasons must be one of: same_topic_continuation, detail_elaboration, direct_response, closing_or_farewell, separate_topic, separate_activity, separate_intent.",
+      )),
+      ChatCompletionRequestMessage::User(ChatCompletionRequestUserMessage::from(
+        build_short_segment_merge_prompt(segments, &short_indices),
+      )),
+    ],
+    "event_short_segment_merge_review".to_owned(),
+    Some("Review short event segments for semantic merge".to_owned()),
+  )
+  .await?;
+
+  Ok(apply_short_segment_merge_decisions(
+    segments,
+    output.decisions,
+  ))
+}
+
+fn build_short_segment_merge_prompt(segments: &[EventSegment], short_indices: &[usize]) -> String {
+  let mut prompt = "Review short event segments in a multilingual dialogue. For each listed segment_index, decide whether the current short segment should merge with the immediately previous segment. Merge only when the short segment is a continuation, detail, direct response, greeting/closing, or small conversational tail of the previous event. Keep separate when it starts an independent topic, activity, intent, story, or plan. Use semantic relation across languages; do not rely on English keywords. Return one decision for every listed segment_index.\n\n".to_owned();
+
+  for &index in short_indices {
+    prompt.push_str(&format!("segment_index={index}\nprevious_segment_tail:\n"));
+    let previous = &segments[index - 1].events;
+    let previous_start = previous.len().saturating_sub(REVIEW_CONTEXT_EVENTS + 3);
+    append_events(&mut prompt, &previous[previous_start..]);
+    prompt.push_str("current_short_segment:\n");
+    append_events(&mut prompt, &segments[index].events);
+    prompt.push('\n');
+  }
+
+  prompt
+}
+
+fn append_events(prompt: &mut String, events: &[Event]) {
+  for event in events {
+    prompt.push_str(&format!(
+      "  {} {}\n",
+      event.timestamp.format("%Y-%m-%dT%H:%M:%SZ"),
+      event.data.to_string_without_timestamp()
+    ));
+  }
+}
+
+fn apply_short_segment_merge_decisions(
+  segments: &[EventSegment],
+  decisions: Vec<ShortSegmentMergeDecision>,
+) -> Vec<EventSegment> {
+  let merge_indices = decisions
+    .into_iter()
+    .filter(|decision| {
+      decision.merge_with_previous && decision.confidence >= 0.55 && decision.reason.is_merge()
+    })
+    .filter_map(|decision| usize::try_from(decision.segment_index).ok())
+    .collect::<BTreeSet<_>>();
+
+  let mut merged: Vec<EventSegment> = Vec::new();
+  for (index, segment) in segments.iter().cloned().enumerate() {
+    if index > 0
+      && merge_indices.contains(&index)
+      && let Some(previous) = merged.last_mut()
+    {
+      previous.events.extend(segment.events);
+      previous.boundary_after_confidence = segment.boundary_after_confidence;
+      previous.score = previous.score.min(segment.score);
+    } else {
+      merged.push(segment);
+    }
+  }
+  merged
 }
 
 fn build_prefix(embeddings: &[Vec<f32>]) -> Vec<Vec<f32>> {
@@ -418,20 +551,6 @@ fn confidence_for(boundaries: &[BoundaryCandidate], index: usize) -> f32 {
     .iter()
     .find(|candidate| candidate.index == index)
     .map_or(0.35, |candidate| (candidate.score / 1.25).clamp(0.0, 1.0))
-}
-
-fn merge_tiny_segments(mut segments: Vec<EventSegment>) -> Vec<EventSegment> {
-  let mut merged: Vec<EventSegment> = Vec::new();
-  for segment in segments.drain(..) {
-    if segment.events.len() >= MIN_SEGMENT_EVENTS || merged.is_empty() {
-      merged.push(segment);
-    } else if let Some(previous) = merged.last_mut() {
-      previous.events.extend(segment.events);
-      previous.boundary_after_confidence = segment.boundary_after_confidence;
-      previous.score = previous.score.min(segment.score);
-    }
-  }
-  merged
 }
 
 #[cfg(test)]
