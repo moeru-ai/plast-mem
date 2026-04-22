@@ -61,6 +61,8 @@ const HARD_TIME_GAP: TimeDelta = TimeDelta::hours(3);
 const MIN_SEGMENT_EVENTS: usize = 4;
 const REVIEW_CONTEXT_EVENTS: usize = 5;
 const MAX_REVIEW_CANDIDATES: usize = 40;
+const TARGET_EVENTS_PER_SEGMENT: usize = 12;
+const MAX_BOUNDARIES_PER_PARTITION: usize = 4;
 
 impl EventSegmenter {
   pub async fn segment(events: &[Event]) -> Result<Vec<EventSegment>, AppError> {
@@ -280,7 +282,13 @@ fn build_review_prompt(events: &[Event], candidates: &[BoundaryCandidate]) -> St
 }
 
 fn boundary_budget(event_count: usize) -> usize {
-  if event_count >= 36 { 3 } else { 0 }
+  if event_count < TARGET_EVENTS_PER_SEGMENT * 2 {
+    return 0;
+  }
+
+  (event_count / TARGET_EVENTS_PER_SEGMENT)
+    .saturating_sub(1)
+    .min(MAX_BOUNDARIES_PER_PARTITION)
 }
 
 fn build_segments(
@@ -505,8 +513,10 @@ mod tests {
   }
 
   #[test]
-  fn short_partitions_do_not_keep_internal_boundaries() {
-    assert_eq!(boundary_budget(35), 0);
-    assert_eq!(boundary_budget(36), 3);
+  fn boundary_budget_scales_with_partition_size() {
+    assert_eq!(boundary_budget(23), 0);
+    assert_eq!(boundary_budget(24), 1);
+    assert_eq!(boundary_budget(37), 2);
+    assert_eq!(boundary_budget(60), MAX_BOUNDARIES_PER_PARTITION);
   }
 }
