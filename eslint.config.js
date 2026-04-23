@@ -5,6 +5,7 @@ export default defineConfig({
   react: true,
 }).append({
   rules: {
+    'sonarjs/publicly-writable-directories': 'off',
     'toml/padding-line-between-pairs': 'off',
   },
 }).append({

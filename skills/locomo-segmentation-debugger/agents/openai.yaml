@@ -1,0 +1,4 @@
+interface:
+  display_name: "LoCoMo Seg Debugger"
+  short_description: "Use the locomo_segmenter debugger and inspect segment JSON."
+  default_prompt: "Use the LoCoMo event segmentation debugger, inspect JSON output, and compare conv-47 against broader sample runs when needed."
