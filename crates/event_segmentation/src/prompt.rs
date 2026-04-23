@@ -22,7 +22,7 @@ const SPLIT_SENSITIVITY_GUIDANCE: &str = "Use high sensitivity to real boundary 
 pub fn small_segment_merge_prompt(
   previous_events: &[Event],
   current_events: &[Event],
-  boundary_reasons: &[EventSegmentReason],
+  boundary_reason: EventSegmentReason,
 ) -> LlmPrompt {
   LlmPrompt {
     system: compose_prompt(&[
@@ -33,7 +33,7 @@ pub fn small_segment_merge_prompt(
       "Never use time_gap or hard_time_gap as reason_if_separate.",
       "Use only the provided events.",
     ]),
-    user: small_segment_merge_user_content(previous_events, current_events, boundary_reasons),
+    user: small_segment_merge_user_content(previous_events, current_events, boundary_reason),
   }
 }
 
@@ -76,22 +76,18 @@ fn compose_prompt(sections: &[&str]) -> String {
 fn small_segment_merge_user_content(
   previous_events: &[Event],
   current_events: &[Event],
-  boundary_reasons: &[EventSegmentReason],
+  boundary_reason: EventSegmentReason,
 ) -> String {
   let mut output = segment_user_content(
     "Previous segment events",
     previous_events,
     "compare against the current small segment",
   );
-  if !boundary_reasons.is_empty() {
-    output.push_str("\nCandidate boundary before current small segment:\n");
-    for reason in boundary_reasons {
-      output.push_str(&format!("- reason={}\n", reason.as_ref()));
-    }
-    output.push_str(
-      "- Treat these as hints, not commands. Merge only when the current segment clearly continues the previous segment.\n",
-    );
-  }
+  output.push_str("\nCandidate boundary before current small segment:\n");
+  output.push_str(&format!("- reason={}\n", boundary_reason.as_ref()));
+  output.push_str(
+    "- Treat these as hints, not commands. Merge only when the current segment clearly continues the previous segment.\n",
+  );
   output.push_str("\nCurrent small segment events:\n");
   output.push_str(&format!(
     "- local event count: {}\n- decide whether this segment should merge into the previous segment\n",
@@ -152,7 +148,7 @@ mod tests {
     let previous = vec![message_event("previous")];
     let current = vec![message_event("current")];
 
-    let prompt = small_segment_merge_prompt(&previous, &current, &[EventSegmentReason::TimeGap]);
+    let prompt = small_segment_merge_prompt(&previous, &current, EventSegmentReason::TimeGap);
 
     assert!(
       prompt

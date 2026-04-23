@@ -134,13 +134,14 @@ impl EventSegmenter {
         continue;
       }
 
-      let reason = (start > 0).then_some(EventSegmentReason::HardTimeGap);
-      segments.extend(
-        Self::segment_partition(&events[start..end], &embeddings[start..end])
-          .await
-          .into_iter()
-          .map(|segment| segment.prepend_reason_if_missing(reason)),
-      );
+      let mut partition_segments =
+        Self::segment_partition(&events[start..end], &embeddings[start..end]).await;
+      if start > 0
+        && let Some(first_segment) = partition_segments.first_mut()
+      {
+        first_segment.reason = EventSegmentReason::HardTimeGap;
+      }
+      segments.extend(partition_segments);
       start = end;
     }
 
@@ -151,7 +152,7 @@ impl EventSegmenter {
     if events.len() <= 1 {
       return vec![EventSegment::with_metadata(
         events.to_vec(),
-        Vec::new(),
+        EventSegmentReason::InitialSegment,
         1.0,
         1.0,
         1.0,
@@ -357,8 +358,7 @@ fn build_segments(
       .iter()
       .find(|candidate| candidate.index == start)
       .map(|candidate| candidate.reason)
-      .into_iter()
-      .collect::<Vec<_>>();
+      .unwrap_or(EventSegmentReason::InitialSegment);
     let score = segment_cohesion(embeddings, prefix, start, end);
     result.push(EventSegment::with_metadata(
       events[start..end].to_vec(),
@@ -607,7 +607,7 @@ mod tests {
       vec![4]
     );
     assert_eq!(segments.len(), 2);
-    assert_eq!(segments[1].reasons, &[EventSegmentReason::TopicShift]);
+    assert_eq!(segments[1].reason, EventSegmentReason::TopicShift);
   }
 
   #[tokio::test]
@@ -628,7 +628,8 @@ mod tests {
     let segments = EventSegmenter::segment_with_embeddings(&events, &embeddings).await;
 
     assert_eq!(segments.len(), 2);
-    assert_eq!(segments[1].reasons, &[EventSegmentReason::HardTimeGap]);
+    assert_eq!(segments[0].reason, EventSegmentReason::InitialSegment);
+    assert_eq!(segments[1].reason, EventSegmentReason::HardTimeGap);
   }
 
   #[test]

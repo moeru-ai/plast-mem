@@ -6,7 +6,7 @@ use strum::AsRefStr;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EventSegment {
   pub events: Vec<Event>,
-  pub reasons: Vec<EventSegmentReason>,
+  pub reason: EventSegmentReason,
   pub score: f32,
   pub boundary_before_confidence: f32,
   pub boundary_after_confidence: f32,
@@ -16,6 +16,7 @@ pub struct EventSegment {
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 pub enum EventSegmentReason {
+  InitialSegment,
   TopicShift,
   TimeGap,
   HardTimeGap,
@@ -30,10 +31,10 @@ impl EventSegmentReason {
 }
 
 impl EventSegment {
-  pub fn new(events: Vec<Event>, reasons: Vec<EventSegmentReason>) -> Self {
+  pub fn new(events: Vec<Event>, reason: EventSegmentReason) -> Self {
     Self {
       events,
-      reasons,
+      reason,
       score: 1.0,
       boundary_before_confidence: 1.0,
       boundary_after_confidence: 1.0,
@@ -42,33 +43,18 @@ impl EventSegment {
 
   pub fn with_metadata(
     events: Vec<Event>,
-    reasons: Vec<EventSegmentReason>,
+    reason: EventSegmentReason,
     score: f32,
     boundary_before_confidence: f32,
     boundary_after_confidence: f32,
   ) -> Self {
     Self {
       events,
-      reasons,
+      reason,
       score,
       boundary_before_confidence,
       boundary_after_confidence,
     }
-  }
-
-  pub fn prepend_reason_if_missing(mut self, reason: Option<EventSegmentReason>) -> Self {
-    if let Some(reason) = reason
-      && !self.reasons.contains(&reason)
-    {
-      self.reasons.insert(0, reason);
-    }
-
-    self
-  }
-
-  pub fn replace_reason(mut self, reason: EventSegmentReason) -> Self {
-    self.reasons = vec![reason];
-    self
   }
 
   pub fn extend_events(&mut self, events: impl IntoIterator<Item = Event>) {
