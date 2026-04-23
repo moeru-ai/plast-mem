@@ -8,7 +8,7 @@ pub fn build_boundary_review_prompt(
   boundary_budget: usize,
 ) -> String {
   let mut prompt = format!(
-    "Review candidate boundaries for a multilingual dialogue. Fill keep_boundary_indices with at most {} candidate indices that should be kept. Also return decisions for the kept indices, and optionally for nearby rejected candidates when useful. Nearby candidate indices may describe the same transition; choose the single best index, not all of them. Prefer fewer, larger event segments, but keep real pivots between unrelated subjects, activities, plans, stories, intents, or explicit structural pivots. Use topic_shift/topic_intro/intent_shift/activity_shift/structural_cue for true boundaries. Use detail_elaboration/direct_response/closing/noise for continuations. Do not split follow-ups, clarifications, examples, greetings, or closing turns. It is valid to keep none.\n\n",
+    "Review candidate boundaries for a multilingual dialogue. Fill keep_boundary_indices with at most {} candidate indices that should be kept. Also return decisions for the kept indices, and optionally for nearby rejected candidates when useful. Nearby candidate indices may describe the same transition; choose the single best index, not all of them. Prefer fewer, larger event segments, but keep real pivots between unrelated subjects, activities, plans, stories, intents, or explicit structural pivots. Use topic_shift/topic_intro/intent_shift/activity_shift/structural_cue for true boundaries. Use detail_elaboration/direct_response/closing/noise for continuations, which should usually not be split. Do not split follow-ups, clarifications, examples, greetings, or closing turns. It is valid to keep none.\n\n",
     boundary_budget
   );
 
