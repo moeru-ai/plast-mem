@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::TimeDelta;
 use plastmem_ai::{
@@ -54,6 +54,7 @@ enum BoundaryLabel {
   TopicIntro,
   IntentShift,
   ActivityShift,
+  StructuralCue,
   DetailElaboration,
   DirectResponse,
   Closing,
@@ -64,8 +65,24 @@ impl BoundaryLabel {
   fn is_boundary(self) -> bool {
     matches!(
       self,
-      Self::TopicShift | Self::TopicIntro | Self::IntentShift | Self::ActivityShift
+      Self::TopicShift
+        | Self::TopicIntro
+        | Self::IntentShift
+        | Self::ActivityShift
+        | Self::StructuralCue
     )
+  }
+
+  fn to_segment_reason(self) -> EventSegmentReason {
+    match self {
+      Self::TopicShift | Self::TopicIntro => EventSegmentReason::TopicShift,
+      Self::IntentShift => EventSegmentReason::IntentShift,
+      Self::ActivityShift => EventSegmentReason::ActivityShift,
+      Self::StructuralCue => EventSegmentReason::StructuralCue,
+      Self::DetailElaboration | Self::DirectResponse | Self::Closing | Self::Noise => {
+        EventSegmentReason::StructuralCue
+      }
+    }
   }
 }
 
@@ -225,7 +242,7 @@ async fn review_candidates_with_llm(
   let output = generate_object::<BoundaryReviewOutput>(
     vec![
       ChatCompletionRequestMessage::System(ChatCompletionRequestSystemMessage::from(
-        "Return JSON with keep_boundary_indices and decisions. Labels must be one of: topic_shift, topic_intro, intent_shift, activity_shift, detail_elaboration, direct_response, closing, noise.",
+        "Return JSON with keep_boundary_indices and decisions. Labels must be one of: topic_shift, topic_intro, intent_shift, activity_shift, structural_cue, detail_elaboration, direct_response, closing, noise.",
       )),
       ChatCompletionRequestMessage::User(ChatCompletionRequestUserMessage::from(
         build_review_prompt(events, &ranked),
@@ -250,6 +267,10 @@ async fn review_candidates_with_llm(
         .then_some((index, decision.label, decision.confidence))
     })
     .collect::<Vec<_>>();
+  let reason_by_index = labeled
+    .iter()
+    .map(|(index, label, _)| (*index, label.to_segment_reason()))
+    .collect::<BTreeMap<_, _>>();
 
   let mut kept = output
     .keep_boundary_indices
@@ -292,13 +313,19 @@ async fn review_candidates_with_llm(
           .find(|candidate| candidate.index == index)
           .cloned()
       })
+      .map(|mut candidate| {
+        if let Some(reason) = reason_by_index.get(&candidate.index) {
+          candidate.reason = *reason;
+        }
+        candidate
+      })
       .collect(),
   )
 }
 
 fn build_review_prompt(events: &[Event], candidates: &[BoundaryCandidate]) -> String {
   let mut prompt = format!(
-    "Review candidate boundaries for a multilingual dialogue. Fill keep_boundary_indices with at most {} candidate indices that should be kept. Also return decisions for the kept indices, and optionally for nearby rejected candidates when useful. Nearby candidate indices may describe the same transition; choose the single best index, not all of them. Prefer fewer, larger event segments, but keep real pivots between unrelated subjects, activities, plans, stories, or intents. Use topic_shift/topic_intro/intent_shift/activity_shift for true boundaries. Use detail_elaboration/direct_response/closing/noise for continuations. Do not split follow-ups, clarifications, examples, greetings, or closing turns. It is valid to keep none.\n\n",
+    "Review candidate boundaries for a multilingual dialogue. Fill keep_boundary_indices with at most {} candidate indices that should be kept. Also return decisions for the kept indices, and optionally for nearby rejected candidates when useful. Nearby candidate indices may describe the same transition; choose the single best index, not all of them. Prefer fewer, larger event segments, but keep real pivots between unrelated subjects, activities, plans, stories, intents, or explicit structural pivots. Use topic_shift/topic_intro/intent_shift/activity_shift/structural_cue for true boundaries. Use detail_elaboration/direct_response/closing/noise for continuations. Do not split follow-ups, clarifications, examples, greetings, or closing turns. It is valid to keep none.\n\n",
     boundary_budget(events.len())
   );
 

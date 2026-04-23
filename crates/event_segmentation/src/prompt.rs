@@ -29,8 +29,8 @@ pub fn small_segment_merge_prompt(
       "You review whether a small event segment should merge into the previous event segment.",
       JSON_SCHEMA_REQUIREMENT,
       "Use merge_with_previous=true only when the current segment clearly continues the same topic or intent.",
-      "If merge_with_previous=false, choose reason_if_separate from topic_shift, intent_shift, or structural_cue.",
-      "Never use time_gap or hard_time_gap as reason_if_separate.",
+      "If merge_with_previous=false, choose reason_if_separate from topic_shift, intent_shift, activity_shift, or structural_cue.",
+      "Never use hard_time_gap as reason_if_separate.",
       "Use only the provided events.",
     ]),
     user: small_segment_merge_user_content(previous_events, current_events, boundary_reason),
@@ -57,8 +57,8 @@ pub fn large_segment_split_prompt(events: &[Event]) -> LlmPrompt {
       "Return only later split starts. Do not include 0.",
       "Keep split indices unique and strictly ascending.",
       "If there is no meaningful boundary, return an empty array.",
-      "Use only topic_shift, intent_shift, or structural_cue as boundary reasons.",
-      "Never use time_gap or hard_time_gap as an internal split reason.",
+      "Use only topic_shift, intent_shift, activity_shift, or structural_cue as boundary reasons.",
+      "Never use hard_time_gap as an internal split reason.",
       "Use only the provided events.",
     ]),
     user: segment_user_content(
@@ -148,14 +148,14 @@ mod tests {
     let previous = vec![message_event("previous")];
     let current = vec![message_event("current")];
 
-    let prompt = small_segment_merge_prompt(&previous, &current, EventSegmentReason::TimeGap);
+    let prompt = small_segment_merge_prompt(&previous, &current, EventSegmentReason::StructuralCue);
 
     assert!(
       prompt
         .user
         .contains("Candidate boundary before current small segment")
     );
-    assert!(prompt.user.contains("reason=time_gap"));
+    assert!(prompt.user.contains("reason=structural_cue"));
   }
 
   #[test]

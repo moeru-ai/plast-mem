@@ -21,13 +21,8 @@ pub enum EventSegmentReason {
   TimeGap,
   HardTimeGap,
   IntentShift,
+  ActivityShift,
   StructuralCue,
-}
-
-impl EventSegmentReason {
-  pub fn is_time_gap(self) -> bool {
-    matches!(self, Self::TimeGap | Self::HardTimeGap)
-  }
 }
 
 impl EventSegment {
