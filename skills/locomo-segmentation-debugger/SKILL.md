@@ -7,6 +7,10 @@ description: Run and inspect the LoCoMo event segmentation debugger in `crates/e
 
 Use `crates/event_segmentation/examples/locomo_segmenter.rs` as the primary debugger for segmentation work. It emits exactly one `Vec<EventSegment>` JSON document on `stdout`; warnings and errors go to `stderr`.
 
+## Environment Note
+
+`locomo_segmenter` calls the embedding backend through `plastmem_ai::embed_many`. In Codex's sandbox, requests to the local provider (for example `http://localhost:11434`) may fail even when the service is healthy on the host. If the run errors at the embedding request step, re-run with escalated permissions instead of assuming the segmenter itself is broken.
+
 ## Workflow
 
 1. Start with a targeted run on `conv-47` when iterating on segmentation logic. It is a strong long-context sample and is usually worth checking first.
@@ -18,6 +22,7 @@ Use `crates/event_segmentation/examples/locomo_segmenter.rs` as the primary debu
 
 - Treat `stdout` as machine-readable output only. Do not parse diagnostics from it.
 - Treat `stderr` as human diagnostics only. Expect sample metadata, flattened events, warnings, and errors there.
+- If embedding requests fail inside the sandbox, request escalation and retry before judging segmentation quality.
 - Prefer `conv-47` for focused debugging.
 - Prefer all samples for regressions, distribution shifts, or “is this actually better?” questions.
 - Use pipe or REPL edits only on derived JSON files. The debugger itself reads LoCoMo input and produces fresh segment JSON; it does not consume edited segment JSON back in.

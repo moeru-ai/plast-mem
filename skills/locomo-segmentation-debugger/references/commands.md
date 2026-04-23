@@ -2,6 +2,8 @@
 
 This project environment has `node` and `python3`. Do not assume `jq` is installed.
 
+`locomo_segmenter` is not a pure local parser. It calls the configured embedding API, and in Codex's sandbox that request may fail against a host-local provider such as `http://localhost:11434`. If you see embedding request errors, re-run the `cargo run ... locomo_segmenter ...` command with escalated permissions before diagnosing segmentation behavior.
+
 ## Targeted Run
 
 Use `conv-47` first for segmentation iteration:
