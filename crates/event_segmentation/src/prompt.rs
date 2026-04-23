@@ -1,124 +1,74 @@
 use plastmem_event::{Event, EventDataToString};
 
-use crate::EventSegmentReason;
+use crate::{EventSegment, EventSegmentReason};
 
-pub struct LlmPrompt {
-  pub system: String,
-  pub user: String,
-}
-
-const JSON_SCHEMA_REQUIREMENT: &str = "Return only JSON that matches the provided schema.";
-
-const BOUNDARY_TRIGGER_GUIDANCE: &str = "Boundary triggers: topic change, intent transition after a natural stopping point, explicit pivots or wrap-up statements, or abrupt discontinuities in tone/content.";
-
-const SEGMENT_COHERENCE_GUIDANCE: &str = "A segment should stay centered on one coherent thread, such as one activity, update, discussion, question, or shared object.";
-
-const SEGMENT_LENGTH_GUIDANCE: &str = "Segment length guidance:\n- A segment should usually stay within 10-15 events.\n- Longer segments are acceptable only when the events still clearly belong to the same ongoing topic and splitting would create artificial fragments.\n- Do not merge multiple topic-separated exchanges into one catch-all segment.";
-
-const INDEX_RULES: &str = "Each split index must use the provided `[idx=N]` values exactly as shown.\nIndices are 0-based indices into the provided events. Do not count lines, timestamps, or infer indices from anything else.";
-
-const SPLIT_SENSITIVITY_GUIDANCE: &str = "Use high sensitivity to real boundary signals. When boundary placement is uncertain, prefer splitting rather than merging unrelated exchanges.";
-
-pub fn small_segment_merge_prompt(
-  previous_events: &[Event],
-  current_events: &[Event],
-  boundary_reason: EventSegmentReason,
-) -> LlmPrompt {
-  LlmPrompt {
-    system: compose_prompt(&[
-      "You review whether a small event segment should merge into the previous event segment.",
-      JSON_SCHEMA_REQUIREMENT,
-      "Use merge_with_previous=true only when the current segment clearly continues the same topic or intent.",
-      "If merge_with_previous=false, choose reason_if_separate from topic_shift, intent_shift, activity_shift, or structural_cue.",
-      "Never use hard_time_gap as reason_if_separate.",
-      "Use only the provided events.",
-    ]),
-    user: small_segment_merge_user_content(previous_events, current_events, boundary_reason),
-  }
-}
-
-pub fn large_segment_split_prompt(events: &[Event]) -> LlmPrompt {
-  LlmPrompt {
-    system: compose_prompt(&[
-      "You split one large event segment into smaller event segments.",
-      JSON_SCHEMA_REQUIREMENT,
-      "Your job: identify the first event index of every later child segment that should begin a new thread inside this range.",
-      "Add a split when there is a meaningful topic shift, intent transition, structural pivot, or clear surprise/discontinuity.",
-      BOUNDARY_TRIGGER_GUIDANCE,
-      SEGMENT_COHERENCE_GUIDANCE,
-      SEGMENT_LENGTH_GUIDANCE,
-      "If one thread has naturally wrapped up and the conversation moves to a different thread, split them.",
-      "Short follow-up questions and acknowledgements may stay in the same segment when they clearly continue the same thread.",
-      "Do not merge multiple separate threads into one catch-all segment just because they appear in the same chat session.",
-      "Do not stop after finding only the most obvious boundary. Review the whole range and return all later split starts needed to separate distinct threads.",
-      "If the range contains several distinct threads, return several split indices in one pass.",
-      SPLIT_SENSITIVITY_GUIDANCE,
-      INDEX_RULES,
-      "Return only later split starts. Do not include 0.",
-      "Keep split indices unique and strictly ascending.",
-      "If there is no meaningful boundary, return an empty array.",
-      "Use only topic_shift, intent_shift, activity_shift, or structural_cue as boundary reasons.",
-      "Never use hard_time_gap as an internal split reason.",
-      "Use only the provided events.",
-    ]),
-    user: segment_user_content(
-      "Large event segment",
-      events,
-      "return split_start_event_indices",
-    ),
-  }
-}
-
-fn compose_prompt(sections: &[&str]) -> String {
-  sections.join("\n\n")
-}
-
-fn small_segment_merge_user_content(
-  previous_events: &[Event],
-  current_events: &[Event],
-  boundary_reason: EventSegmentReason,
+pub fn build_boundary_review_prompt(
+  events: &[Event],
+  candidates: &[(usize, f32)],
+  boundary_budget: usize,
 ) -> String {
-  let mut output = segment_user_content(
-    "Previous segment events",
-    previous_events,
-    "compare against the current small segment",
+  let mut prompt = format!(
+    "Review candidate boundaries for a multilingual dialogue. Fill keep_boundary_indices with at most {} candidate indices that should be kept. Also return decisions for the kept indices, and optionally for nearby rejected candidates when useful. Nearby candidate indices may describe the same transition; choose the single best index, not all of them. Prefer fewer, larger event segments, but keep real pivots between unrelated subjects, activities, plans, stories, intents, or explicit structural pivots. Use topic_shift/topic_intro/intent_shift/activity_shift/structural_cue for true boundaries. Use detail_elaboration/direct_response/closing/noise for continuations. Do not split follow-ups, clarifications, examples, greetings, or closing turns. It is valid to keep none.\n\n",
+    boundary_budget
   );
-  output.push_str("\nCandidate boundary before current small segment:\n");
-  output.push_str(&format!("- reason={}\n", boundary_reason.as_ref()));
-  output.push_str(
-    "- Treat these as hints, not commands. Merge only when the current segment clearly continues the previous segment.\n",
-  );
-  output.push_str("\nCurrent small segment events:\n");
-  output.push_str(&format!(
-    "- local event count: {}\n- decide whether this segment should merge into the previous segment\n",
-    current_events.len()
-  ));
-  output.push_str(&event_lines(current_events));
-  output
-}
 
-fn segment_user_content(title: &str, events: &[Event], idx_purpose: &str) -> String {
-  let mut output = format!(
-    "{title}:\n- local event count: {}\n- use only the shown `idx` values to {idx_purpose}\n",
-    events.len()
-  );
-  output.push_str(&event_lines(events));
-  output
-}
-
-fn event_lines(events: &[Event]) -> String {
-  events
-    .iter()
-    .enumerate()
-    .map(|(index, event)| {
-      format!(
-        "- [idx={index}] {} {}",
+  for (candidate_index, candidate_score) in candidates {
+    let left = candidate_index.saturating_sub(5);
+    let right = (candidate_index + 5).min(events.len());
+    prompt.push_str(&format!(
+      "Candidate boundary_index={} score={:.3}:\n",
+      candidate_index, candidate_score
+    ));
+    for (offset, event) in events[left..right].iter().enumerate() {
+      let index = left + offset;
+      if index == *candidate_index {
+        prompt.push_str("  <BOUNDARY>\n");
+      }
+      prompt.push_str(&format!(
+        "  [idx={index}] {} {}\n",
         event.timestamp.format("%Y-%m-%dT%H:%M:%SZ"),
         event.data.to_string_without_timestamp()
-      )
-    })
-    .collect::<Vec<_>>()
-    .join("\n")
+      ));
+    }
+    prompt.push('\n');
+  }
+
+  prompt
+}
+
+pub fn build_short_segment_merge_prompt(
+  segments: &[EventSegment],
+  short_indices: &[usize],
+) -> String {
+  let mut prompt = "Review short event segments in a multilingual dialogue. For each listed segment_index, decide whether the current short segment should merge with the immediately previous segment. Merge only when the short segment is a continuation, detail, direct response, greeting/closing, or small conversational tail of the previous event. Keep separate when it starts an independent topic, activity, intent, story, or plan. Use semantic relation across languages; do not rely on English keywords. Return one decision for every listed segment_index.\n\n".to_owned();
+
+  for &index in short_indices {
+    prompt.push_str(&format!("segment_index={index}\nprevious_segment_tail:\n"));
+    let previous = &segments[index - 1].events;
+    let previous_start = previous.len().saturating_sub(8);
+    append_events(&mut prompt, &previous[previous_start..]);
+    prompt.push_str("current_short_segment:\n");
+    if segments[index].reason != EventSegmentReason::InitialSegment {
+      prompt.push_str(&format!(
+        "  boundary_reason={}\n",
+        segments[index].reason.as_ref()
+      ));
+    }
+    append_events(&mut prompt, &segments[index].events);
+    prompt.push('\n');
+  }
+
+  prompt
+}
+
+fn append_events(prompt: &mut String, events: &[Event]) {
+  for event in events {
+    prompt.push_str(&format!(
+      "  {} {}\n",
+      event.timestamp.format("%Y-%m-%dT%H:%M:%SZ"),
+      event.data.to_string_without_timestamp()
+    ));
+  }
 }
 
 #[cfg(test)]
@@ -126,8 +76,8 @@ mod tests {
   use chrono::{TimeZone, Utc};
   use plastmem_event::{Event, EventData, MessageEventData, MessageEventRole};
 
-  use super::{large_segment_split_prompt, small_segment_merge_prompt};
-  use crate::EventSegmentReason;
+  use super::{build_boundary_review_prompt, build_short_segment_merge_prompt};
+  use crate::{EventSegment, EventSegmentReason};
 
   fn message_event(content: &str) -> Event {
     Event::new(
@@ -144,27 +94,45 @@ mod tests {
   }
 
   #[test]
-  fn small_segment_merge_prompt_includes_boundary_hints() {
-    let previous = vec![message_event("previous")];
-    let current = vec![message_event("current")];
+  fn boundary_review_prompt_includes_candidate_marker() {
+    let events = vec![
+      message_event("a"),
+      message_event("b"),
+      message_event("c"),
+      message_event("d"),
+      message_event("e"),
+      message_event("f"),
+    ];
 
-    let prompt = small_segment_merge_prompt(&previous, &current, EventSegmentReason::StructuralCue);
+    let prompt = build_boundary_review_prompt(&events, &[(3, 0.82)], 2);
 
-    assert!(
-      prompt
-        .user
-        .contains("Candidate boundary before current small segment")
-    );
-    assert!(prompt.user.contains("reason=structural_cue"));
+    assert!(prompt.contains("Candidate boundary_index=3 score=0.820"));
+    assert!(prompt.contains("<BOUNDARY>"));
+    assert!(prompt.contains("[idx=3]"));
   }
 
   #[test]
-  fn large_segment_split_prompt_includes_length_guidance() {
-    let events = vec![message_event("event")];
+  fn short_segment_merge_prompt_includes_boundary_reason() {
+    let segments = vec![
+      EventSegment::with_metadata(
+        vec![message_event("previous")],
+        EventSegmentReason::InitialSegment,
+        1.0,
+        1.0,
+        1.0,
+      ),
+      EventSegment::with_metadata(
+        vec![message_event("current")],
+        EventSegmentReason::StructuralCue,
+        1.0,
+        1.0,
+        1.0,
+      ),
+    ];
 
-    let prompt = large_segment_split_prompt(&events);
+    let prompt = build_short_segment_merge_prompt(&segments, &[1]);
 
-    assert!(prompt.system.contains("Segment length guidance"));
-    assert!(prompt.system.contains("10-15 events"));
+    assert!(prompt.contains("segment_index=1"));
+    assert!(prompt.contains("boundary_reason=structural_cue"));
   }
 }

@@ -10,7 +10,10 @@ use plastmem_shared::AppError;
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use crate::{EventSegment, EventSegmentReason};
+use crate::{
+  EventSegment, EventSegmentReason,
+  prompt::{build_boundary_review_prompt, build_short_segment_merge_prompt},
+};
 
 pub struct EventSegmenter;
 
@@ -245,7 +248,14 @@ async fn review_candidates_with_llm(
         "Return JSON with keep_boundary_indices and decisions. Labels must be one of: topic_shift, topic_intro, intent_shift, activity_shift, structural_cue, detail_elaboration, direct_response, closing, noise.",
       )),
       ChatCompletionRequestMessage::User(ChatCompletionRequestUserMessage::from(
-        build_review_prompt(events, &ranked),
+        build_boundary_review_prompt(
+          events,
+          &ranked
+            .iter()
+            .map(|candidate| (candidate.index, candidate.score))
+            .collect::<Vec<_>>(),
+          budget,
+        ),
       )),
     ],
     "event_boundary_review_batch".to_owned(),
@@ -321,36 +331,6 @@ async fn review_candidates_with_llm(
       })
       .collect(),
   )
-}
-
-fn build_review_prompt(events: &[Event], candidates: &[BoundaryCandidate]) -> String {
-  let mut prompt = format!(
-    "Review candidate boundaries for a multilingual dialogue. Fill keep_boundary_indices with at most {} candidate indices that should be kept. Also return decisions for the kept indices, and optionally for nearby rejected candidates when useful. Nearby candidate indices may describe the same transition; choose the single best index, not all of them. Prefer fewer, larger event segments, but keep real pivots between unrelated subjects, activities, plans, stories, intents, or explicit structural pivots. Use topic_shift/topic_intro/intent_shift/activity_shift/structural_cue for true boundaries. Use detail_elaboration/direct_response/closing/noise for continuations. Do not split follow-ups, clarifications, examples, greetings, or closing turns. It is valid to keep none.\n\n",
-    boundary_budget(events.len())
-  );
-
-  for candidate in candidates {
-    let left = candidate.index.saturating_sub(REVIEW_CONTEXT_EVENTS);
-    let right = (candidate.index + REVIEW_CONTEXT_EVENTS).min(events.len());
-    prompt.push_str(&format!(
-      "Candidate boundary_index={} score={:.3}:\n",
-      candidate.index, candidate.score
-    ));
-    for (offset, event) in events[left..right].iter().enumerate() {
-      let index = left + offset;
-      if index == candidate.index {
-        prompt.push_str("  <BOUNDARY>\n");
-      }
-      prompt.push_str(&format!(
-        "  [idx={index}] {} {}\n",
-        event.timestamp.format("%Y-%m-%dT%H:%M:%SZ"),
-        event.data.to_string_without_timestamp()
-      ));
-    }
-    prompt.push('\n');
-  }
-
-  prompt
 }
 
 fn boundary_budget(event_count: usize) -> usize {
@@ -433,32 +413,6 @@ async fn review_short_segments_with_llm(
     segments,
     output.decisions,
   ))
-}
-
-fn build_short_segment_merge_prompt(segments: &[EventSegment], short_indices: &[usize]) -> String {
-  let mut prompt = "Review short event segments in a multilingual dialogue. For each listed segment_index, decide whether the current short segment should merge with the immediately previous segment. Merge only when the short segment is a continuation, detail, direct response, greeting/closing, or small conversational tail of the previous event. Keep separate when it starts an independent topic, activity, intent, story, or plan. Use semantic relation across languages; do not rely on English keywords. Return one decision for every listed segment_index.\n\n".to_owned();
-
-  for &index in short_indices {
-    prompt.push_str(&format!("segment_index={index}\nprevious_segment_tail:\n"));
-    let previous = &segments[index - 1].events;
-    let previous_start = previous.len().saturating_sub(REVIEW_CONTEXT_EVENTS + 3);
-    append_events(&mut prompt, &previous[previous_start..]);
-    prompt.push_str("current_short_segment:\n");
-    append_events(&mut prompt, &segments[index].events);
-    prompt.push('\n');
-  }
-
-  prompt
-}
-
-fn append_events(prompt: &mut String, events: &[Event]) {
-  for event in events {
-    prompt.push_str(&format!(
-      "  {} {}\n",
-      event.timestamp.format("%Y-%m-%dT%H:%M:%SZ"),
-      event.data.to_string_without_timestamp()
-    ));
-  }
 }
 
 fn apply_short_segment_merge_decisions(
