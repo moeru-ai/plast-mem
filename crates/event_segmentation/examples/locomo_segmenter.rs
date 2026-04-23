@@ -3,8 +3,10 @@ use std::{collections::BTreeMap, env, fs, path::PathBuf};
 use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, Duration, NaiveDateTime, TimeZone, Utc};
 use plastmem_event::{Event, EventData, EventDataToString, MessageEventData, MessageEventRole};
-use plastmem_event_segmentation::EventSegmenter;
+use plastmem_event_segmentation::{EventSegment, EventSegmenter};
 use serde::Deserialize;
+use tracing::Level;
+use tracing_subscriber::FmtSubscriber;
 
 const DEFAULT_DATA_FILE: &str = "benchmarks/locomo/data/locomo10.json";
 const TURN_INTERVAL_MINS: i64 = 1;
@@ -43,6 +45,8 @@ struct Config {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+  init_tracing();
+
   let config = parse_args()?;
   let samples = load_samples(&config.data_file)?;
   let sample = select_sample(&samples, &config)?;
@@ -52,7 +56,7 @@ async fn main() -> Result<()> {
     return Err(anyhow!("selected sample contains no dialog turns"));
   }
 
-  println!(
+  eprintln!(
     "sample_id={} events={} data_file={}",
     sample.sample_id,
     events.len(),
@@ -61,45 +65,38 @@ async fn main() -> Result<()> {
 
   if config.print_events {
     for (index, event) in events.iter().enumerate() {
-      println!(
+      eprintln!(
         "event[{index:03}] {} {}",
         event.timestamp.format("%Y-%m-%dT%H:%M:%SZ"),
         event.data.to_string_without_timestamp()
       );
     }
-    println!();
+    eprintln!();
   }
 
   let segments = EventSegmenter::segment(&events)
     .await
     .map_err(|err| anyhow!(err.to_string()))?;
-  println!("segments={}", segments.len());
+  write_segments_json(&segments)?;
 
-  for (index, segment) in segments.iter().enumerate() {
-    let first = segment
-      .events
-      .first()
-      .ok_or_else(|| anyhow!("segment unexpectedly empty"))?;
-    let last = segment
-      .events
-      .last()
-      .ok_or_else(|| anyhow!("segment unexpectedly empty"))?;
-    println!(
-      "\nsegment[{index:02}] len={} reasons={:?} start={} end={}",
-      segment.events.len(),
-      segment.reasons,
-      first.timestamp.format("%Y-%m-%dT%H:%M:%SZ"),
-      last.timestamp.format("%Y-%m-%dT%H:%M:%SZ"),
-    );
-    for event in &segment.events {
-      println!(
-        "  - {} {}",
-        event.timestamp.format("%Y-%m-%dT%H:%M:%SZ"),
-        event.data.to_string_without_timestamp()
-      );
-    }
-  }
+  Ok(())
+}
 
+fn init_tracing() {
+  let subscriber = FmtSubscriber::builder()
+    .with_max_level(Level::WARN)
+    .with_writer(std::io::stderr)
+    .with_target(false)
+    .without_time()
+    .finish();
+
+  let _ = tracing::subscriber::set_global_default(subscriber);
+}
+
+fn write_segments_json(segments: &[EventSegment]) -> Result<()> {
+  serde_json::to_writer(std::io::stdout(), segments)
+    .context("failed to serialize event segments to stdout")?;
+  println!();
   Ok(())
 }
 
@@ -155,7 +152,7 @@ fn parse_args() -> Result<Config> {
 }
 
 fn print_usage() {
-  println!(
+  eprintln!(
     "Usage: cargo run -p plastmem_event_segmentation --example locomo_segmenter -- [options]\n\
      \n\
      Options:\n\

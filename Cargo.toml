@@ -75,6 +75,7 @@ strum = { version = "0.28", features = ["derive"] }
 tokio = { version = "1.49.0", features = [ "full" ] }
 tracing = "0.1"
 tracing-error = "0.2"
+tracing-subscriber = "0.3.22"
 uuid = { version = "1.20.0", features = [
   "serde",
   "v4",
@@ -112,4 +113,4 @@ apalis-postgres.workspace = true
 sea-orm.workspace = true
 tokio.workspace = true
 tracing-error.workspace = true
-tracing-subscriber = "0.3.22"
+tracing-subscriber.workspace = true
