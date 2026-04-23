@@ -154,13 +154,14 @@ impl EventSegmenter {
         continue;
       }
 
-      let mut partition_segments =
-        Self::segment_partition(&events[start..end], &embeddings[start..end]).await;
-      if start > 0
-        && let Some(first_segment) = partition_segments.first_mut()
-      {
-        first_segment.reason = EventSegmentReason::HardTimeGap;
-      }
+      let partition_reason = if start > 0 {
+        EventSegmentReason::HardTimeGap
+      } else {
+        EventSegmentReason::InitialSegment
+      };
+      let partition_segments =
+        Self::segment_partition(&events[start..end], &embeddings[start..end], partition_reason)
+          .await;
       segments.extend(partition_segments);
       start = end;
     }
@@ -168,11 +169,15 @@ impl EventSegmenter {
     segments
   }
 
-  async fn segment_partition(events: &[Event], embeddings: &[Vec<f32>]) -> Vec<EventSegment> {
+  async fn segment_partition(
+    events: &[Event],
+    embeddings: &[Vec<f32>],
+    start_reason: EventSegmentReason,
+  ) -> Vec<EventSegment> {
     if events.len() <= 1 {
       return vec![EventSegment::with_metadata(
         events.to_vec(),
-        EventSegmentReason::InitialSegment,
+        start_reason,
         1.0,
         1.0,
         1.0,
@@ -192,15 +197,59 @@ impl EventSegmenter {
       }
     };
 
-    let segments = build_segments(events, embeddings, &prefix, &reviewed);
-    match review_short_segments_with_llm(&segments).await {
+    if reviewed.is_empty() {
+      return vec![leaf_segment(
+        events,
+        embeddings,
+        &prefix,
+        start_reason,
+      )];
+    }
+
+    let coarse_segments = build_segments(events, embeddings, &prefix, &reviewed);
+    let mut refined = Vec::new();
+    let mut offset = 0usize;
+    for (index, coarse_segment) in coarse_segments.iter().enumerate() {
+      let segment_len = coarse_segment.events.len();
+      let segment_reason = if index == 0 {
+        start_reason
+      } else {
+        coarse_segment.reason
+      };
+      refined.extend(
+        Box::pin(Self::segment_partition(
+          &events[offset..offset + segment_len],
+          &embeddings[offset..offset + segment_len],
+          segment_reason,
+        ))
+        .await,
+      );
+      offset += segment_len;
+    }
+
+    match review_short_segments_with_llm(&refined).await {
       Ok(segments) => segments,
       Err(err) => {
         tracing::warn!(error = %err, "Short segment merge review failed; keeping reviewed boundaries");
-        segments
+        refined
       }
     }
   }
+}
+
+fn leaf_segment(
+  events: &[Event],
+  embeddings: &[Vec<f32>],
+  prefix: &[Vec<f32>],
+  reason: EventSegmentReason,
+) -> EventSegment {
+  EventSegment::with_metadata(
+    events.to_vec(),
+    reason,
+    segment_cohesion(embeddings, prefix, 0, events.len()),
+    1.0,
+    1.0,
+  )
 }
 
 fn collect_candidates(
