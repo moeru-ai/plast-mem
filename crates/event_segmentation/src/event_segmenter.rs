@@ -55,7 +55,11 @@ impl EventSegmenter {
       let partition_segments = Self::segment_partition(
         &events[start..end],
         &embeddings[start..end],
-        partition_start_reason(start),
+        if start > 0 {
+          EventSegmentReason::HardTimeGap
+        } else {
+          EventSegmentReason::InitialSegment
+        },
       )
       .await;
       segments.extend(partition_segments);
@@ -115,7 +119,11 @@ impl EventSegmenter {
         Box::pin(Self::segment_partition(
           &events[offset..offset + segment_len],
           &embeddings[offset..offset + segment_len],
-          segment_start_reason(index, coarse_segment, start_reason),
+          if index == 0 {
+            start_reason
+          } else {
+            coarse_segment.reason
+          },
         ))
         .await,
       );
@@ -146,22 +154,6 @@ fn is_partition_end(events: &[Event], end: usize) -> bool {
   end == events.len() || time_gap_before(events, end) > HARD_TIME_GAP
 }
 
-fn partition_start_reason(start: usize) -> EventSegmentReason {
-  if start > 0 {
-    EventSegmentReason::HardTimeGap
-  } else {
-    EventSegmentReason::InitialSegment
-  }
-}
-
-fn segment_start_reason(
-  index: usize,
-  segment: &EventSegment,
-  fallback: EventSegmentReason,
-) -> EventSegmentReason {
-  if index == 0 { fallback } else { segment.reason }
-}
-
 fn leaf_segment(
   events: &[Event],
   embeddings: &[Vec<f32>],
@@ -185,11 +177,10 @@ fn build_segments(
 ) -> Vec<EventSegment> {
   let mut result = Vec::new();
   let mut start = 0usize;
-  let mut points = boundaries
+  let points = boundaries
     .iter()
     .map(|candidate| candidate.index)
-    .collect::<Vec<_>>();
-  points.push(events.len());
+    .chain(std::iter::once(events.len()));
 
   for end in points {
     if start >= end {

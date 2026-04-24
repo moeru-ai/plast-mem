@@ -315,6 +315,41 @@ mod tests {
     }
   }
 
+  fn boundary_output(
+    keep_boundary_indices: Vec<u32>,
+    decisions: Vec<BoundaryDecision>,
+  ) -> BoundaryReviewOutput {
+    BoundaryReviewOutput {
+      keep_boundary_indices,
+      decisions,
+    }
+  }
+
+  fn boundary_decision(
+    boundary_index: u32,
+    label: BoundaryLabel,
+    confidence: f32,
+  ) -> BoundaryDecision {
+    BoundaryDecision {
+      boundary_index,
+      label,
+      confidence,
+    }
+  }
+
+  fn merge_decision(
+    segment_index: u32,
+    reason: ShortSegmentMergeReason,
+    confidence: f32,
+  ) -> ShortSegmentMergeDecision {
+    ShortSegmentMergeDecision {
+      segment_index,
+      merge_with_previous: true,
+      reason,
+      confidence,
+    }
+  }
+
   fn segment(event_count: usize) -> EventSegment {
     let events = (0..event_count)
       .map(|index| {
@@ -340,14 +375,10 @@ mod tests {
     let reviewed = apply_boundary_review_output(
       &candidates,
       1,
-      BoundaryReviewOutput {
-        keep_boundary_indices: vec![4],
-        decisions: vec![BoundaryDecision {
-          boundary_index: 4,
-          label: BoundaryLabel::IntentShift,
-          confidence: 0.9,
-        }],
-      },
+      boundary_output(
+        vec![4],
+        vec![boundary_decision(4, BoundaryLabel::IntentShift, 0.9)],
+      ),
     );
 
     assert_eq!(reviewed.len(), 1);
@@ -361,14 +392,10 @@ mod tests {
     let reviewed = apply_boundary_review_output(
       &candidates,
       1,
-      BoundaryReviewOutput {
-        keep_boundary_indices: Vec::new(),
-        decisions: vec![BoundaryDecision {
-          boundary_index: 4,
-          label: BoundaryLabel::ActivityShift,
-          confidence: 0.5,
-        }],
-      },
+      boundary_output(
+        Vec::new(),
+        vec![boundary_decision(4, BoundaryLabel::ActivityShift, 0.5)],
+      ),
     );
 
     assert_eq!(reviewed.len(), 1);
@@ -381,14 +408,10 @@ mod tests {
     let reviewed = apply_boundary_review_output(
       &candidates,
       1,
-      BoundaryReviewOutput {
-        keep_boundary_indices: vec![4],
-        decisions: vec![BoundaryDecision {
-          boundary_index: 4,
-          label: BoundaryLabel::DirectResponse,
-          confidence: 0.9,
-        }],
-      },
+      boundary_output(
+        vec![4],
+        vec![boundary_decision(4, BoundaryLabel::DirectResponse, 0.9)],
+      ),
     );
 
     assert!(reviewed.is_empty());
@@ -400,18 +423,8 @@ mod tests {
     let merged = apply_short_segment_merge_decisions(
       &segments,
       vec![
-        ShortSegmentMergeDecision {
-          segment_index: 1,
-          merge_with_previous: true,
-          reason: ShortSegmentMergeReason::SameTopicContinuation,
-          confidence: 0.3,
-        },
-        ShortSegmentMergeDecision {
-          segment_index: 2,
-          merge_with_previous: true,
-          reason: ShortSegmentMergeReason::SeparateTopic,
-          confidence: 0.9,
-        },
+        merge_decision(1, ShortSegmentMergeReason::SameTopicContinuation, 0.3),
+        merge_decision(2, ShortSegmentMergeReason::SeparateTopic, 0.9),
       ],
     );
 
@@ -423,12 +436,11 @@ mod tests {
     let segments = vec![segment(6), segment(2)];
     let merged = apply_short_segment_merge_decisions(
       &segments,
-      vec![ShortSegmentMergeDecision {
-        segment_index: 1,
-        merge_with_previous: true,
-        reason: ShortSegmentMergeReason::DirectResponse,
-        confidence: 0.9,
-      }],
+      vec![merge_decision(
+        1,
+        ShortSegmentMergeReason::DirectResponse,
+        0.9,
+      )],
     );
 
     assert_eq!(merged.len(), 1);
