@@ -6,6 +6,7 @@ pub mod conversation_message;
 pub mod episode_classification;
 pub mod episode_span;
 pub mod episodic_memory;
+pub mod message_queue;
 pub mod pending_review_queue;
 pub mod segmentation_state;
 pub mod semantic_memory;

@@ -1,7 +1,7 @@
 use axum::{Json, extract::State};
 use plastmem_ai::embed;
 use plastmem_core::{
-  DetailLevel, EpisodicMemory, SemanticMemory, add_pending_review_item, format_tool_result,
+  DetailLevel, EpisodicMemory, MessageQueue, SemanticMemory, format_tool_result,
 };
 use plastmem_shared::{APP_ENV, AppError};
 use sea_orm::prelude::PgVector;
@@ -82,7 +82,8 @@ async fn fetch_memory(
   )?;
   if APP_ENV.enable_fsrs_review && !episodic.is_empty() {
     let memory_ids = episodic.iter().map(|(m, _)| m.id).collect();
-    add_pending_review_item(conversation_id, memory_ids, query.to_owned(), &state.db).await?;
+    MessageQueue::add_pending_review(conversation_id, memory_ids, query.to_owned(), &state.db)
+      .await?;
   }
   Ok((semantic, episodic))
 }

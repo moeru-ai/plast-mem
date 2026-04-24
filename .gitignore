@@ -34,8 +34,9 @@ benchmarks/locomo/data/
 benchmarks/locomo/results/
 benchmarks/longmemeval/results/
 
-# Claude Code
+# Claude Code / Codex
 .claude
+.codex
 
 # Logs
 logs
