@@ -3750,6 +3750,7 @@ dependencies = [
  "plastmem_ai",
  "plastmem_core",
  "plastmem_entities",
+ "plastmem_event",
  "plastmem_event_segmentation",
  "plastmem_shared",
  "schemars",

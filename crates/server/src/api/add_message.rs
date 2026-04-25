@@ -6,7 +6,7 @@ use axum::{
   response::{IntoResponse, Response},
 };
 use chrono::{DateTime, Utc};
-use plastmem_core::{append_batch_messages, append_message};
+use plastmem_core::MessageQueue;
 use plastmem_shared::{AppError, Message, MessageRole};
 use plastmem_worker::EventSegmentationJob;
 use serde::{Deserialize, Serialize};
@@ -83,10 +83,15 @@ pub async fn add_message(
     timestamp,
   };
 
-  if let Some(claim) = append_message(payload.conversation_id, message, false, &state.db).await? {
+  if let Some(check) = MessageQueue::push(payload.conversation_id, message, &state.db).await? {
     let mut job_storage = state.segmentation_job_storage.clone();
     job_storage
-      .push(EventSegmentationJob::from_claim(claim))
+      .push(EventSegmentationJob {
+        conversation_id: payload.conversation_id,
+        fence_count: check.fence_count,
+        force_process: check.force_process,
+        keep_tail_segment: true,
+      })
       .await?;
   }
 
@@ -129,10 +134,19 @@ pub async fn import_batch_messages(
     })
     .collect::<Vec<_>>();
 
-  if let Some(claim) = append_batch_messages(payload.conversation_id, &messages, &state.db).await? {
+  let pending_count =
+    MessageQueue::push_batch(payload.conversation_id, &messages, &state.db).await?;
+  if pending_count > 0
+    && MessageQueue::try_set_fence(payload.conversation_id, pending_count, &state.db).await?
+  {
     let mut job_storage = state.segmentation_job_storage.clone();
     job_storage
-      .push(EventSegmentationJob::from_claim(claim))
+      .push(EventSegmentationJob {
+        conversation_id: payload.conversation_id,
+        fence_count: pending_count,
+        force_process: true,
+        keep_tail_segment: false,
+      })
       .await?;
   }
 

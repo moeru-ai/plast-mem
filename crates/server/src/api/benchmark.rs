@@ -2,7 +2,7 @@ use axum::{
   Json,
   extract::{Query, State},
 };
-use plastmem_core::{get_segmentation_processing_status, recover_stale_segmentation_job};
+use plastmem_core::{FENCE_TTL_MINUTES, MessageQueue};
 use plastmem_shared::AppError;
 use sea_orm::{DatabaseConnection, DbBackend, FromQueryResult, Statement};
 use serde::{Deserialize, Serialize};
@@ -71,8 +71,8 @@ async fn get_queue_status(
   id: Uuid,
   db: &DatabaseConnection,
 ) -> Result<BenchmarkJobStatus, AppError> {
-  recover_stale_segmentation_job(id, db).await?;
-  let segmentation_status = get_segmentation_processing_status(id, db).await?;
+  MessageQueue::clear_stale_fence(id, FENCE_TTL_MINUTES, db).await?;
+  let segmentation_status = MessageQueue::get_processing_status(id, db).await?;
 
   let jobs_sql = "SELECT \
     COUNT(*) FILTER (WHERE status IN ('Pending', 'Running') AND job_type LIKE '%EventSegmentationJob%' AND convert_from(job, 'UTF8')::jsonb->>'conversation_id' = $1)::bigint AS segmentation_jobs_active, \
@@ -94,15 +94,15 @@ async fn get_queue_status(
     predict_calibrate_jobs_active: 0,
   });
 
-  let done = segmentation_status.pending_message_count == 0
-    && !segmentation_status.active
+  let done = segmentation_status.messages_pending == 0
+    && !segmentation_status.fence_active
     && jobs.segmentation_jobs_active == 0
     && jobs.episode_creation_jobs_active == 0
     && jobs.predict_calibrate_jobs_active == 0;
 
   Ok(BenchmarkJobStatus {
-    messages_pending: i32::try_from(segmentation_status.pending_message_count).unwrap_or(i32::MAX),
-    fence_active: segmentation_status.active,
+    messages_pending: segmentation_status.messages_pending,
+    fence_active: segmentation_status.fence_active,
     segmentation_jobs_active: jobs.segmentation_jobs_active,
     episode_creation_jobs_active: jobs.episode_creation_jobs_active,
     predict_calibrate_jobs_active: jobs.predict_calibrate_jobs_active,
